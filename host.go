@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"sync"
 	"time"
@@ -50,6 +51,8 @@ func (host *Host) Dial(remotePort uint16) (*Stream, error) {
 				stream.localPort = localPort
 				stream.remotePort = remotePort
 
+				log.Printf("new stream from dail: local=%v remote=%v\n", localPort, remotePort)
+
 				err := stream.open()
 				if err != nil {
 					host.localBinds.Delete(localPort)
@@ -63,6 +66,15 @@ func (host *Host) Dial(remotePort uint16) (*Stream, error) {
 			return nil, errors.New("local port resource depletion")
 		}
 	}
+}
+
+func (host *Host) Listen(port uint16) (*Listener, error) {
+	listener := NewListener()
+	_, found := host.localBinds.LoadOrStore(port, listener)
+	if found {
+		return nil, errors.New("listen on used port")
+	}
+	return listener, nil
 }
 
 //
@@ -106,6 +118,8 @@ func (host *Host) readLoop() {
 					stream := NewStream(host)
 					_, found := host.streams.LoadOrStore(head.StreamID(), stream)
 					if !found {
+						stream.localPort = head.DistPort()
+						stream.remotePort = head.SrcPort()
 						it.(*Listener).pushStream(stream)
 						stream.opened()
 					}

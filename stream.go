@@ -3,6 +3,7 @@ package flex
 import (
 	"encoding/binary"
 	"errors"
+	"log"
 	"net"
 	"time"
 )
@@ -70,13 +71,14 @@ func (stream *Stream) open() error {
 	select {
 	case <-stream.chanOpenACK:
 		return nil
-	case <-time.After(time.Second * 10):
+	case <-time.After(time.Second * 3):
 		return errors.New("timeout")
 	}
 }
 
 // opened 响应开启连接请求
 func (stream *Stream) opened() error {
+	log.Printf("send opend packet: srcPort=%v distPort=%v", stream.localPort, stream.remotePort)
 	err := stream.host.writePacket(CmdOpenStream|CmdACKFlag, stream.localPort, stream.remotePort, nil)
 	return err
 }

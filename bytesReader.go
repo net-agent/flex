@@ -59,7 +59,7 @@ fillTopToDist:
 	case <-pipe.appendEvents:
 		goto fillTopToDist
 
-	case <-time.After(time.Second * 3):
+	case <-time.After(time.Second * 3000):
 		return 0, errors.New("read timeout")
 	}
 }
