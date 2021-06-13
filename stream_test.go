@@ -52,10 +52,10 @@ func TestStreamDataWrite(t *testing.T) {
 	// 然后发送数据
 	go func() {
 		host := NewHost(c1)
-		stream := NewStream(host)
+		stream := NewStream(host, true)
 		stream.localPort = 1024
 		stream.remotePort = 80
-		host.streams.Store(stream.id(), stream)
+		host.streams.Store(stream.dataID(), stream)
 
 		wn, err := stream.Write(payload)
 		if wn != len(payload) {
@@ -73,6 +73,7 @@ func TestStreamDataWrite(t *testing.T) {
 	s := &Stream{
 		localPort:  80,
 		remotePort: 1024,
+		isClient:   false,
 	}
 	_, err = io.ReadFull(c2, head[:])
 	if err != nil {
@@ -87,7 +88,7 @@ func TestStreamDataWrite(t *testing.T) {
 		t.Error("not equal")
 		return
 	}
-	if head.StreamID() != s.id() {
+	if head.StreamID() != s.dataID() {
 		t.Error("not equal")
 		return
 	}
@@ -126,10 +127,10 @@ func TestStreamDataRead(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		host := NewHost(c1)
-		stream := NewStream(host)
+		stream := NewStream(host, true)
 		stream.localPort = 1024
 		stream.remotePort = 80
-		host.streams.Store(stream.id(), stream)
+		host.streams.Store(stream.dataID(), stream)
 
 		wn, err := stream.Write(payload)
 		if wn != len(payload) {
@@ -147,10 +148,10 @@ func TestStreamDataRead(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		host := NewHost(c2)
-		stream := NewStream(host)
+		stream := NewStream(host, false)
 		stream.localPort = 80
 		stream.remotePort = 1024
-		host.streams.Store(stream.id(), stream)
+		host.streams.Store(stream.dataID(), stream)
 
 		buf := make([]byte, len(payload))
 		rn, err := io.ReadFull(stream, buf)

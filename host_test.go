@@ -15,9 +15,9 @@ func TestHostWritePacket(t *testing.T) {
 	host1 := NewHost(c1)
 
 	ps := []*Packet{
-		{CmdOpenStream, 1024, 80, nil},
-		{CmdCloseStream, 1024, 80, []byte("hello world")},
-		{CmdPushStreamData, 1024, 80, []byte("hello world")},
+		{CmdOpenStream, 1024, 80, nil, 0},
+		{CmdCloseStream, 1024, 80, []byte("hello world"), 0},
+		{CmdPushStreamData, 1024, 80, []byte("hello world"), 0},
 	}
 
 	go func() {
@@ -66,12 +66,11 @@ func TestHostWritePacket(t *testing.T) {
 			return
 		}
 	}
-
 }
 
 func TestHostDialAndListen(t *testing.T) {
 	c1, c2 := net.Pipe()
-	payload := make([]byte, 1024*1024)
+	payload := make([]byte, 1024*24)
 	_, err := rand.Read(payload)
 	if err != nil {
 		t.Error(err)
