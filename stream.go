@@ -21,6 +21,8 @@ type Stream struct {
 
 	readPipe *bytesPipe
 
+	writeLocker        sync.Mutex
+	writeClosed        bool
 	writePoolSize      int32
 	writePoolIncEvents chan struct{}
 	writePoolLocker    sync.RWMutex
@@ -77,18 +79,33 @@ func (stream *Stream) Write(src []byte) (int, error) {
 			end = len(src)
 			sliceSize = len(src) - start
 		}
-		err := stream.host.writePacket(CmdPushStreamData,
-			stream.localPort, stream.remotePort, src[start:end])
-
-		start = end
-		atomic.AddInt32(&stream.writePoolSize, -int32(sliceSize))
-
+		err := stream.write(src[start:end])
 		if err != nil {
 			return start, err
 		}
+
+		start = end
+		atomic.AddInt32(&stream.writePoolSize, -int32(sliceSize))
 	}
 
 	return start, nil
+}
+
+func (stream *Stream) write(buf []byte) error {
+	stream.writeLocker.Lock()
+	defer stream.writeLocker.Unlock()
+	if stream.writeClosed {
+		return errors.New("write to closed stream")
+	}
+	return stream.host.writePacket(
+		CmdPushStreamData,
+		stream.localPort, stream.remotePort,
+		buf,
+	)
+}
+
+func (stream *Stream) Close() error {
+	return stream.close()
 }
 
 func (stream *Stream) dataID() uint32 {
@@ -135,4 +152,17 @@ func (stream *Stream) increasePoolSize(size uint16) {
 	if len(stream.writePoolIncEvents) <= 0 {
 		stream.writePoolIncEvents <- struct{}{}
 	}
+}
+
+// close 主动关闭的意思：告诉对端，我不会再发送任何数据
+// 对端可以从host.streams中解除绑定
+func (stream *Stream) close() error {
+	stream.writeLocker.Lock()
+	defer stream.writeLocker.Unlock()
+	if stream.writeClosed {
+		return errors.New("close a closed stream")
+	}
+	stream.writeClosed = true
+
+	return stream.host.writePacket(CmdCloseStream, stream.localPort, stream.remotePort, nil)
 }

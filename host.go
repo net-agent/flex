@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -19,7 +20,8 @@ type Host struct {
 
 	// streams 用于路由对端发过来的数据
 	// streamID -> stream
-	streams sync.Map // map[uint32]*Stream
+	streams    sync.Map // map[uint32]*Stream
+	streamsLen int64
 
 	// localBinds 用于路由对端发过来的指令？
 	// localPort -> stream
@@ -67,6 +69,7 @@ func (host *Host) Dial(remotePort uint16) (*Stream, error) {
 					host.availablePorts <- localPort
 					return nil, errors.New("stream bind exists")
 				}
+				atomic.AddInt64(&host.streamsLen, 1)
 
 				log.Printf("new stream from dail: local=%v remote=%v\n", localPort, remotePort)
 
@@ -132,7 +135,7 @@ func (host *Host) readLoop() {
 
 			case CmdPushStreamData:
 
-				id := head.StreamID()
+				id := head.StreamDataID()
 				it, found := host.streams.Load(id)
 				if found {
 					it.(*Stream).increasePoolSize(head.ACKInfo())
@@ -152,8 +155,15 @@ func (host *Host) readLoop() {
 				it, found := host.localBinds.Load(head.DistPort())
 				if found {
 					stream := NewStream(host, false)
-					_, found := host.streams.LoadOrStore(head.StreamID(), stream)
+					_, found := host.streams.LoadOrStore(head.StreamDataID(), stream)
 					if !found {
+
+						atomic.AddInt64(&host.streamsLen, 1)
+						if debug {
+							log.Printf("stream opened dataID=%v alive=%v\n",
+								head.StreamDataID(), host.streamsLen)
+						}
+
 						stream.localPort = head.DistPort()
 						stream.remotePort = head.SrcPort()
 						it.(*Listener).pushStream(stream)
@@ -166,9 +176,19 @@ func (host *Host) readLoop() {
 				// 收到Close消息，可以确定对端不会再有数据包通过这个stream发过来
 				// 所以可以对StreamID进行清理操作
 				//
-				it, found := host.streams.LoadAndDelete(head.StreamID())
+				it, found := host.streams.LoadAndDelete(head.StreamDataID())
 				if found {
-					it.(*Stream).Close()
+					atomic.AddInt64(&host.streamsLen, -1)
+
+					// 关闭读取管道，收到对端的close指令后，不会再有新数据过来
+					stream := it.(*Stream)
+					stream.readPipe.Close()
+
+					stream.Close()
+					if debug {
+						log.Printf("stream closed dataID=%v alive=%v\n",
+							head.StreamDataID(), host.streamsLen)
+					}
 				}
 
 			case CmdPushStreamData:
@@ -176,7 +196,7 @@ func (host *Host) readLoop() {
 				payload := make([]byte, head.PayloadSize())
 				rn, err := io.ReadFull(host.conn, payload)
 				if rn > 0 {
-					it, found := host.streams.Load(head.StreamID())
+					it, found := host.streams.Load(head.StreamDataID())
 					if found {
 						it.(*Stream).readPipe.append(payload[:rn])
 					}

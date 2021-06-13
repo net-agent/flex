@@ -139,3 +139,73 @@ func TestHostDialAndListen(t *testing.T) {
 		return
 	}
 }
+
+func TestHostStreamClose(t *testing.T) {
+	c1, c2 := net.Pipe()
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		wg.Wait()
+		host := NewHost(c1)
+		stream, err := host.Dial(80)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if host.streamsLen != 1 {
+			t.Error("not equal")
+			return
+		}
+		stream.Close()
+		// if host.streamsLen != 0 {
+		// 	t.Error("not equal")
+		// 	return
+		// }
+	}()
+
+	host := NewHost(c2)
+	l, err := host.Listen(80)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	_, err = host.Listen(80)
+	if err == nil {
+		t.Error("unexpceted nil error")
+		return
+	}
+
+	if host.streamsLen != 0 {
+		t.Error("not equal")
+		return
+	}
+	wg.Done()
+
+	stream, err := l.Accept()
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	if host.streamsLen != 1 {
+		t.Error("not equal")
+		return
+	}
+	buf := make([]byte, 10)
+	rn, err := stream.Read(buf)
+	if rn > 0 {
+		t.Error("unexpected rn")
+		return
+	}
+	if err != io.EOF {
+		t.Error("unexpected error")
+		return
+	}
+
+	_, err = stream.Read(buf)
+	if err == nil || err == io.EOF {
+		// EOF应该只会被触发一次
+		t.Error("unexpected error")
+		return
+	}
+}

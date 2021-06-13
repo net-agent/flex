@@ -56,14 +56,14 @@ const packetHeaderSize = 1 + 2 + 2 + 2
 
 type packetHeader [packetHeaderSize]byte
 
-func (h *packetHeader) Cmd() byte           { return h[0] & 0xFE }
-func (h *packetHeader) IsACK() bool         { return (h[0] & 0x01) == 0x01 }
-func (h *packetHeader) SrcPort() uint16     { return binary.BigEndian.Uint16(h[1:3]) }
-func (h *packetHeader) DistPort() uint16    { return binary.BigEndian.Uint16(h[3:5]) }
-func (h *packetHeader) StreamID() uint32    { return binary.BigEndian.Uint32(h[1:5]) }
-func (h *packetHeader) PayloadSize() uint16 { return binary.BigEndian.Uint16(h[5:7]) }
-func (h *packetHeader) ACKInfo() uint16     { return binary.BigEndian.Uint16(h[5:7]) }
-func (h *packetHeader) CmdStr() string      { return cmdStr(h[0]) }
+func (h *packetHeader) Cmd() byte            { return h[0] & 0xFE }
+func (h *packetHeader) IsACK() bool          { return (h[0] & 0x01) == 0x01 }
+func (h *packetHeader) SrcPort() uint16      { return binary.BigEndian.Uint16(h[1:3]) }
+func (h *packetHeader) DistPort() uint16     { return binary.BigEndian.Uint16(h[3:5]) }
+func (h *packetHeader) StreamDataID() uint32 { return binary.BigEndian.Uint32(h[1:5]) }
+func (h *packetHeader) PayloadSize() uint16  { return binary.BigEndian.Uint16(h[5:7]) }
+func (h *packetHeader) ACKInfo() uint16      { return binary.BigEndian.Uint16(h[5:7]) }
+func (h *packetHeader) CmdStr() string       { return cmdStr(h[0]) }
 
 func cmdStr(b byte) string {
 	strs := []string{"[ack]", "[open]", "[close]", "[push]", "[alive]"}

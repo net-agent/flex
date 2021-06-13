@@ -34,6 +34,39 @@ func TestStreamOpen(t *testing.T) {
 	}
 }
 
+func TestStreamClose(t *testing.T) {
+	c1, c2 := net.Pipe()
+	go func() {
+		host := NewHost(c1)
+		stream := NewStream(host, true)
+		stream.localPort = 1000
+		stream.remotePort = 80
+		stream.Close()
+	}()
+
+	var head packetHeader
+	_, err := io.ReadFull(c2, head[:])
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	if head.Cmd() != CmdCloseStream {
+		t.Error("not equal")
+		return
+	}
+	if head.DistPort() != 80 {
+		t.Error("not equal")
+		return
+	}
+	s := NewStream(nil, false)
+	s.localPort = 80
+	s.remotePort = 1000
+	if head.StreamDataID() != s.dataID() {
+		t.Error("not equal")
+		return
+	}
+}
+
 // TestStreamDataWrite 构造一个Host和Stream，然后用原始net.Conn去读取并验证发送的数据是否正确
 func TestStreamDataWrite(t *testing.T) {
 	c1, c2 := net.Pipe()
@@ -88,7 +121,7 @@ func TestStreamDataWrite(t *testing.T) {
 		t.Error("not equal")
 		return
 	}
-	if head.StreamID() != s.dataID() {
+	if head.StreamDataID() != s.dataID() {
 		t.Error("not equal")
 		return
 	}
