@@ -14,9 +14,15 @@ import (
 type Host struct {
 	conn net.Conn
 
-	chanRead     chan *Packet
-	chanWrite    chan *Packet
-	chanWriteACK chan *Packet
+	chanRead  chan *Packet
+	chanWrite chan *Packet
+
+	writtenCmdPackCount   uint32
+	writtenACKPackCount   uint32
+	writtenAlivePackCount uint32
+	readedCmdPackCount    uint32
+	readedACKPackCount    uint32
+	readedAlivePackCount  uint32
 
 	// streams 用于路由对端发过来的数据
 	// streamID -> stream
@@ -35,7 +41,6 @@ func NewHost(conn net.Conn) *Host {
 		conn:           conn,
 		chanRead:       make(chan *Packet, 128),
 		chanWrite:      make(chan *Packet, 128),
-		chanWriteACK:   make(chan *Packet, 128),
 		availablePorts: make(chan uint16, 65536),
 	}
 
@@ -71,7 +76,7 @@ func (host *Host) Dial(remotePort uint16) (*Stream, error) {
 				}
 				atomic.AddInt64(&host.streamsLen, 1)
 
-				log.Printf("new stream from dail: local=%v remote=%v\n", localPort, remotePort)
+				log.Printf("new stream from dial: local=%v remote=%v\n", localPort, remotePort)
 
 				err := stream.open()
 				if err != nil {
@@ -111,6 +116,10 @@ func (host *Host) readLoop() {
 			host.emitReadErr(err)
 			return
 		}
+		if head[0] == CmdAlive {
+			host.readedAlivePackCount++
+			continue
+		}
 
 		if debug {
 			log.Printf("[read loop]%v src=%v dist=%v size=%v",
@@ -118,6 +127,7 @@ func (host *Host) readLoop() {
 		}
 
 		if head.IsACK() {
+			host.readedACKPackCount++
 			//
 			// 接收到对端应答
 			//
@@ -145,6 +155,7 @@ func (host *Host) readLoop() {
 			}
 
 		} else {
+			host.readedCmdPackCount++
 			//
 			// 接收到指令请求
 			//
@@ -199,6 +210,9 @@ func (host *Host) readLoop() {
 					it, found := host.streams.Load(head.StreamDataID())
 					if found {
 						it.(*Stream).readPipe.append(payload[:rn])
+					} else {
+						log.Printf("[src=%v][dist=%v] ignored cmd %v",
+							head.SrcPort(), head.DistPort(), head)
 					}
 				}
 				if err != nil {
@@ -233,7 +247,8 @@ func (h *Host) writeLoop() {
 			}
 
 			// todo: 优化内存池
-			buf := make([]byte, packetHeaderSize+len(packet.payload))
+			payloadSize := len(packet.payload)
+			buf := make([]byte, packetHeaderSize+payloadSize)
 			_, err := packet.Read(buf)
 			if err != nil {
 				h.emitReadErr(err)
@@ -246,25 +261,19 @@ func (h *Host) writeLoop() {
 				return
 			}
 
-			log.Printf("[writeloop]%v src=%v dist=%v size=%v\n",
-				packet.CmdStr(), packet.srcPort, packet.distPort, len(packet.payload))
+			if packet.done != nil {
+				packet.done <- struct{}{}
+				close(packet.done)
+			}
+			if packet.cmd&0x01 > 0 {
+				h.writtenACKPackCount++
+			} else {
+				h.writtenCmdPackCount++
+			}
 
-		case packet, ok := <-h.chanWriteACK:
-			if ok {
-				buf := make([]byte, packetHeaderSize)
-				_, err := packet.Read(buf)
-				if err != nil {
-					h.emitWriteErr(err)
-					return
-				}
-				_, err = h.conn.Write(buf)
-				if err != nil {
-					h.emitWriteErr(err)
-					return
-				}
-
-				log.Printf("[writeloop]%v src=%v dist=%v size=%v ack=%v\n",
-					packet.CmdStr(), packet.srcPort, packet.distPort, len(packet.payload), packet.ackInfo)
+			if debug {
+				log.Printf("[writeloop]%v src=%v dist=%v size=%v\n",
+					packet.CmdStr(), packet.srcPort, packet.distPort, len(packet.payload))
 			}
 
 		case <-time.After(time.Minute * 3):
@@ -277,6 +286,7 @@ func (h *Host) writeLoop() {
 			if err != nil {
 				h.emitWriteErr(err)
 			}
+			h.writtenAlivePackCount++
 		}
 	}
 }
@@ -294,11 +304,13 @@ func (h *Host) writePacket(cmd byte, srcPort, distPort uint16, payload []byte) e
 		srcPort:  srcPort,
 		distPort: distPort,
 		payload:  payload,
+		done:     make(chan struct{}),
 	}
 
+	h.chanWrite <- p
+
 	select {
-	case h.chanWrite <- p:
-		// todo: 此处过早返回（不可靠）
+	case <-p.done:
 		return nil
 	case <-time.After(time.Second * 15):
 		return errors.New("timeout")
@@ -313,5 +325,5 @@ func (h *Host) writePacketACK(cmd byte, srcPort, distPort uint16, ackInfo uint16
 		ackInfo:  ackInfo,
 	}
 
-	h.chanWriteACK <- p
+	h.chanWrite <- p
 }

@@ -15,9 +15,9 @@ func TestHostWritePacket(t *testing.T) {
 	host1 := NewHost(c1)
 
 	ps := []*Packet{
-		{CmdOpenStream, 1024, 80, nil, 0},
-		{CmdCloseStream, 1024, 80, []byte("hello world"), 0},
-		{CmdPushStreamData, 1024, 80, []byte("hello world"), 0},
+		{CmdOpenStream, 1024, 80, nil, 0, nil},
+		{CmdCloseStream, 1024, 80, []byte("hello world"), 0, nil},
+		{CmdPushStreamData, 1024, 80, []byte("hello world"), 0, nil},
 	}
 
 	go func() {
@@ -208,4 +208,116 @@ func TestHostStreamClose(t *testing.T) {
 		t.Error("unexpected error")
 		return
 	}
+}
+
+func TestConcurrencyStream(t *testing.T) {
+	debug = false
+	payloadSize := 1024 * 400
+	threadLen := 10
+
+	payload := make([]byte, payloadSize)
+	_, err := rand.Read(payload)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	runClient := func(stream *Stream) {
+		defer func() {
+			// err := stream.Close()
+			t.Log("client stream closed")
+			if err != nil {
+				t.Error(err)
+				return
+			}
+		}()
+		wn, err := stream.Write(payload)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if wn != len(payload) {
+			t.Error("not equal")
+			return
+		}
+	}
+
+	runServer := func(stream *Stream) {
+		defer func() {
+			// stream.Close()
+			t.Log("server stream closed")
+			// if err != nil {
+			// 	t.Error(err)
+			// 	return
+			// }
+		}()
+		buf := make([]byte, len(payload))
+		rn, err := io.ReadFull(stream, buf)
+		if rn != len(buf) {
+			t.Error("not equal", rn, len(buf), err)
+			return
+		}
+		if !bytes.Equal(buf, payload) {
+			t.Error("not equal")
+			return
+		}
+		if err != nil {
+			t.Error(err)
+			return
+		}
+	}
+
+	c1, c2 := net.Pipe()
+	client := NewHost(c1)
+	server := NewHost(c2)
+
+	go func() {
+		streams := []*Stream{}
+		for i := 0; i < threadLen; i++ {
+			stream, err := client.Dial(80)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			streams = append(streams, stream)
+		}
+
+		var wg sync.WaitGroup
+		for _, stream := range streams {
+			wg.Add(1)
+			go func(s *Stream) {
+				runClient(s)
+				wg.Done()
+			}(stream)
+		}
+		wg.Wait()
+	}()
+
+	// server side
+	l, err := server.Listen(80)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	count := 0
+	var wg sync.WaitGroup
+	for {
+		stream, err := l.Accept()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		wg.Add(1)
+		count++
+		go func(s *Stream) {
+			runServer(s)
+			wg.Done()
+		}(stream)
+		if count == threadLen {
+			break
+		}
+	}
+
+	wg.Wait()
 }

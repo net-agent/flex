@@ -1,3 +1,3 @@
 package flex
 
-const debug = true
+var debug = true

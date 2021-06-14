@@ -19,6 +19,7 @@ type Packet struct {
 	distPort uint16
 	payload  []byte
 	ackInfo  uint16
+	done     chan struct{}
 }
 
 // Read 把packet的数据写入缓冲区中，缓冲区过大或过小都会失败

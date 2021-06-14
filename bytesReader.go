@@ -10,12 +10,13 @@ import (
 
 type bytesPipe struct {
 	closed       bool
-	locker       sync.RWMutex
+	locker       sync.Mutex
 	bufs         [][]byte
 	pos          int
 	appendEvents chan struct{}
 	closedEvent  chan struct{}
 	eofCount     int32
+	readedCount  uint64
 }
 
 func NewBytesPipe() *bytesPipe {
@@ -26,38 +27,51 @@ func NewBytesPipe() *bytesPipe {
 	}
 }
 
-func (pipe *bytesPipe) Read(dist []byte) (int, error) {
+func (pipe *bytesPipe) Read(dist []byte) (retReaded int, retErr error) {
+	defer func() {
+		atomic.AddUint64(&pipe.readedCount, uint64(retReaded))
+	}()
 fillTopToDist:
-	pipe.locker.RLock()
+	pipe.locker.Lock()
 	if len(pipe.bufs) > 0 {
+		// top: 最前面的缓冲区
+		// start: 缓冲区可读数据起始
+		// end: 缓冲区此次可读数据末尾
 		top := pipe.bufs[0]
 		start := pipe.pos
 		end := start + len(dist)
-		if end > len(top) {
-			end = len(top)
-		}
-		readed := copy(dist, top[start:end])
+
+		// 调整缓冲队列游标
 		if end >= len(top) {
+			end = len(top)
 			pipe.bufs = pipe.bufs[1:]
 			pipe.pos = 0
 		} else {
 			pipe.pos = end
 		}
-		pipe.locker.RUnlock()
+
+		readed := copy(dist, top[start:end])
+
+		pipe.locker.Unlock()
 		return readed, nil
 	}
-	pipe.locker.RUnlock()
+	pipe.locker.Unlock()
+
+	if len(pipe.appendEvents) > 0 {
+		<-pipe.appendEvents
+		goto fillTopToDist
+	}
 
 	select {
+	case <-pipe.appendEvents:
+		goto fillTopToDist
+
 	case <-pipe.closedEvent:
 		if atomic.AddInt32(&pipe.eofCount, 1) == 1 {
 			return 0, io.EOF
 		}
 		// 仅当closedEvent被close时，此分支才会被触发
 		return 0, errors.New("read from closed bytesPipe")
-
-	case <-pipe.appendEvents:
-		goto fillTopToDist
 
 	case <-time.After(time.Second * 3000):
 		return 0, errors.New("read timeout")
