@@ -26,7 +26,8 @@ type Stream struct {
 	writeClosed        bool
 	writePoolSize      int32
 	writePoolIncEvents chan struct{}
-	writePoolLocker    sync.RWMutex
+	writenCount        int64
+	writenACKCount     int64
 }
 
 func NewStream(host *Host, isClient bool) *Stream {
@@ -36,8 +37,8 @@ func NewStream(host *Host, isClient bool) *Stream {
 		chanOpenACK:        make(chan struct{}),
 		readPipe:           NewBytesPipe(),
 		writeClosed:        false,
-		writePoolSize:      1024, // 16字节缓冲
-		writePoolIncEvents: make(chan struct{}, 8),
+		writePoolSize:      1024 * 64, // 16字节缓冲
+		writePoolIncEvents: make(chan struct{}, 128),
 	}
 }
 
@@ -70,7 +71,9 @@ func (stream *Stream) Write(src []byte) (int, error) {
 			select {
 			case <-stream.writePoolIncEvents:
 			case <-time.After(time.Second * 3):
-				log.Printf("[local=%v] write pool dry\n", stream.localPort)
+				log.Printf("[local=%v] write pool dry pool=%v w=%v ack=%v\n",
+					stream.localPort, stream.writePoolSize,
+					stream.writenCount, stream.writenACKCount)
 			}
 		}
 
@@ -89,7 +92,6 @@ func (stream *Stream) Write(src []byte) (int, error) {
 		}
 
 		start = end
-		atomic.AddInt32(&stream.writePoolSize, -int32(sliceSize))
 	}
 
 	return start, nil
@@ -101,11 +103,21 @@ func (stream *Stream) write(buf []byte) error {
 	if stream.writeClosed {
 		return errors.New("write to closed stream")
 	}
-	return stream.host.writePacket(
+
+	// 先申请配额
+	// 后根据实际写入成功或失败情况，归还配额（失败时归还）
+	atomic.AddInt32(&stream.writePoolSize, -int32(len(buf)))
+	stream.writenCount += int64(len(buf))
+
+	err := stream.host.writePacket(
 		CmdPushStreamData,
 		stream.localPort, stream.remotePort,
 		buf,
 	)
+	if err != nil {
+		stream.increasePoolSize(uint16(len(buf)))
+	}
+	return err
 }
 
 func (stream *Stream) Close() error {
@@ -150,19 +162,21 @@ func (stream *Stream) readed(size uint16) {
 }
 
 func (stream *Stream) increasePoolSize(size uint16) {
-	atomic.AddInt32(&stream.writePoolSize, int32(size))
-	// if debug {
-	log.Printf("[local=%v] writePoolSize=%v\n", stream.localPort, stream.writePoolSize)
-	// }
-	stream.writePoolLocker.Lock()
-	defer stream.writePoolLocker.Unlock()
-	if len(stream.writePoolIncEvents) <= 0 {
-		stream.writePoolIncEvents <- struct{}{}
+	atomic.AddInt64(&stream.writenACKCount, int64(size))
+	n := atomic.AddInt32(&stream.writePoolSize, int32(size))
+	if debug || n > 1024 {
+		log.Printf("[local=%v] writePoolSize=%v\n", stream.localPort, n)
 	}
+	// if len(stream.writePoolIncEvents) <= 0 {
+	stream.writePoolIncEvents <- struct{}{}
+	// } else {
+	// 	log.Println("ignore inc event")
+	// }
 }
 
 // close 主动关闭的意思：告诉对端，我不会再发送任何数据
 // 对端可以从host.streams中解除绑定
+//
 func (stream *Stream) close() error {
 	stream.writeLocker.Lock()
 	defer stream.writeLocker.Unlock()

@@ -3,10 +3,12 @@ package flex
 import (
 	"bytes"
 	"crypto/rand"
+	"fmt"
 	"io"
 	"net"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestHostWritePacket(t *testing.T) {
@@ -213,7 +215,8 @@ func TestHostStreamClose(t *testing.T) {
 func TestConcurrencyStream(t *testing.T) {
 	debug = false
 	payloadSize := 1024 * 400
-	threadLen := 10
+	threadLen := 40
+	chanDuration := make(chan time.Duration, threadLen+1)
 
 	payload := make([]byte, payloadSize)
 	_, err := rand.Read(payload)
@@ -243,13 +246,15 @@ func TestConcurrencyStream(t *testing.T) {
 	}
 
 	runServer := func(stream *Stream) {
+		startTime := time.Now()
 		defer func() {
-			// stream.Close()
+			chanDuration <- time.Now().Sub(startTime)
+			stream.Close()
 			t.Log("server stream closed")
-			// if err != nil {
-			// 	t.Error(err)
-			// 	return
-			// }
+			if err != nil {
+				t.Error(err)
+				return
+			}
 		}()
 		buf := make([]byte, len(payload))
 		rn, err := io.ReadFull(stream, buf)
@@ -320,4 +325,14 @@ func TestConcurrencyStream(t *testing.T) {
 	}
 
 	wg.Wait()
+
+	// 查看平均耗时差别
+	close(chanDuration)
+	for {
+		dur, ok := <-chanDuration
+		if !ok {
+			break
+		}
+		fmt.Printf("dur: %v\n", dur)
+	}
 }
