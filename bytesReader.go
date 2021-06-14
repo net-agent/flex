@@ -15,6 +15,7 @@ type bytesPipe struct {
 	pos          int
 	appendEvents chan struct{}
 	closedEvent  chan struct{}
+	readTimeout  time.Duration
 	eofCount     int32
 	readedCount  uint64
 }
@@ -24,6 +25,7 @@ func NewBytesPipe() *bytesPipe {
 		bufs:         make([][]byte, 0),
 		appendEvents: make(chan struct{}, 64),
 		closedEvent:  make(chan struct{}, 1),
+		readTimeout:  time.Second * 15,
 	}
 }
 
@@ -73,7 +75,7 @@ fillTopToDist:
 		// 仅当closedEvent被close时，此分支才会被触发
 		return 0, errors.New("read from closed bytesPipe")
 
-	case <-time.After(time.Second * 3000):
+	case <-time.After(pipe.readTimeout):
 		return 0, errors.New("read timeout")
 	}
 }
@@ -107,4 +109,8 @@ func (pipe *bytesPipe) Close() error {
 	close(pipe.closedEvent)
 
 	return nil
+}
+
+func (pipe *bytesPipe) SetReadDeadline(t time.Time) error {
+	return errors.New("not implement")
 }

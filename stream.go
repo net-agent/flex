@@ -11,7 +11,6 @@ import (
 )
 
 type Stream struct {
-	net.Conn
 	host     *Host
 	isClient bool // 主动发起连接的一方
 
@@ -186,4 +185,24 @@ func (stream *Stream) close() error {
 	stream.writeClosed = true
 
 	return stream.host.writePacket(CmdCloseStream, stream.localPort, stream.remotePort, nil)
+}
+
+func (stream *Stream) LocalAddr() net.Addr {
+	return stream.host.conn.LocalAddr()
+}
+
+func (stream *Stream) RemoteAddr() net.Addr {
+	return stream.host.conn.RemoteAddr()
+}
+
+func (stream *Stream) SetDeadline(t time.Time) error {
+	return errors.New("not implement")
+}
+
+func (stream *Stream) SetReadDeadline(t time.Time) error {
+	return stream.readPipe.SetReadDeadline(t)
+}
+
+func (stream *Stream) SetWriteDeadline(t time.Time) error {
+	return errors.New("not implement")
 }
