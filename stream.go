@@ -3,6 +3,7 @@ package flex
 import (
 	"encoding/binary"
 	"errors"
+	"log"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -34,6 +35,7 @@ func NewStream(host *Host, isClient bool) *Stream {
 		isClient:           isClient,
 		chanOpenACK:        make(chan struct{}),
 		readPipe:           NewBytesPipe(),
+		writeClosed:        false,
 		writePoolSize:      1024, // 16字节缓冲
 		writePoolIncEvents: make(chan struct{}, 8),
 	}
@@ -41,17 +43,17 @@ func NewStream(host *Host, isClient bool) *Stream {
 
 func (stream *Stream) Read(dist []byte) (int, error) {
 	rn, err := stream.readPipe.Read(dist)
-	go func() {
-		for rn > 0 {
-			if rn > 0xffff {
+	go func(readedCount int) {
+		for readedCount > 0 {
+			if readedCount > 0xffff {
 				stream.readed(0xffff)
-				rn -= 0xffff
+				readedCount -= 0xffff
 			} else {
-				stream.readed(uint16(rn))
-				rn = 0
+				stream.readed(uint16(readedCount))
+				readedCount = 0
 			}
 		}
-	}()
+	}(rn)
 	return rn, err
 }
 
@@ -67,6 +69,8 @@ func (stream *Stream) Write(src []byte) (int, error) {
 		for atomic.LoadInt32(&stream.writePoolSize) <= 0 {
 			select {
 			case <-stream.writePoolIncEvents:
+			case <-time.After(time.Second * 3):
+				log.Printf("[local=%v] write pool dry\n", stream.localPort)
 			}
 		}
 
@@ -77,7 +81,7 @@ func (stream *Stream) Write(src []byte) (int, error) {
 		end = start + sliceSize
 		if end > len(src) {
 			end = len(src)
-			sliceSize = len(src) - start
+			sliceSize = end - start
 		}
 		err := stream.write(src[start:end])
 		if err != nil {
@@ -147,6 +151,9 @@ func (stream *Stream) readed(size uint16) {
 
 func (stream *Stream) increasePoolSize(size uint16) {
 	atomic.AddInt32(&stream.writePoolSize, int32(size))
+	// if debug {
+	log.Printf("[local=%v] writePoolSize=%v\n", stream.localPort, stream.writePoolSize)
+	// }
 	stream.writePoolLocker.Lock()
 	defer stream.writePoolLocker.Unlock()
 	if len(stream.writePoolIncEvents) <= 0 {
