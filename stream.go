@@ -14,6 +14,8 @@ type Stream struct {
 	host     *Host
 	isClient bool // 主动发起连接的一方
 
+	localIP    HostIP
+	remoteIP   HostIP
 	localPort  uint16
 	remotePort uint16
 
@@ -30,8 +32,13 @@ type Stream struct {
 }
 
 func NewStream(host *Host, isClient bool) *Stream {
+	var ip HostIP = 0
+	if host != nil {
+		ip = host.ip
+	}
 	return &Stream{
 		host:               host,
+		localIP:            ip,
 		isClient:           isClient,
 		chanOpenACK:        make(chan struct{}),
 		readPipe:           NewBytesPipe(),
@@ -83,7 +90,6 @@ func (stream *Stream) Write(src []byte) (int, error) {
 		end = start + sliceSize
 		if end > len(src) {
 			end = len(src)
-			sliceSize = end - start
 		}
 		err := stream.write(src[start:end])
 		if err != nil {
@@ -123,16 +129,19 @@ func (stream *Stream) Close() error {
 	return stream.close()
 }
 
-func (stream *Stream) dataID() uint32 {
-	var buf [4]byte
+func (stream *Stream) dataID() uint64 {
+	var buf [8]byte
 
 	// 对端发送过来的数据包中：
 	// head.src  = remote
 	// head.dist = local
-	binary.BigEndian.PutUint16(buf[0:2], stream.remotePort) // src
-	binary.BigEndian.PutUint16(buf[2:4], stream.localPort)  // dist
 
-	return binary.BigEndian.Uint32(buf[:])
+	binary.BigEndian.PutUint16(buf[0:2], stream.localIP)    // src
+	binary.BigEndian.PutUint16(buf[2:4], stream.remoteIP)   // dist
+	binary.BigEndian.PutUint16(buf[4:6], stream.remotePort) // src
+	binary.BigEndian.PutUint16(buf[6:8], stream.localPort)  // dist
+
+	return binary.BigEndian.Uint64(buf[:])
 }
 
 // open 主动开启连接

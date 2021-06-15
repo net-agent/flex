@@ -11,8 +11,10 @@ import (
 	"time"
 )
 
+type HostIP = uint16
 type Host struct {
 	conn net.Conn
+	ip   HostIP
 
 	chanRead  chan *Packet
 	chanWrite chan *Packet
@@ -36,9 +38,10 @@ type Host struct {
 	availablePorts chan uint16
 }
 
-func NewHost(conn net.Conn) *Host {
+func NewHost(conn net.Conn, ip HostIP) *Host {
 	h := &Host{
 		conn:           conn,
+		ip:             ip,
 		chanRead:       make(chan *Packet, 128),
 		chanWrite:      make(chan *Packet, 128),
 		availablePorts: make(chan uint16, 65536),

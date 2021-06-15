@@ -14,28 +14,22 @@ func TestChanClose(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		select {
-		case <-ch:
-			fmt.Println("ch 1")
-		}
+		<-ch
+		fmt.Println("ch 1")
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		select {
-		case val := <-ch:
-			fmt.Println("ch 2", val)
-		}
+		val := <-ch
+		fmt.Println("ch 2", val)
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		select {
-		case val, ok := <-ch:
-			fmt.Println("ch 3", val, ok)
-		}
+		val, ok := <-ch
+		fmt.Println("ch 3", val, ok)
 	}()
 
 	time.After(time.Microsecond * 100)

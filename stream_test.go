@@ -13,7 +13,7 @@ func TestStreamOpen(t *testing.T) {
 	c1, c2 := net.Pipe()
 
 	go func() {
-		host := NewHost(c1)
+		host := NewHost(c1, 1)
 		host.Dial(1024)
 	}()
 
@@ -37,7 +37,7 @@ func TestStreamOpen(t *testing.T) {
 func TestStreamClose(t *testing.T) {
 	c1, c2 := net.Pipe()
 	go func() {
-		host := NewHost(c1)
+		host := NewHost(c1, 1)
 		stream := NewStream(host, true)
 		stream.localPort = 1000
 		stream.remotePort = 80
@@ -84,7 +84,7 @@ func TestStreamDataWrite(t *testing.T) {
 	// 构造Host和Stream
 	// 然后发送数据
 	go func() {
-		host := NewHost(c1)
+		host := NewHost(c1, 1)
 		stream := NewStream(host, true)
 		stream.localPort = 1024
 		stream.remotePort = 80
@@ -159,7 +159,7 @@ func TestStreamDataRead(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		host := NewHost(c1)
+		host := NewHost(c1, 0)
 		stream := NewStream(host, true)
 		stream.localPort = 1024
 		stream.remotePort = 80
@@ -180,7 +180,7 @@ func TestStreamDataRead(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		host := NewHost(c2)
+		host := NewHost(c2, 0)
 		stream := NewStream(host, false)
 		stream.localPort = 80
 		stream.remotePort = 1024
