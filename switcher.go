@@ -7,26 +7,26 @@ import (
 	"sync"
 )
 
-type Network struct {
+// Switcher packet交换器，根据ip、port进行路由和分发
+type Switcher struct {
 	hosts sync.Map // map[HostIP]*Host
 
 	// 分发由host传上来的数据包
-	chanPacketRoute chan *Packet
-	availableIP     chan HostIP
-	macIPBinds      sync.Map // map[string]HostIP
-	ipMacBinds      sync.Map // map[HostIP]string
+	chanPacketBufferRoute chan []byte
+	availableIP           chan HostIP
+	macIPBinds            sync.Map // map[string]HostIP
+	ipMacBinds            sync.Map // map[HostIP]string
 }
 
-func NewNetwork(staticIP map[string]HostIP) *Network {
-	n := &Network{
-		chanPacketRoute: make(chan *Packet, 1024),
-		availableIP:     make(chan HostIP, 0xFFFF),
+func NewSwitcher(staticIP map[string]HostIP) *Switcher {
+	n := &Switcher{
+		chanPacketBufferRoute: make(chan []byte, 1024),
+		availableIP:           make(chan HostIP, 0xFFFF),
 	}
 
-	if staticIP != nil {
-		for k, v := range staticIP {
-			n.macIPBinds.Store(k, v)
-		}
+	for k, v := range staticIP {
+		n.macIPBinds.Store(k, v)
+		n.ipMacBinds.Store(v, k)
 	}
 
 	// push available ip
@@ -40,7 +40,7 @@ func NewNetwork(staticIP map[string]HostIP) *Network {
 	return n
 }
 
-func (n *Network) allocIP(mac string) (HostIP, error) {
+func (n *Switcher) allocIP(mac string) (HostIP, error) {
 	it, found := n.macIPBinds.Load(mac)
 	if found {
 		return it.(HostIP), nil
@@ -62,7 +62,7 @@ func (n *Network) allocIP(mac string) (HostIP, error) {
 	}
 }
 
-func (n *Network) Run(addr string) {
+func (n *Switcher) Run(addr string) {
 	listener, err := net.Listen("tcp4", addr)
 	if err != nil {
 		log.Fatal(err)
@@ -90,19 +90,19 @@ func (n *Network) Run(addr string) {
 	}
 }
 
-func (n *Network) upgrade(conn net.Conn) (*Host, error) {
+func (n *Switcher) upgrade(conn net.Conn) (*Host, error) {
 	return nil, errors.New("not implement")
 }
 
 // todo todo todo
-func (n *Network) packetRouteLoop() {
+func (n *Switcher) packetSwitchLoop() {
 	for {
 		select {
-		case packet, ok := <-n.chanPacketRoute:
+		case buf, ok := <-n.chanPacketBufferRoute:
 			if ok {
 				it, found := n.hosts.Load(0)
 				if found {
-					it.(*Host).chanRead <- packet
+					it.(*Host).writeBuffer(buf)
 				}
 			}
 		}

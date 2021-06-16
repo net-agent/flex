@@ -14,7 +14,7 @@ import (
 func TestHostWritePacket(t *testing.T) {
 	c1, c2 := net.Pipe()
 
-	host1 := NewHost(c1, 1)
+	host1 := NewHost(nil, c1, 1)
 
 	ps := []*Packet{
 		{CmdOpenStream, 1, 2, 1024, 80, nil, 0, nil},
@@ -85,7 +85,7 @@ func TestHostDialAndListen(t *testing.T) {
 		// 等待服务端就绪
 		wg.Wait()
 
-		client := NewHost(c1, 1)
+		client := NewHost(nil, c1, 1)
 		stream, err := client.Dial(80)
 		if err != nil {
 			t.Error(err)
@@ -111,7 +111,7 @@ func TestHostDialAndListen(t *testing.T) {
 		}
 	}()
 
-	server := NewHost(c2, 1)
+	server := NewHost(nil, c2, 1)
 	listener, err := server.Listen(80)
 	if err != nil {
 		t.Error(err)
@@ -149,7 +149,7 @@ func TestHostStreamClose(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		wg.Wait()
-		host := NewHost(c1, 1)
+		host := NewHost(nil, c1, 1)
 		stream, err := host.Dial(80)
 		if err != nil {
 			t.Error(err)
@@ -166,7 +166,7 @@ func TestHostStreamClose(t *testing.T) {
 		// }
 	}()
 
-	host := NewHost(c2, 1)
+	host := NewHost(nil, c2, 1)
 	l, err := host.Listen(80)
 	if err != nil {
 		t.Error(err)
@@ -273,8 +273,8 @@ func TestConcurrencyStream(t *testing.T) {
 	}
 
 	c1, c2 := net.Pipe()
-	client := NewHost(c1, 0)
-	server := NewHost(c2, 0)
+	client := NewHost(nil, c1, 0)
+	server := NewHost(nil, c2, 0)
 
 	go func() {
 		streams := []*Stream{}

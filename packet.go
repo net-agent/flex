@@ -71,9 +71,21 @@ func (h *packetHeader) DistIP() HostIP       { return binary.BigEndian.Uint16(h[
 func (h *packetHeader) SrcPort() uint16      { return binary.BigEndian.Uint16(h[5:7]) }
 func (h *packetHeader) DistPort() uint16     { return binary.BigEndian.Uint16(h[7:9]) }
 func (h *packetHeader) StreamDataID() uint64 { return binary.BigEndian.Uint64(h[1:9]) }
-func (h *packetHeader) PayloadSize() uint16  { return binary.BigEndian.Uint16(h[9:11]) }
-func (h *packetHeader) ACKInfo() uint16      { return binary.BigEndian.Uint16(h[9:11]) }
 func (h *packetHeader) CmdStr() string       { return cmdStr(h[0]) }
+
+func (h *packetHeader) PayloadSize() uint16 {
+	if (h[0] & 0x01) == 1 {
+		return 0
+	}
+	return binary.BigEndian.Uint16(h[9:11])
+}
+
+func (h *packetHeader) ACKInfo() uint16 {
+	if (h[0] & 0x01) == 0 {
+		return 0
+	}
+	return binary.BigEndian.Uint16(h[9:11])
+}
 
 func cmdStr(b byte) string {
 	strs := []string{"[ack]", "[open]", "[close]", "[push]", "[alive]"}

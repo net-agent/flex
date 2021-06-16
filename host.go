@@ -19,6 +19,7 @@ type Host struct {
 	chanRead  chan *Packet
 	chanWrite chan *Packet
 
+	writeLocker           sync.Mutex
 	writtenCmdPackCount   uint32
 	writtenACKPackCount   uint32
 	writtenAlivePackCount uint32
@@ -36,15 +37,18 @@ type Host struct {
 	localBinds sync.Map // map[uint16]*Listener
 
 	availablePorts chan uint16
+
+	switcher *Switcher
 }
 
-func NewHost(conn net.Conn, ip HostIP) *Host {
+func NewHost(switcher *Switcher, conn net.Conn, ip HostIP) *Host {
 	h := &Host{
 		conn:           conn,
 		ip:             ip,
 		chanRead:       make(chan *Packet, 128),
 		chanWrite:      make(chan *Packet, 128),
 		availablePorts: make(chan uint16, 65536),
+		switcher:       switcher,
 	}
 
 	for i := 1000; i < 65536; i++ {
@@ -119,6 +123,23 @@ func (host *Host) readLoop() {
 			host.emitReadErr(err)
 			return
 		}
+
+		// 判断是否需要通过switcher分发packet
+		if head.DistIP() != host.ip {
+			if host.switcher != nil {
+				packetBuf := make([]byte, packetHeaderSize+head.PayloadSize())
+				copy(packetBuf[:packetHeaderSize], head[:])
+				if len(packetBuf) > packetHeaderSize {
+					_, err := io.ReadFull(host.conn, packetBuf[packetHeaderSize:])
+					if err != nil {
+						host.emitReadErr(err)
+					}
+				}
+				host.switcher.chanPacketBufferRoute <- packetBuf
+			}
+			continue
+		}
+
 		if head[0] == CmdAlive {
 			host.readedAlivePackCount++
 			continue
@@ -233,19 +254,19 @@ func (host *Host) readLoop() {
 // writeLoop
 // 不断向连接中灌入数据
 //
-func (h *Host) writeLoop() {
+func (host *Host) writeLoop() {
 	aliveBuf := make([]byte, packetHeaderSize)
 	_, err := (&Packet{cmd: CmdAlive}).Read(aliveBuf)
 	if err != nil {
-		h.emitWriteErr(err)
+		host.emitWriteErr(err)
 		return
 	}
 
 	for {
 		select {
-		case packet, ok := <-h.chanWrite:
+		case packet, ok := <-host.chanWrite:
 			if !ok {
-				h.emitWriteErr(io.EOF)
+				host.emitWriteErr(io.EOF)
 				return
 			}
 
@@ -254,13 +275,13 @@ func (h *Host) writeLoop() {
 			buf := make([]byte, packetHeaderSize+payloadSize)
 			_, err := packet.Read(buf)
 			if err != nil {
-				h.emitReadErr(err)
+				host.emitReadErr(err)
 				return
 			}
-			_, err = h.conn.Write(buf)
+			err = host.writeBuffer(buf)
 			// recycle buf here
 			if err != nil {
-				h.emitWriteErr(err)
+				host.emitWriteErr(err)
 				return
 			}
 
@@ -269,9 +290,9 @@ func (h *Host) writeLoop() {
 				close(packet.done)
 			}
 			if packet.cmd&0x01 > 0 {
-				h.writtenACKPackCount++
+				host.writtenACKPackCount++
 			} else {
-				h.writtenCmdPackCount++
+				host.writtenCmdPackCount++
 			}
 
 			if debug {
@@ -285,23 +306,23 @@ func (h *Host) writeLoop() {
 			//
 			// 直接发送提前构造好的数据包
 			//（此处对性能影响不大，需要发送心跳包的情况必然是数据传输压力小的时刻）
-			_, err := h.conn.Write(aliveBuf)
+			err := host.writeBuffer(aliveBuf)
 			if err != nil {
-				h.emitWriteErr(err)
+				host.emitWriteErr(err)
 			}
-			h.writtenAlivePackCount++
+			host.writtenAlivePackCount++
 		}
 	}
 }
 
-func (h *Host) emitReadErr(err error) {
+func (host *Host) emitReadErr(err error) {
 	fmt.Println("[error]", err)
 }
-func (h *Host) emitWriteErr(err error) {
+func (host *Host) emitWriteErr(err error) {
 	fmt.Println("[error]", err)
 }
 
-func (h *Host) writePacket(cmd byte, srcPort, distPort uint16, payload []byte) error {
+func (host *Host) writePacket(cmd byte, srcPort, distPort uint16, payload []byte) error {
 	p := &Packet{
 		cmd:      cmd,
 		srcPort:  srcPort,
@@ -310,7 +331,7 @@ func (h *Host) writePacket(cmd byte, srcPort, distPort uint16, payload []byte) e
 		done:     make(chan struct{}),
 	}
 
-	h.chanWrite <- p
+	host.chanWrite <- p
 
 	select {
 	case <-p.done:
@@ -319,7 +340,7 @@ func (h *Host) writePacket(cmd byte, srcPort, distPort uint16, payload []byte) e
 		return errors.New("timeout")
 	}
 }
-func (h *Host) writePacketACK(cmd byte, srcPort, distPort uint16, ackInfo uint16) {
+func (host *Host) writePacketACK(cmd byte, srcPort, distPort uint16, ackInfo uint16) {
 	p := &Packet{
 		cmd:      CmdACKFlag | cmd,
 		srcPort:  srcPort,
@@ -328,5 +349,21 @@ func (h *Host) writePacketACK(cmd byte, srcPort, distPort uint16, ackInfo uint16
 		ackInfo:  ackInfo,
 	}
 
-	h.chanWrite <- p
+	host.chanWrite <- p
+}
+
+func (host *Host) writeBuffer(buf []byte) error {
+	host.writeLocker.Lock()
+	defer host.writeLocker.Unlock()
+
+	wn := int(0)
+	for wn < len(buf) {
+		n, err := host.conn.Write(buf)
+		wn += n
+		if err != nil {
+			return err
+		}
+		buf = buf[wn:]
+	}
+	return nil
 }
