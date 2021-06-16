@@ -19,40 +19,40 @@ type Switcher struct {
 }
 
 func NewSwitcher(staticIP map[string]HostIP) *Switcher {
-	n := &Switcher{
+	switcher := &Switcher{
 		chanPacketBufferRoute: make(chan []byte, 1024),
 		availableIP:           make(chan HostIP, 0xFFFF),
 	}
 
 	for k, v := range staticIP {
-		n.macIPBinds.Store(k, v)
-		n.ipMacBinds.Store(v, k)
+		switcher.macIPBinds.Store(k, v)
+		switcher.ipMacBinds.Store(v, k)
 	}
 
 	// push available ip
 	for i := HostIP(1); i < 0xFFFF; i++ {
-		_, found := n.ipMacBinds.Load(i)
+		_, found := switcher.ipMacBinds.Load(i)
 		if !found {
-			n.availableIP <- i
+			switcher.availableIP <- i
 		}
 	}
 
-	return n
+	return switcher
 }
 
-func (n *Switcher) allocIP(mac string) (HostIP, error) {
-	it, found := n.macIPBinds.Load(mac)
+func (switcher *Switcher) allocIP(mac string) (HostIP, error) {
+	it, found := switcher.macIPBinds.Load(mac)
 	if found {
 		return it.(HostIP), nil
 	}
 
 	for {
 		select {
-		case ip, ok := <-n.availableIP:
+		case ip, ok := <-switcher.availableIP:
 			if !ok {
 				return 0, errors.New("alloc host ip failed")
 			}
-			if _, found := n.hosts.Load(ip); !found {
+			if _, found := switcher.hosts.Load(ip); !found {
 				return ip, nil
 			}
 
@@ -62,7 +62,7 @@ func (n *Switcher) allocIP(mac string) (HostIP, error) {
 	}
 }
 
-func (n *Switcher) Run(addr string) {
+func (switcher *Switcher) Run(addr string) {
 	listener, err := net.Listen("tcp4", addr)
 	if err != nil {
 		log.Fatal(err)
@@ -74,33 +74,31 @@ func (n *Switcher) Run(addr string) {
 		if err != nil {
 			break
 		}
-		go func(c net.Conn) {
-			host, err := n.upgrade(c)
-			if err != nil {
-				c.Close()
-				log.Println("host upgrade failed", err)
-				return
-			}
-			_, loaded := n.hosts.LoadOrStore(host.ip, host)
-			if loaded {
-				c.Close()
-				log.Println("host ip confilct", err)
-			}
-		}(conn)
+		go switcher.access(conn)
 	}
 }
 
-func (n *Switcher) upgrade(conn net.Conn) (*Host, error) {
-	return nil, errors.New("not implement")
+func (switcher *Switcher) access(conn net.Conn) {
+	host, err := switcher.upgrade(conn)
+	if err != nil {
+		conn.Close()
+		log.Println("host upgrade failed", err)
+		return
+	}
+	_, loaded := switcher.hosts.LoadOrStore(host.ip, host)
+	if loaded {
+		conn.Close()
+		log.Println("host ip confilct", err)
+	}
 }
 
 // todo todo todo
-func (n *Switcher) packetSwitchLoop() {
+func (switcher *Switcher) packetSwitchLoop() {
 	for {
 		select {
-		case buf, ok := <-n.chanPacketBufferRoute:
+		case buf, ok := <-switcher.chanPacketBufferRoute:
 			if ok {
-				it, found := n.hosts.Load(0)
+				it, found := switcher.hosts.Load(0)
 				if found {
 					it.(*Host).writeBuffer(buf)
 				}
