@@ -62,7 +62,7 @@ func NewHost(switcher *Switcher, conn net.Conn, ip HostIP) *Host {
 }
 
 // Dial 请求对端创建连接
-func (host *Host) Dial(remotePort uint16) (*Stream, error) {
+func (host *Host) Dial(ip HostIP, remotePort uint16) (*Stream, error) {
 	stream := NewStream(host, true)
 
 	// select an available port
@@ -71,6 +71,8 @@ func (host *Host) Dial(remotePort uint16) (*Stream, error) {
 		case localPort := <-host.availablePorts:
 			_, loaded := host.localBinds.LoadOrStore(localPort, stream)
 			if !loaded {
+				stream.localIP = host.ip
+				stream.remoteIP = ip
 				stream.localPort = localPort
 				stream.remotePort = remotePort
 
@@ -200,6 +202,8 @@ func (host *Host) readLoop() {
 								head.StreamDataID(), host.streamsLen)
 						}
 
+						stream.localIP = head.DistIP()
+						stream.remoteIP = head.SrcIP()
 						stream.localPort = head.DistPort()
 						stream.remotePort = head.SrcPort()
 						it.(*Listener).pushStream(stream)
@@ -310,6 +314,7 @@ func (host *Host) writeLoop() {
 			err := host.writeBuffer(aliveBuf)
 			if err != nil {
 				host.emitWriteErr(err)
+				return
 			}
 			host.writtenAlivePackCount++
 		}

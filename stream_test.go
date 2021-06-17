@@ -14,7 +14,7 @@ func TestStreamOpen(t *testing.T) {
 
 	go func() {
 		host := NewHost(nil, c1, 1)
-		host.Dial(1024)
+		host.Dial(0, 1024)
 	}()
 
 	// 解析Dial请求

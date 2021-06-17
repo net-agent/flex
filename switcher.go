@@ -1,6 +1,7 @@
 package flex
 
 import (
+	"encoding/binary"
 	"errors"
 	"log"
 	"net"
@@ -98,9 +99,12 @@ func (switcher *Switcher) packetSwitchLoop() {
 		select {
 		case buf, ok := <-switcher.chanPacketBufferRoute:
 			if ok {
-				it, found := switcher.hosts.Load(0)
+				distIP := binary.BigEndian.Uint16(buf[3:5])
+				it, found := switcher.hosts.Load(distIP)
 				if found {
 					it.(*Host).writeBuffer(buf)
+				} else {
+					log.Printf("host(ip=%v) not found, packet discard\n", distIP)
 				}
 			}
 		}
