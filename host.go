@@ -126,6 +126,7 @@ func (host *Host) readLoop() {
 
 		// 判断是否需要通过switcher分发packet
 		if head.DistIP() != host.ip {
+			log.Printf("switch packet. dist=%v self=%v\n", head.DistIP(), host.ip)
 			if host.switcher != nil {
 				packetBuf := make([]byte, packetHeaderSize+head.PayloadSize())
 				copy(packetBuf[:packetHeaderSize], head[:])
