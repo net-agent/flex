@@ -79,7 +79,7 @@ func (switcher *Switcher) Run(addr string) {
 }
 
 func (switcher *Switcher) access(conn net.Conn) {
-	host, err := switcher.upgrade(conn)
+	host, err := switcher.UpgradeHost(conn)
 	if err != nil {
 		conn.Close()
 		log.Println("host upgrade failed", err)
