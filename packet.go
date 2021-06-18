@@ -3,6 +3,7 @@ package flex
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 )
 
 const (
@@ -70,6 +71,8 @@ func (h *packetHeader) SrcIP() HostIP        { return binary.BigEndian.Uint16(h[
 func (h *packetHeader) DistIP() HostIP       { return binary.BigEndian.Uint16(h[3:5]) }
 func (h *packetHeader) SrcPort() uint16      { return binary.BigEndian.Uint16(h[5:7]) }
 func (h *packetHeader) DistPort() uint16     { return binary.BigEndian.Uint16(h[7:9]) }
+func (h *packetHeader) Src() string          { return fmt.Sprintf("%v:%v", h.SrcIP(), h.SrcPort()) }
+func (h *packetHeader) Dist() string         { return fmt.Sprintf("%v:%v", h.DistIP(), h.DistPort()) }
 func (h *packetHeader) StreamDataID() uint64 { return binary.BigEndian.Uint64(h[1:9]) }
 func (h *packetHeader) CmdStr() string       { return cmdStr(h[0]) }
 
@@ -93,6 +96,8 @@ func cmdStr(b byte) string {
 	for i, str := range strs {
 		if ((1 << i) & b) > 0 {
 			ret = ret + str
+		} else if i == 0 {
+			ret = ret + "[cmd]"
 		}
 	}
 	if ret == "" {

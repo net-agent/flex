@@ -11,17 +11,7 @@ import (
 func testConnect(t *testing.T, switcher *Switcher, domain, mac string) (*Host, error) {
 	c1, c2 := net.Pipe()
 
-	go func() {
-		host, err := switcher.UpgradeHost(c2)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		if host == nil {
-			t.Error("not equal")
-			return
-		}
-	}()
+	go switcher.Access(c2)
 
 	host, err := UpgradeToHost(c1, &HostRequest{domain, mac})
 	if err != nil {
@@ -45,7 +35,7 @@ func TestSwitcherBase(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		switcher := NewSwitcher(nil)
-		host, err := switcher.UpgradeHost(c2)
+		host, _, err := switcher.UpgradeHost(c2)
 		if err != nil {
 			t.Error(err)
 			return
@@ -77,6 +67,7 @@ func TestSwitcherBase(t *testing.T) {
 
 func TestSwitcherMult(t *testing.T) {
 	switcher := NewSwitcher(nil)
+	go switcher.PacketSwitchLoop()
 
 	h1, err := testConnect(t, switcher, "test1", "mac1")
 	if err != nil {
@@ -84,11 +75,6 @@ func TestSwitcherMult(t *testing.T) {
 		return
 	}
 	h2, err := testConnect(t, switcher, "test2", "mac2")
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	_, err = testConnect(t, switcher, "test3", "mac3")
 	if err != nil {
 		t.Error(err)
 		return

@@ -62,7 +62,7 @@ func NewHost(switcher *Switcher, conn net.Conn, ip HostIP) *Host {
 }
 
 // Dial 请求对端创建连接
-func (host *Host) Dial(ip HostIP, remotePort uint16) (*Stream, error) {
+func (host *Host) Dial(remoteIP HostIP, remotePort uint16) (*Stream, error) {
 	stream := NewStream(host, true)
 
 	// select an available port
@@ -72,7 +72,7 @@ func (host *Host) Dial(ip HostIP, remotePort uint16) (*Stream, error) {
 			_, loaded := host.localBinds.LoadOrStore(localPort, stream)
 			if !loaded {
 				stream.localIP = host.ip
-				stream.remoteIP = ip
+				stream.remoteIP = remoteIP
 				stream.localPort = localPort
 				stream.remotePort = remotePort
 
@@ -85,7 +85,7 @@ func (host *Host) Dial(ip HostIP, remotePort uint16) (*Stream, error) {
 				}
 				atomic.AddInt64(&host.streamsLen, 1)
 
-				log.Printf("new stream from dial: local=%v remote=%v\n", localPort, remotePort)
+				log.Printf("try to dial stream: %v:%v -> %v:%v\n", host.ip, localPort, remoteIP, remotePort)
 
 				err := stream.open()
 				if err != nil {
@@ -128,7 +128,7 @@ func (host *Host) readLoop() {
 
 		// 判断是否需要通过switcher分发packet
 		if head.DistIP() != host.ip {
-			log.Printf("switch packet. dist=%v self=%v\n", head.DistIP(), host.ip)
+			log.Printf("switch packet: dist=%v:%v\n", head.DistIP(), head.DistPort())
 			if host.switcher != nil {
 				packetBuf := make([]byte, packetHeaderSize+head.PayloadSize())
 				copy(packetBuf[:packetHeaderSize], head[:])
@@ -148,10 +148,10 @@ func (host *Host) readLoop() {
 			continue
 		}
 
-		if debug {
-			log.Printf("[read loop]%v src=%v dist=%v size=%v",
-				head.CmdStr(), head.SrcPort(), head.DistPort(), head.PayloadSize())
-		}
+		// if debug {
+		// 	log.Printf("[read loop]%v src=%v:%v dist=%v:%v size=%v",
+		// 		head.CmdStr(), head.SrcIP(), head.SrcPort(), head.DistIP(), head.DistPort(), head.PayloadSize())
+		// }
 
 		if head.IsACK() {
 			host.readedACKPackCount++
@@ -198,8 +198,8 @@ func (host *Host) readLoop() {
 
 						atomic.AddInt64(&host.streamsLen, 1)
 						if debug {
-							log.Printf("stream opened dataID=%v alive=%v\n",
-								head.StreamDataID(), host.streamsLen)
+							log.Printf("stream opened %v dataID=%x alive=%v\n",
+								head, head.StreamDataID(), host.streamsLen)
 						}
 
 						stream.localIP = head.DistIP()
@@ -240,8 +240,8 @@ func (host *Host) readLoop() {
 					if found {
 						it.(*Stream).readPipe.append(payload[:rn])
 					} else {
-						log.Printf("[src=%v][dist=%v] ignored cmd %v",
-							head.SrcPort(), head.DistPort(), head)
+						log.Printf("[src=%v][dist=%v] ignored cmd %v dataID=%x\n",
+							head.SrcPort(), head.DistPort(), head, head.StreamDataID())
 					}
 				}
 				if err != nil {
@@ -300,10 +300,10 @@ func (host *Host) writeLoop() {
 				host.writtenCmdPackCount++
 			}
 
-			if debug {
-				log.Printf("[writeloop]%v src=%v dist=%v size=%v\n",
-					packet.CmdStr(), packet.srcPort, packet.distPort, len(packet.payload))
-			}
+			// if debug {
+			// 	log.Printf("[writeloop]%v src=%v:%v dist=%v:%v size=%v\n",
+			// 		packet.CmdStr(), packet.srcHost, packet.srcPort, packet.distHost, packet.distPort, len(packet.payload))
+			// }
 
 		case <-time.After(time.Minute * 3):
 			//
@@ -328,9 +328,16 @@ func (host *Host) emitWriteErr(err error) {
 	fmt.Println("[error]", err)
 }
 
-func (host *Host) writePacket(cmd byte, srcPort, distPort uint16, payload []byte) error {
+func (host *Host) writePacket(
+	cmd byte,
+	srcIP, distIP HostIP,
+	srcPort, distPort uint16,
+	payload []byte,
+) error {
 	p := &Packet{
 		cmd:      cmd,
+		srcHost:  srcIP,
+		distHost: distIP,
 		srcPort:  srcPort,
 		distPort: distPort,
 		payload:  payload,
@@ -346,9 +353,11 @@ func (host *Host) writePacket(cmd byte, srcPort, distPort uint16, payload []byte
 		return errors.New("timeout")
 	}
 }
-func (host *Host) writePacketACK(cmd byte, srcPort, distPort uint16, ackInfo uint16) {
+func (host *Host) writePacketACK(cmd byte, srcHost, distHost HostIP, srcPort, distPort uint16, ackInfo uint16) {
 	p := &Packet{
 		cmd:      CmdACKFlag | cmd,
+		srcHost:  srcHost,
+		distHost: distHost,
 		srcPort:  srcPort,
 		distPort: distPort,
 		payload:  nil,

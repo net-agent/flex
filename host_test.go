@@ -24,7 +24,7 @@ func TestHostWritePacket(t *testing.T) {
 
 	go func() {
 		for _, p := range ps {
-			err := host1.writePacket(p.cmd, p.srcPort, p.distPort, p.payload)
+			err := host1.writePacket(p.cmd, 0, 0, p.srcPort, p.distPort, p.payload)
 			if err != nil {
 				t.Error(err)
 				return
@@ -190,7 +190,7 @@ func TestHostStreamClose(t *testing.T) {
 		return
 	}
 	if host.streamsLen != 1 {
-		t.Error("not equal")
+		t.Error("not equal", host.streamsLen)
 		return
 	}
 	buf := make([]byte, 10)

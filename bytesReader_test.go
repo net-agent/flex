@@ -35,26 +35,23 @@ func TestBytesPipeReadWrite(t *testing.T) {
 			end := 0
 			size := writeSize
 
-			for {
-				select {
-				case <-ticker.C:
-					end = start + size
-					if end > dataSz {
-						end = dataSz
-					}
-					err := pipe.append(bigData[start:end])
-					if err != nil {
-						t.Error(err)
-						return
-					}
-					if log {
-						fmt.Printf("append data size: %v\n", end)
-					}
-					start = end
+			for range ticker.C {
+				end = start + size
+				if end > dataSz {
+					end = dataSz
+				}
+				err := pipe.append(bigData[start:end])
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if log {
+					fmt.Printf("append data size: %v\n", end)
+				}
+				start = end
 
-					if start >= dataSz {
-						return
-					}
+				if start >= dataSz {
+					return
 				}
 			}
 		}()

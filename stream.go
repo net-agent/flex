@@ -116,6 +116,7 @@ func (stream *Stream) write(buf []byte) error {
 
 	err := stream.host.writePacket(
 		CmdPushStreamData,
+		stream.localIP, stream.remoteIP,
 		stream.localPort, stream.remotePort,
 		buf,
 	)
@@ -136,17 +137,21 @@ func (stream *Stream) dataID() uint64 {
 	// head.src  = remote
 	// head.dist = local
 
-	binary.BigEndian.PutUint16(buf[0:2], stream.localIP)    // src
-	binary.BigEndian.PutUint16(buf[2:4], stream.remoteIP)   // dist
-	binary.BigEndian.PutUint16(buf[4:6], stream.remotePort) // src
-	binary.BigEndian.PutUint16(buf[6:8], stream.localPort)  // dist
+	binary.BigEndian.PutUint16(buf[0:2], stream.remoteIP)   // src-ip
+	binary.BigEndian.PutUint16(buf[2:4], stream.localIP)    // dist-ip
+	binary.BigEndian.PutUint16(buf[4:6], stream.remotePort) // src-port
+	binary.BigEndian.PutUint16(buf[6:8], stream.localPort)  // dist-port
 
 	return binary.BigEndian.Uint64(buf[:])
 }
 
 // open 主动开启连接
 func (stream *Stream) open() error {
-	err := stream.host.writePacket(CmdOpenStream, stream.localPort, stream.remotePort, nil)
+	err := stream.host.writePacket(
+		CmdOpenStream,
+		stream.localIP, stream.remoteIP,
+		stream.localPort, stream.remotePort,
+		nil)
 	if err != nil {
 		return err
 	}
@@ -161,12 +166,12 @@ func (stream *Stream) open() error {
 
 // opened 响应开启连接请求，返回ACK
 func (stream *Stream) opened() {
-	stream.host.writePacketACK(CmdOpenStream, stream.localPort, stream.remotePort, 0)
+	stream.host.writePacketACK(CmdOpenStream, stream.localIP, stream.remoteIP, stream.localPort, stream.remotePort, 0)
 }
 
 // readed 成功读取数据后，返回ACK
 func (stream *Stream) readed(size uint16) {
-	stream.host.writePacketACK(CmdPushStreamData, stream.localPort, stream.remotePort, size)
+	stream.host.writePacketACK(CmdPushStreamData, stream.localIP, stream.remoteIP, stream.localPort, stream.remotePort, size)
 }
 
 func (stream *Stream) increasePoolSize(size uint16) {
@@ -193,7 +198,11 @@ func (stream *Stream) close() error {
 	}
 	stream.writeClosed = true
 
-	return stream.host.writePacket(CmdCloseStream, stream.localPort, stream.remotePort, nil)
+	return stream.host.writePacket(
+		CmdCloseStream,
+		stream.localIP, stream.remoteIP,
+		stream.localPort, stream.remotePort,
+		nil)
 }
 
 func (stream *Stream) LocalAddr() net.Addr {

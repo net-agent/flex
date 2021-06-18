@@ -75,38 +75,36 @@ func (switcher *Switcher) Run(addr string) {
 		if err != nil {
 			break
 		}
-		go switcher.access(conn)
+		go switcher.Access(conn)
 	}
 }
 
-func (switcher *Switcher) access(conn net.Conn) {
-	host, err := switcher.UpgradeHost(conn)
+func (switcher *Switcher) Access(conn net.Conn) {
+	host, ip, err := switcher.UpgradeHost(conn)
 	if err != nil {
 		conn.Close()
 		log.Println("host upgrade failed", err)
 		return
 	}
-	_, loaded := switcher.hosts.LoadOrStore(host.ip, host)
+	_, loaded := switcher.hosts.LoadOrStore(ip, host)
 	if loaded {
 		conn.Close()
-		log.Println("host ip confilct", err)
+		log.Printf("host ip(%v) conflict\n", ip)
 	}
 }
 
 // todo todo todo
-func (switcher *Switcher) packetSwitchLoop() {
-	for {
-		select {
-		case buf, ok := <-switcher.chanPacketBufferRoute:
-			if ok {
-				distIP := binary.BigEndian.Uint16(buf[3:5])
-				it, found := switcher.hosts.Load(distIP)
-				if found {
-					it.(*Host).writeBuffer(buf)
-				} else {
-					log.Printf("host(ip=%v) not found, packet discard\n", distIP)
-				}
-			}
+func (switcher *Switcher) PacketSwitchLoop() {
+	var head packetHeader
+	for buf := range switcher.chanPacketBufferRoute {
+		copy(head[:], buf)
+		distIP := binary.BigEndian.Uint16(buf[3:5])
+		it, found := switcher.hosts.Load(distIP)
+		if found {
+			it.(*Host).writeBuffer(buf)
+			log.Printf("%v%v -> %v\n", head.CmdStr(), head.Src(), head.Dist())
+		} else {
+			log.Printf("%v%v -> %v discard\n", head.CmdStr(), head.Src(), head.Dist())
 		}
 	}
 }

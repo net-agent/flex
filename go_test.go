@@ -2,6 +2,7 @@ package flex_test
 
 import (
 	"fmt"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -53,5 +54,10 @@ func TestChanSelect(t *testing.T) {
 	case <-valueEvents:
 		fmt.Println("value event")
 	}
+}
 
+func TestPipe(t *testing.T) {
+	c1, _ := net.Pipe()
+
+	fmt.Println(c1.LocalAddr().String())
 }

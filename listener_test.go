@@ -8,6 +8,12 @@ import (
 func TestListenerClose(t *testing.T) {
 	l := NewListener()
 
+	err := l.pushStream(nil)
+	if err == nil {
+		t.Error("unexpected error")
+		return
+	}
+
 	go func() {
 		<-time.After(time.Millisecond * 100)
 		err := l.Close()
@@ -22,7 +28,13 @@ func TestListenerClose(t *testing.T) {
 		}
 	}()
 
-	_, err := l.Accept()
+	_, err = l.Accept()
+	if err == nil {
+		t.Error("unexpected nil error")
+		return
+	}
+
+	err = l.pushStream(NewStream(nil, true))
 	if err == nil {
 		t.Error("unexpected nil error")
 		return
