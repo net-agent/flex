@@ -70,6 +70,8 @@ func (switcher *Switcher) Run(addr string) {
 		return
 	}
 
+	log.Printf("switcher running, addr is %v\n", addr)
+
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -91,6 +93,8 @@ func (switcher *Switcher) Access(conn net.Conn) {
 		conn.Close()
 		log.Printf("host ip(%v) conflict\n", ip)
 	}
+
+	log.Printf("host upgrade success, ip is %v\n", ip)
 }
 
 // todo todo todo

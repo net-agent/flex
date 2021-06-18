@@ -2,6 +2,7 @@ package flex
 
 import (
 	"errors"
+	"net"
 	"sync"
 )
 
@@ -17,12 +18,16 @@ func NewListener() *Listener {
 	}
 }
 
-func (listener *Listener) Accept() (*Stream, error) {
+func (listener *Listener) AcceptStream() (*Stream, error) {
 	stream, ok := <-listener.chanStream
 	if !ok {
 		return nil, errors.New("listener closed")
 	}
 	return stream, nil
+}
+
+func (listener *Listener) Accept() (net.Conn, error) {
+	return listener.AcceptStream()
 }
 
 func (listener *Listener) pushStream(stream *Stream) error {
@@ -49,5 +54,9 @@ func (listener *Listener) Close() error {
 	listener.closed = true
 	close(listener.chanStream)
 
+	return nil
+}
+
+func (listener *Listener) Addr() net.Addr {
 	return nil
 }
