@@ -55,7 +55,12 @@ func NewHost(switcher *Switcher, conn net.Conn, ip HostIP) *Host {
 		h.availablePorts <- uint16(i)
 	}
 
-	go h.readLoop()
+	if switcher != nil {
+		go h.switchLoop()
+	} else {
+		go h.readLoop()
+	}
+
 	go h.writeLoop()
 
 	return h
@@ -126,32 +131,10 @@ func (host *Host) readLoop() {
 			return
 		}
 
-		// 判断是否需要通过switcher分发packet
-		if head.DistIP() != host.ip {
-			log.Printf("switch packet: dist=%v:%v\n", head.DistIP(), head.DistPort())
-			if host.switcher != nil {
-				packetBuf := make([]byte, packetHeaderSize+head.PayloadSize())
-				copy(packetBuf[:packetHeaderSize], head[:])
-				if len(packetBuf) > packetHeaderSize {
-					_, err := io.ReadFull(host.conn, packetBuf[packetHeaderSize:])
-					if err != nil {
-						host.emitReadErr(err)
-					}
-				}
-				host.switcher.chanPacketBufferRoute <- packetBuf
-			}
-			continue
-		}
-
 		if head[0] == CmdAlive {
 			host.readedAlivePackCount++
 			continue
 		}
-
-		// if debug {
-		// 	log.Printf("[read loop]%v src=%v:%v dist=%v:%v size=%v",
-		// 		head.CmdStr(), head.SrcIP(), head.SrcPort(), head.DistIP(), head.DistPort(), head.PayloadSize())
-		// }
 
 		if head.IsACK() {
 			host.readedACKPackCount++
@@ -251,6 +234,38 @@ func (host *Host) readLoop() {
 					return
 				}
 			}
+		}
+	}
+}
+
+//
+// switchLoop
+// 不断读取连接中的数据，并根据DistIP对数据进行分发
+//
+func (host *Host) switchLoop() {
+	for {
+		pb := NewPacketBufs()
+		_, err := pb.ReadFrom(host.conn)
+		if err != nil {
+			host.emitReadErr(err)
+			return
+		}
+
+		if pb.head[0] == CmdAlive {
+			continue
+		}
+
+		// write pb to dist hosts
+		it, found := host.switcher.hosts.Load(pb.head.DistIP())
+		if !found {
+			log.Printf("%v%v -> %v discard\n", pb.head.CmdStr(), pb.head.Src(), pb.head.Dist())
+			continue
+		}
+
+		err = it.(*Host).writeBuffer(pb.head[:], pb.payload)
+		if err != nil {
+			log.Printf("%v%v -> %v write failed. %v\n",
+				pb.head.CmdStr(), pb.head.Src(), pb.head.Dist(), err)
 		}
 	}
 }
@@ -367,18 +382,24 @@ func (host *Host) writePacketACK(cmd byte, srcHost, distHost HostIP, srcPort, di
 	host.chanWrite <- p
 }
 
-func (host *Host) writeBuffer(buf []byte) error {
+func (host *Host) writeBuffer(bufs ...[]byte) error {
 	host.writeLocker.Lock()
 	defer host.writeLocker.Unlock()
 
-	wn := int(0)
-	for wn < len(buf) {
-		n, err := host.conn.Write(buf)
-		wn += n
-		if err != nil {
-			return err
+	for _, buf := range bufs {
+		wn := int(0)
+		for {
+			n, err := host.conn.Write(buf)
+			wn += n
+			if err != nil {
+				return err
+			}
+			if wn < len(buf) {
+				buf = buf[wn:]
+			} else {
+				break
+			}
 		}
-		buf = buf[wn:]
 	}
 	return nil
 }

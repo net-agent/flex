@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 )
 
 const (
@@ -104,4 +105,34 @@ func cmdStr(b byte) string {
 		return "[-]"
 	}
 	return ret
+}
+
+type PacketBufs struct {
+	head    packetHeader
+	payload []byte
+}
+
+func NewPacketBufs() *PacketBufs {
+	return &PacketBufs{}
+}
+
+func (pb *PacketBufs) ReadFrom(r io.Reader) (int64, error) {
+	var rn int64 = 0
+	n, err := io.ReadFull(r, pb.head[:])
+	rn += int64(n)
+	if err != nil {
+		return rn, err
+	}
+
+	sz := pb.head.PayloadSize()
+	if sz > 0 {
+		pb.payload = make([]byte, sz)
+		n, err := io.ReadFull(r, pb.payload)
+		rn += int64(n)
+		if err != nil {
+			return rn, err
+		}
+	}
+
+	return rn, nil
 }

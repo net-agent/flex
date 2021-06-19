@@ -1,7 +1,6 @@
 package flex
 
 import (
-	"encoding/binary"
 	"errors"
 	"log"
 	"net"
@@ -95,20 +94,4 @@ func (switcher *Switcher) Access(conn net.Conn) {
 	}
 
 	log.Printf("host upgrade success, ip is %v\n", ip)
-}
-
-// todo todo todo
-func (switcher *Switcher) PacketSwitchLoop() {
-	var head packetHeader
-	for buf := range switcher.chanPacketBufferRoute {
-		copy(head[:], buf)
-		distIP := binary.BigEndian.Uint16(buf[3:5])
-		it, found := switcher.hosts.Load(distIP)
-		if found {
-			it.(*Host).writeBuffer(buf)
-			log.Printf("%v%v -> %v\n", head.CmdStr(), head.Src(), head.Dist())
-		} else {
-			log.Printf("%v%v -> %v discard\n", head.CmdStr(), head.Src(), head.Dist())
-		}
-	}
 }

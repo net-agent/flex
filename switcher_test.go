@@ -67,7 +67,6 @@ func TestSwitcherBase(t *testing.T) {
 
 func TestSwitcherMult(t *testing.T) {
 	switcher := NewSwitcher(nil)
-	go switcher.PacketSwitchLoop()
 
 	h1, err := testConnect(t, switcher, "test1", "mac1")
 	if err != nil {
