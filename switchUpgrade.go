@@ -53,33 +53,37 @@ func UpgradeToHost(conn net.Conn, req *HostRequest) (*Host, error) {
 }
 
 // UpgradeHost 把连接升级为Host，并返回对端HostIP
-func (switcher *Switcher) UpgradeHost(conn net.Conn) (*Host, HostIP, error) {
+func (switcher *Switcher) UpgradeHost(conn net.Conn) (*switchContext, error) {
 	//
 	// recv request
 	//
 	head := make([]byte, 3)
 	_, err := io.ReadFull(conn, head)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	payloadSize := binary.BigEndian.Uint16(head[1:3])
 	payload := make([]byte, payloadSize)
 
 	_, err = io.ReadFull(conn, payload)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 
 	var req HostRequest
 	err = json.Unmarshal(payload, &req)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 
 	ip, err := switcher.allocIP(req.Mac)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
+
+	//
+	// add dns record
+	//
 
 	//
 	// send response
@@ -88,11 +92,16 @@ func (switcher *Switcher) UpgradeHost(conn net.Conn) (*Host, HostIP, error) {
 	binary.BigEndian.PutUint16(resp[1:3], ip)
 	wn, err := conn.Write(resp)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	if wn != len(resp) {
-		return nil, 0, errors.New("write failed")
+		return nil, errors.New("write failed")
 	}
 
-	return NewHost(switcher, conn, 0xffff), ip, nil
+	return &switchContext{
+		host:   NewHost(switcher, conn, 0xffff),
+		ip:     ip,
+		domain: req.Domain,
+		mac:    req.Mac,
+	}, nil
 }

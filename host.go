@@ -56,7 +56,7 @@ func NewHost(switcher *Switcher, conn net.Conn, ip HostIP) *Host {
 	}
 
 	if switcher != nil {
-		go h.switchLoop()
+		go switcher.hostReadLoop(h)
 	} else {
 		go h.readLoop()
 	}
@@ -234,38 +234,6 @@ func (host *Host) readLoop() {
 					return
 				}
 			}
-		}
-	}
-}
-
-//
-// switchLoop
-// 不断读取连接中的数据，并根据DistIP对数据进行分发
-//
-func (host *Host) switchLoop() {
-	for {
-		pb := NewPacketBufs()
-		_, err := pb.ReadFrom(host.conn)
-		if err != nil {
-			host.emitReadErr(err)
-			return
-		}
-
-		if pb.head[0] == CmdAlive {
-			continue
-		}
-
-		// write pb to dist hosts
-		it, found := host.switcher.hosts.Load(pb.head.DistIP())
-		if !found {
-			log.Printf("%v%v -> %v discard\n", pb.head.CmdStr(), pb.head.Src(), pb.head.Dist())
-			continue
-		}
-
-		err = it.(*Host).writeBuffer(pb.head[:], pb.payload)
-		if err != nil {
-			log.Printf("%v%v -> %v write failed. %v\n",
-				pb.head.CmdStr(), pb.head.Src(), pb.head.Dist(), err)
 		}
 	}
 }

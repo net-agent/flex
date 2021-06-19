@@ -13,6 +13,7 @@ const (
 	CmdCloseStream
 	CmdPushStreamData
 	CmdAlive
+	CmdOpenStreamDomain // distIP不是数字IP，而是域名。在switcher处进行报文转换
 )
 
 type Packet struct {
@@ -135,4 +136,12 @@ func (pb *PacketBufs) ReadFrom(r io.Reader) (int64, error) {
 	}
 
 	return rn, nil
+}
+
+func (pb *PacketBufs) SetDistIP(ip HostIP) {
+	binary.BigEndian.PutUint16(pb.head[3:5], ip)
+}
+func (pb *PacketBufs) SetPayload(buf []byte) {
+	binary.BigEndian.PutUint16(pb.head[9:11], uint16(len(buf)))
+	pb.payload = buf
 }

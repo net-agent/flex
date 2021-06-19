@@ -35,12 +35,12 @@ func TestSwitcherBase(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		switcher := NewSwitcher(nil)
-		host, _, err := switcher.UpgradeHost(c2)
+		ctx, err := switcher.UpgradeHost(c2)
 		if err != nil {
 			t.Error(err)
 			return
 		}
-		if host == nil {
+		if ctx.host == nil {
 			t.Error("not equal")
 			return
 		}
