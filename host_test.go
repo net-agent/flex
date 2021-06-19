@@ -86,7 +86,7 @@ func TestHostDialAndListen(t *testing.T) {
 		wg.Wait()
 
 		client := NewHost(nil, c1, 0)
-		stream, err := client.Dial(0, 80)
+		stream, err := client.Dial("0:80")
 		if err != nil {
 			t.Error(err)
 			return
@@ -150,7 +150,7 @@ func TestHostStreamClose(t *testing.T) {
 	go func() {
 		wg.Wait()
 		host := NewHost(nil, c1, 0)
-		stream, err := host.Dial(0, 80)
+		stream, err := host.Dial("0:80")
 		if err != nil {
 			t.Error(err)
 			return
@@ -281,7 +281,7 @@ func TestConcurrencyStream(t *testing.T) {
 	go func() {
 		streams := []*Stream{}
 		for i := 0; i < threadLen; i++ {
-			stream, err := client.Dial(0, 80)
+			stream, err := client.Dial("0:80")
 			if err != nil {
 				t.Error(err)
 				return

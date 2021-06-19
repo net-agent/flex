@@ -2,6 +2,7 @@ package flex
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -119,7 +120,7 @@ func TestSwitcherMult(t *testing.T) {
 	}()
 
 	wg.Wait()
-	conn, err := h2.Dial(h1.ip, 8080)
+	conn, err := h2.Dial(fmt.Sprintf("%v:8080", "test1"))
 	if err != nil {
 		t.Error(err)
 		return

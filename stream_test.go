@@ -14,7 +14,7 @@ func TestStreamOpen(t *testing.T) {
 
 	go func() {
 		host := NewHost(nil, c1, 1)
-		host.Dial(0, 1024)
+		host.Dial("0:1024")
 	}()
 
 	// 解析Dial请求
@@ -39,8 +39,7 @@ func TestStreamClose(t *testing.T) {
 	go func() {
 		host := NewHost(nil, c1, 0)
 		stream := NewStream(host, true)
-		stream.localPort = 1000
-		stream.remotePort = 80
+		stream.SetAddr(0, 1000, 1, 80)
 		stream.Close()
 	}()
 
@@ -59,9 +58,8 @@ func TestStreamClose(t *testing.T) {
 		return
 	}
 	s := NewStream(nil, false)
-	s.localPort = 80
-	s.remotePort = 1000
-	if head.StreamDataID() != s.dataID() {
+	s.SetAddr(1, 80, 0, 1000)
+	if head.StreamDataID() != s.dataID {
 		t.Error("not equal")
 		return
 	}
@@ -86,9 +84,8 @@ func TestStreamDataWrite(t *testing.T) {
 	go func() {
 		host := NewHost(nil, c1, 0)
 		stream := NewStream(host, true)
-		stream.localPort = 1024
-		stream.remotePort = 80
-		host.streams.Store(stream.dataID(), stream)
+		stream.SetAddr(0, 1024, 1, 80)
+		host.streams.Store(stream.dataID, stream)
 
 		wn, err := stream.Write(payload)
 		if wn != len(payload) {
@@ -108,6 +105,8 @@ func TestStreamDataWrite(t *testing.T) {
 		remotePort: 1024,
 		isClient:   false,
 	}
+	s.SetAddr(1, 80, 0, 1024)
+
 	_, err = io.ReadFull(c2, head[:])
 	if err != nil {
 		t.Error(err)
@@ -121,7 +120,7 @@ func TestStreamDataWrite(t *testing.T) {
 		t.Error("not equal")
 		return
 	}
-	if head.StreamDataID() != s.dataID() {
+	if head.StreamDataID() != s.dataID {
 		t.Error("not equal")
 		return
 	}
@@ -161,9 +160,8 @@ func TestStreamDataRead(t *testing.T) {
 		defer wg.Done()
 		host := NewHost(nil, c1, 0)
 		stream := NewStream(host, true)
-		stream.localPort = 1024
-		stream.remotePort = 80
-		host.streams.Store(stream.dataID(), stream)
+		stream.SetAddr(0, 1024, 1, 80)
+		host.streams.Store(stream.dataID, stream)
 
 		wn, err := stream.Write(payload)
 		if wn != len(payload) {
@@ -180,11 +178,10 @@ func TestStreamDataRead(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		host := NewHost(nil, c2, 0)
+		host := NewHost(nil, c2, 1)
 		stream := NewStream(host, false)
-		stream.localPort = 80
-		stream.remotePort = 1024
-		host.streams.Store(stream.dataID(), stream)
+		stream.SetAddr(1, 80, 0, 1024)
+		host.streams.Store(stream.dataID, stream)
 
 		buf := make([]byte, len(payload))
 		rn, err := io.ReadFull(stream, buf)

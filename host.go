@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -67,44 +68,65 @@ func NewHost(switcher *Switcher, conn net.Conn, ip HostIP) *Host {
 }
 
 // Dial 请求对端创建连接
-func (host *Host) Dial(remoteIP HostIP, remotePort uint16) (*Stream, error) {
-	stream := NewStream(host, true)
-
-	// select an available port
-	for {
-		select {
-		case localPort := <-host.availablePorts:
-			_, loaded := host.localBinds.LoadOrStore(localPort, stream)
-			if !loaded {
-				stream.localIP = host.ip
-				stream.remoteIP = remoteIP
-				stream.localPort = localPort
-				stream.remotePort = remotePort
-
-				// data bind
-				id := stream.dataID()
-				_, loaded := host.streams.LoadOrStore(id, stream)
-				if loaded {
-					host.availablePorts <- localPort
-					return nil, errors.New("stream bind exists")
-				}
-				atomic.AddInt64(&host.streamsLen, 1)
-
-				log.Printf("try to dial stream: %v:%v -> %v:%v\n", host.ip, localPort, remoteIP, remotePort)
-
-				err := stream.open()
-				if err != nil {
-					host.localBinds.Delete(localPort)
-					host.availablePorts <- localPort
-					return nil, err
-				}
-
-				return stream, nil
-			}
-		default:
-			return nil, errors.New("local port resource depletion")
-		}
+func (host *Host) Dial(addr string) (*Stream, error) {
+	remoteHost, remotePort, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
 	}
+	if remoteHost == "" {
+		return nil, errors.New("empty remote host")
+	}
+
+	port, err := strconv.ParseInt(remotePort, 10, 16)
+	if err != nil {
+		return nil, err
+	}
+
+	ip, err := strconv.ParseInt(remoteHost, 10, 16)
+	if err == nil {
+		return host.dial("", HostIP(ip), uint16(port))
+	}
+	return host.dial(remoteHost, 0, uint16(port))
+}
+
+func (host *Host) dial(remoteDomain string, remoteIP HostIP, remotePort uint16) (*Stream, error) {
+	localPort, err := host.selectLocalPort()
+	if err != nil {
+		return nil, err
+	}
+
+	stream := NewStream(host, true)
+	stream.SetAddr(host.ip, localPort, remoteIP, remotePort)
+
+	// local bind
+	if _, loaded := host.localBinds.LoadOrStore(localPort, stream); loaded {
+		// 也许是被Listen占用了
+		return nil, errors.New("port not availble")
+	}
+
+	if remoteDomain == "" {
+		log.Printf("dial stream: %v:%v -> %v:%v\n", host.ip, localPort, remoteIP, remotePort)
+	} else {
+		log.Printf("dial stream: %v:%v -> %v:%v\n", host.ip, localPort, remoteDomain, remotePort)
+	}
+
+	err = stream.open(remoteDomain)
+	if err != nil {
+		host.localBinds.Delete(localPort)
+		host.availablePorts <- localPort
+		return nil, err
+	}
+
+	return stream, nil
+}
+
+func (host *Host) attach(stream *Stream) error {
+	_, loaded := host.streams.LoadOrStore(stream.dataID, stream)
+	if loaded {
+		return errors.New("stream bind exists")
+	}
+	atomic.AddInt64(&host.streamsLen, 1)
+	return nil
 }
 
 // Listen 监听对端创建连接的请求
@@ -115,6 +137,20 @@ func (host *Host) Listen(port uint16) (*Listener, error) {
 		return nil, errors.New("listen on used port")
 	}
 	return listener, nil
+}
+
+func (host *Host) selectLocalPort() (uint16, error) {
+	for {
+		select {
+		case localPort := <-host.availablePorts:
+			_, loaded := host.localBinds.Load(localPort)
+			if !loaded {
+				return localPort, nil
+			}
+		default:
+			return 0, errors.New("local port resource depletion")
+		}
+	}
 }
 
 //
@@ -144,10 +180,19 @@ func (host *Host) readLoop() {
 			switch head.Cmd() {
 
 			case CmdOpenStream:
+				log.Printf("open ack %v", head)
 				it, found := host.localBinds.Load(head.DistPort())
 				if found {
-					it.(*Stream).chanOpenACK <- struct{}{}
-				} else if debug {
+					stream := it.(*Stream)
+					stream.SetAddr(
+						stream.localIP,
+						stream.localPort,
+						head.SrcIP(), // 如果是通过domain进行创建的，这个字段需要更新
+						stream.remotePort,
+					)
+					host.attach(stream)
+					stream.chanOpenACK <- struct{}{}
+				} else {
 					log.Printf("ignored open packet %v\n", head)
 				}
 
@@ -172,27 +217,28 @@ func (host *Host) readLoop() {
 			switch head.Cmd() {
 
 			case CmdOpenStream:
-
+				log.Printf("open %v", head)
 				it, found := host.localBinds.Load(head.DistPort())
-				if found {
-					stream := NewStream(host, false)
-					_, found := host.streams.LoadOrStore(head.StreamDataID(), stream)
-					if !found {
-
-						atomic.AddInt64(&host.streamsLen, 1)
-						if debug {
-							log.Printf("stream opened %v dataID=%x alive=%v\n",
-								head, head.StreamDataID(), host.streamsLen)
-						}
-
-						stream.localIP = head.DistIP()
-						stream.remoteIP = head.SrcIP()
-						stream.localPort = head.DistPort()
-						stream.remotePort = head.SrcPort()
-						it.(*Listener).pushStream(stream)
-						stream.opened()
-					}
+				if !found {
+					log.Printf("%v port=%v not available. %v\n", head.CmdStr(), head.DistPort(), head)
+					continue
 				}
+				stream := NewStream(host, false)
+				stream.SetAddr(head.DistIP(), head.DistPort(), head.SrcIP(), head.SrcPort())
+
+				_, found = host.streams.LoadOrStore(stream.dataID, stream)
+				if found {
+					log.Printf("%v stream exists. %v\n", head.CmdStr(), head)
+					continue
+				}
+
+				atomic.AddInt64(&host.streamsLen, 1)
+				if debug {
+					log.Printf("stream opened %v dataID=%x alive=%v\n", head, head.StreamDataID(), host.streamsLen)
+				}
+
+				it.(*Listener).pushStream(stream)
+				stream.opened()
 
 			case CmdCloseStream:
 				//

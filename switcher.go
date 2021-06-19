@@ -127,6 +127,8 @@ func (switcher *Switcher) hostReadLoop(host *Host) {
 			continue
 		}
 
+		log.Printf("%v %v\n", pb.head.CmdStr(), pb.head)
+
 		// 通过域名来创建Stream，需要对报文进行转换
 		if pb.head.Cmd() == CmdOpenStreamDomain {
 			go func(pb *PacketBufs) {
@@ -140,8 +142,9 @@ func (switcher *Switcher) hostReadLoop(host *Host) {
 				pb.head[0] = CmdOpenStream
 				pb.SetDistIP(ctx.ip)
 				pb.SetPayload(nil)
-				host.writeBuffer(pb.head[:], pb.payload)
+				ctx.host.writeBuffer(pb.head[:], pb.payload)
 			}(pb)
+			continue
 		}
 
 		// write pb to dist hosts

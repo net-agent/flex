@@ -18,6 +18,7 @@ type Stream struct {
 	remoteIP   HostIP
 	localPort  uint16
 	remotePort uint16
+	dataID     uint64
 
 	chanOpenACK chan struct{}
 
@@ -46,6 +47,20 @@ func NewStream(host *Host, isClient bool) *Stream {
 		writePoolSize:      1024 * 64, // 16字节缓冲
 		writePoolIncEvents: make(chan struct{}, 128),
 	}
+}
+
+func (stream *Stream) SetAddr(localIP HostIP, localPort uint16, remoteIP HostIP, remotePort uint16) {
+	stream.localIP = localIP
+	stream.localPort = localPort
+	stream.remoteIP = remoteIP
+	stream.remotePort = remotePort
+
+	var buf [8]byte
+	binary.BigEndian.PutUint16(buf[0:2], stream.remoteIP)   // src-ip
+	binary.BigEndian.PutUint16(buf[2:4], stream.localIP)    // dist-ip
+	binary.BigEndian.PutUint16(buf[4:6], stream.remotePort) // src-port
+	binary.BigEndian.PutUint16(buf[6:8], stream.localPort)  // dist-port
+	stream.dataID = binary.BigEndian.Uint64(buf[:])
 }
 
 func (stream *Stream) Read(dist []byte) (int, error) {
@@ -130,28 +145,22 @@ func (stream *Stream) Close() error {
 	return stream.close()
 }
 
-func (stream *Stream) dataID() uint64 {
-	var buf [8]byte
-
-	// 对端发送过来的数据包中：
-	// head.src  = remote
-	// head.dist = local
-
-	binary.BigEndian.PutUint16(buf[0:2], stream.remoteIP)   // src-ip
-	binary.BigEndian.PutUint16(buf[2:4], stream.localIP)    // dist-ip
-	binary.BigEndian.PutUint16(buf[4:6], stream.remotePort) // src-port
-	binary.BigEndian.PutUint16(buf[6:8], stream.localPort)  // dist-port
-
-	return binary.BigEndian.Uint64(buf[:])
-}
-
 // open 主动开启连接
-func (stream *Stream) open() error {
+func (stream *Stream) open(domain string) error {
+	cmd := CmdOpenStream
+	payload := []byte{}
+
+	if domain != "" {
+		cmd = CmdOpenStreamDomain
+		payload = []byte(domain)
+	}
+
 	err := stream.host.writePacket(
-		CmdOpenStream,
+		cmd,
 		stream.localIP, stream.remoteIP,
 		stream.localPort, stream.remotePort,
-		nil)
+		payload)
+
 	if err != nil {
 		return err
 	}
@@ -178,7 +187,7 @@ func (stream *Stream) increasePoolSize(size uint16) {
 	atomic.AddInt64(&stream.writenACKCount, int64(size))
 	n := atomic.AddInt32(&stream.writePoolSize, int32(size))
 	if debug || n > 1024 {
-		log.Printf("[local=%v] writePoolSize=%v\n", stream.localPort, n)
+		// 	log.Printf("[local=%v] writePoolSize=%v\n", stream.localPort, n)
 	}
 	// if len(stream.writePoolIncEvents) <= 0 {
 	stream.writePoolIncEvents <- struct{}{}

@@ -93,7 +93,7 @@ func (h *packetHeader) ACKInfo() uint16 {
 }
 
 func cmdStr(b byte) string {
-	strs := []string{"[ack]", "[open]", "[close]", "[push]", "[alive]"}
+	strs := []string{"[ack]", "[open]", "[close]", "[push]", "[alive]", "[domain]"}
 	ret := ""
 	for i, str := range strs {
 		if ((1 << i) & b) > 0 {
