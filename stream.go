@@ -3,6 +3,7 @@ package flex
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"sync"
@@ -19,6 +20,7 @@ type Stream struct {
 	localPort  uint16
 	remotePort uint16
 	dataID     uint64
+	desc       string
 
 	chanOpenACK chan struct{}
 
@@ -61,6 +63,7 @@ func (stream *Stream) SetAddr(localIP HostIP, localPort uint16, remoteIP HostIP,
 	binary.BigEndian.PutUint16(buf[4:6], stream.remotePort) // src-port
 	binary.BigEndian.PutUint16(buf[6:8], stream.localPort)  // dist-port
 	stream.dataID = binary.BigEndian.Uint64(buf[:])
+	stream.desc = fmt.Sprintf("%v:%v - %v:%v", localIP, localPort, remoteIP, remotePort)
 }
 
 func (stream *Stream) Read(dist []byte) (int, error) {
@@ -117,6 +120,14 @@ func (stream *Stream) Write(src []byte) (int, error) {
 	return start, nil
 }
 
+func (stream *Stream) writePacket(cmd byte, ackInfo uint16, payload []byte) error {
+	return stream.host.writePacket(cmd,
+		stream.localIP, stream.remoteIP,
+		stream.localPort, stream.remotePort,
+		ackInfo, payload,
+	)
+}
+
 func (stream *Stream) write(buf []byte) error {
 	stream.writeLocker.Lock()
 	defer stream.writeLocker.Unlock()
@@ -129,12 +140,7 @@ func (stream *Stream) write(buf []byte) error {
 	atomic.AddInt32(&stream.writePoolSize, -int32(len(buf)))
 	stream.writenCount += int64(len(buf))
 
-	err := stream.host.writePacket(
-		CmdPushStreamData,
-		stream.localIP, stream.remoteIP,
-		stream.localPort, stream.remotePort,
-		buf,
-	)
+	err := stream.writePacket(CmdPushStreamData, 0, buf)
 	if err != nil {
 		stream.increasePoolSize(uint16(len(buf)))
 	}
@@ -155,11 +161,7 @@ func (stream *Stream) open(domain string) error {
 		payload = []byte(domain)
 	}
 
-	err := stream.host.writePacket(
-		cmd,
-		stream.localIP, stream.remoteIP,
-		stream.localPort, stream.remotePort,
-		payload)
+	err := stream.writePacket(cmd, 0, payload)
 
 	if err != nil {
 		return err
@@ -175,12 +177,12 @@ func (stream *Stream) open(domain string) error {
 
 // opened 响应开启连接请求，返回ACK
 func (stream *Stream) opened() {
-	stream.host.writePacketACK(CmdOpenStream, stream.localIP, stream.remoteIP, stream.localPort, stream.remotePort, 0)
+	stream.writePacket(CmdACKFlag|CmdOpenStream, 0, nil)
 }
 
 // readed 成功读取数据后，返回ACK
 func (stream *Stream) readed(size uint16) {
-	stream.host.writePacketACK(CmdPushStreamData, stream.localIP, stream.remoteIP, stream.localPort, stream.remotePort, size)
+	stream.writePacket(CmdACKFlag|CmdPushStreamData, size, nil)
 }
 
 func (stream *Stream) increasePoolSize(size uint16) {
@@ -207,11 +209,7 @@ func (stream *Stream) close() error {
 	}
 	stream.writeClosed = true
 
-	return stream.host.writePacket(
-		CmdCloseStream,
-		stream.localIP, stream.remoteIP,
-		stream.localPort, stream.remotePort,
-		nil)
+	return stream.writePacket(CmdCloseStream, 0, nil)
 }
 
 func (stream *Stream) LocalAddr() net.Addr {

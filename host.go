@@ -158,54 +158,58 @@ func (host *Host) selectLocalPort() (uint16, error) {
 // 不断读取连接中的数据，并且根据解包的结果进行数据派发
 //
 func (host *Host) readLoop() {
-	var head packetHeader
+	var pb PacketBufs
 
 	for {
-		_, err := io.ReadFull(host.conn, head[:])
+		_, err := pb.ReadFrom(host.conn)
 		if err != nil {
 			host.emitReadErr(err)
 			return
 		}
 
-		if head[0] == CmdAlive {
+		if debug {
+			log.Printf("%v %v\n", pb.head, pb.head.CmdStr())
+		}
+
+		if pb.head.Cmd() == CmdAlive {
 			host.readedAlivePackCount++
 			continue
 		}
 
-		if head.IsACK() {
+		if pb.head.IsACK() {
 			host.readedACKPackCount++
 			//
 			// 接收到对端应答
 			//
-			switch head.Cmd() {
+			switch pb.head.Cmd() {
 
 			case CmdOpenStream:
-				log.Printf("open ack %v", head)
-				it, found := host.localBinds.Load(head.DistPort())
+				log.Printf("%v open ack", pb.head)
+				it, found := host.localBinds.Load(pb.head.DistPort())
 				if found {
 					stream := it.(*Stream)
 					stream.SetAddr(
 						stream.localIP,
 						stream.localPort,
-						head.SrcIP(), // 如果是通过domain进行创建的，这个字段需要更新
+						pb.head.SrcIP(), // 如果是通过domain进行创建的，这个字段需要更新
 						stream.remotePort,
 					)
 					host.attach(stream)
 					stream.chanOpenACK <- struct{}{}
 				} else {
-					log.Printf("ignored open packet %v\n", head)
+					log.Printf("%v open ack ignored\n", pb.head)
 				}
 
 			case CmdCloseStream:
 
 			case CmdPushStreamData:
 
-				id := head.StreamDataID()
+				id := pb.head.StreamDataID()
 				it, found := host.streams.Load(id)
 				if found {
-					it.(*Stream).increasePoolSize(head.ACKInfo())
-				} else if debug {
-					log.Printf("ignored open packet %v\n", head)
+					it.(*Stream).increasePoolSize(pb.head.ACKInfo())
+				} else {
+					log.Printf("%v data ack ignored\n", pb.head)
 				}
 			}
 
@@ -214,27 +218,29 @@ func (host *Host) readLoop() {
 			//
 			// 接收到指令请求
 			//
-			switch head.Cmd() {
+			switch pb.head.Cmd() {
 
 			case CmdOpenStream:
-				log.Printf("open %v", head)
-				it, found := host.localBinds.Load(head.DistPort())
+				if debug {
+					log.Printf("%v open", pb.head)
+				}
+				it, found := host.localBinds.Load(pb.head.DistPort())
 				if !found {
-					log.Printf("%v port=%v not available. %v\n", head.CmdStr(), head.DistPort(), head)
+					log.Printf("%v %v port=%v not available.\n", pb.head, pb.head.CmdStr(), pb.head.DistPort())
 					continue
 				}
 				stream := NewStream(host, false)
-				stream.SetAddr(head.DistIP(), head.DistPort(), head.SrcIP(), head.SrcPort())
+				stream.SetAddr(pb.head.DistIP(), pb.head.DistPort(), pb.head.SrcIP(), pb.head.SrcPort())
 
 				_, found = host.streams.LoadOrStore(stream.dataID, stream)
 				if found {
-					log.Printf("%v stream exists. %v\n", head.CmdStr(), head)
+					log.Printf("%v %v exists\n", pb.head, stream.desc)
 					continue
 				}
 
 				atomic.AddInt64(&host.streamsLen, 1)
 				if debug {
-					log.Printf("stream opened %v dataID=%x alive=%v\n", head, head.StreamDataID(), host.streamsLen)
+					log.Printf("%v %v opened\n", pb.head, stream.desc)
 				}
 
 				it.(*Listener).pushStream(stream)
@@ -245,39 +251,26 @@ func (host *Host) readLoop() {
 				// 收到Close消息，可以确定对端不会再有数据包通过这个stream发过来
 				// 所以可以对StreamID进行清理操作
 				//
-				it, found := host.streams.LoadAndDelete(head.StreamDataID())
+				it, found := host.streams.LoadAndDelete(pb.head.StreamDataID())
 				if found {
-					atomic.AddInt64(&host.streamsLen, -1)
+					go func(stream *Stream) {
+						atomic.AddInt64(&host.streamsLen, -1)
+						// 关闭读取管道，收到对端的close指令后，不会再有新数据过来
+						stream.readPipe.Close()
+						stream.Close()
 
-					// 关闭读取管道，收到对端的close指令后，不会再有新数据过来
-					stream := it.(*Stream)
-					stream.readPipe.Close()
-
-					stream.Close()
-					if debug {
-						log.Printf("stream closed dataID=%v alive=%v\n",
-							head.StreamDataID(), host.streamsLen)
-					}
+						if debug {
+							log.Printf("%v %v closed\n", pb.head, stream.desc)
+						}
+					}(it.(*Stream))
 				}
 
 			case CmdPushStreamData:
-
-				payload := make([]byte, head.PayloadSize())
-				rn, err := io.ReadFull(host.conn, payload)
-				if rn > 0 {
-					it, found := host.streams.Load(head.StreamDataID())
-					if found {
-						it.(*Stream).readPipe.append(payload[:rn])
-					} else {
-						log.Printf("[src=%v][dist=%v] ignored cmd %v dataID=%x\n",
-							head.SrcPort(), head.DistPort(), head, head.StreamDataID())
-					}
-				}
-				if err != nil {
-					if err != io.EOF {
-						host.emitReadErr(err)
-					}
-					return
+				it, found := host.streams.Load(pb.head.StreamDataID())
+				if found {
+					it.(*Stream).readPipe.append(pb.payload)
+				} else {
+					log.Printf("%v data ignored\n", pb.head)
 				}
 			}
 		}
@@ -361,39 +354,36 @@ func (host *Host) writePacket(
 	cmd byte,
 	srcIP, distIP HostIP,
 	srcPort, distPort uint16,
-	payload []byte,
+	ackInfo uint16, payload []byte,
 ) error {
+	isCmd := (cmd&CmdACKFlag == 0)
+
 	p := &Packet{
 		cmd:      cmd,
 		srcHost:  srcIP,
 		distHost: distIP,
 		srcPort:  srcPort,
 		distPort: distPort,
-		payload:  payload,
-		done:     make(chan struct{}),
-	}
-
-	host.chanWrite <- p
-
-	select {
-	case <-p.done:
-		return nil
-	case <-time.After(time.Second * 15):
-		return errors.New("timeout")
-	}
-}
-func (host *Host) writePacketACK(cmd byte, srcHost, distHost HostIP, srcPort, distPort uint16, ackInfo uint16) {
-	p := &Packet{
-		cmd:      CmdACKFlag | cmd,
-		srcHost:  srcHost,
-		distHost: distHost,
-		srcPort:  srcPort,
-		distPort: distPort,
-		payload:  nil,
 		ackInfo:  ackInfo,
+		payload:  payload,
+	}
+
+	if isCmd {
+		p.done = make(chan struct{})
 	}
 
 	host.chanWrite <- p
+
+	if isCmd {
+		select {
+		case <-p.done:
+			return nil
+		case <-time.After(time.Second * 5):
+			return errors.New("timeout")
+		}
+	}
+
+	return nil
 }
 
 func (host *Host) writeBuffer(bufs ...[]byte) error {
