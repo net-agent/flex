@@ -101,8 +101,8 @@ func (stream *Stream) Write(src []byte) (int, error) {
 			select {
 			case <-stream.writePoolIncEvents:
 			case <-time.After(time.Second * 3):
-				log.Printf("[local=%v] write pool dry pool=%v w=%v ack=%v\n",
-					stream.localPort, stream.writePoolSize,
+				log.Printf("%v write pool dry pool=%v written=%v ack=%v\n",
+					stream.desc, stream.writePoolSize,
 					stream.writenCount, stream.writenACKCount)
 				dryCount++
 				if dryCount > 5 {
@@ -197,15 +197,8 @@ func (stream *Stream) readed(size uint16) {
 
 func (stream *Stream) increasePoolSize(size uint16) {
 	atomic.AddInt64(&stream.writenACKCount, int64(size))
-	n := atomic.AddInt32(&stream.writePoolSize, int32(size))
-	if debug || n > 1024 {
-		// 	log.Printf("[local=%v] writePoolSize=%v\n", stream.localPort, n)
-	}
-	// if len(stream.writePoolIncEvents) <= 0 {
+	atomic.AddInt32(&stream.writePoolSize, int32(size))
 	stream.writePoolIncEvents <- struct{}{}
-	// } else {
-	// 	log.Println("ignore inc event")
-	// }
 }
 
 // close 主动关闭的意思：告诉对端，我不会再发送任何数据

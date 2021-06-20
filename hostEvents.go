@@ -58,9 +58,7 @@ func (host *Host) onCloseStream(dataID uint64) {
 		stream.closed()
 		host.availablePorts <- stream.localPort
 
-		if debug {
-			log.Printf("%v closed\n", stream.desc)
-		}
+		log.Printf("%v closed. active streams %v\n", stream.desc, host.streamsLen)
 	}
 }
 
@@ -91,7 +89,7 @@ func (host *Host) onPushDataACK(dataID uint64, ackInfo uint16) {
 
 	it, found := host.streams.Load(dataID)
 	if !found {
-		log.Printf(" data ack ignored\n")
+		log.Printf("data ack ignored\n")
 		return
 	}
 

@@ -129,7 +129,7 @@ func (switcher *Switcher) hostReadLoop(host *Host) {
 			continue
 		}
 
-		log.Printf("%v %v\n", pb.head.CmdStr(), pb.head)
+		// log.Printf("%v %v\n", pb.head.CmdStr(), pb.head)
 
 		switch pb.head[0] {
 		case CmdOpenStreamDomain:

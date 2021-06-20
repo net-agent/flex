@@ -247,11 +247,6 @@ func (host *Host) writeLoop() {
 				host.writtenCmdPackCount++
 			}
 
-			// if debug {
-			// 	log.Printf("[writeloop]%v src=%v:%v dist=%v:%v size=%v\n",
-			// 		packet.CmdStr(), packet.srcHost, packet.srcPort, packet.distHost, packet.distPort, len(packet.payload))
-			// }
-
 		case <-time.After(time.Minute * 3):
 			//
 			// 如果三分钟都没有传输数据的请求，则会触发一次心跳包，确保通道不会被关闭
