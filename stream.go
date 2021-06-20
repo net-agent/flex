@@ -93,13 +93,21 @@ func (stream *Stream) Write(src []byte) (int, error) {
 		// 判断对端是否还有足够的空间接收数据
 		// 如果发出去的数据迟迟没有收到ACK，则代表对端的数据消化能力较低，需要暂停发送
 
+		dryCount := 0
 		for atomic.LoadInt32(&stream.writePoolSize) <= 0 {
+			if stream.writeClosed {
+				return start, errors.New("stream closed")
+			}
 			select {
 			case <-stream.writePoolIncEvents:
 			case <-time.After(time.Second * 3):
 				log.Printf("[local=%v] write pool dry pool=%v w=%v ack=%v\n",
 					stream.localPort, stream.writePoolSize,
 					stream.writenCount, stream.writenACKCount)
+				dryCount++
+				if dryCount > 5 {
+					return start, errors.New("write pool dry")
+				}
 			}
 		}
 
