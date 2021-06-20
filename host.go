@@ -187,20 +187,26 @@ func (host *Host) readLoop() {
 				log.Printf("%v open ack", pb.head)
 				it, found := host.localBinds.Load(pb.head.DistPort())
 				if found {
-					stream := it.(*Stream)
-					stream.SetAddr(
-						stream.localIP,
-						stream.localPort,
-						pb.head.SrcIP(), // 如果是通过domain进行创建的，这个字段需要更新
-						stream.remotePort,
-					)
-					host.attach(stream)
-					stream.chanOpenACK <- struct{}{}
+					go func(stream *Stream) {
+						stream.SetAddr(stream.localIP, stream.localPort, pb.head.SrcIP(), stream.remotePort)
+						host.attach(stream)
+						stream.chanOpenACK <- struct{}{}
+					}(it.(*Stream))
 				} else {
 					log.Printf("%v open ack ignored\n", pb.head)
 				}
 
 			case CmdCloseStream:
+
+				id := pb.head.StreamDataID()
+				it, found := host.streams.LoadAndDelete(id)
+				if found {
+					stream := it.(*Stream)
+					stream.chanCloseACK <- struct{}{}
+					host.availablePorts <- stream.localPort
+				} else {
+					log.Printf("%v data ack ignored\n", pb.head)
+				}
 
 			case CmdPushStreamData:
 
@@ -221,30 +227,12 @@ func (host *Host) readLoop() {
 			switch pb.head.Cmd() {
 
 			case CmdOpenStream:
-				if debug {
-					log.Printf("%v open", pb.head)
-				}
 				it, found := host.localBinds.Load(pb.head.DistPort())
-				if !found {
-					log.Printf("%v %v port=%v not available.\n", pb.head, pb.head.CmdStr(), pb.head.DistPort())
-					continue
-				}
-				stream := NewStream(host, false)
-				stream.SetAddr(pb.head.DistIP(), pb.head.DistPort(), pb.head.SrcIP(), pb.head.SrcPort())
-
-				_, found = host.streams.LoadOrStore(stream.dataID, stream)
 				if found {
-					log.Printf("%v %v exists\n", pb.head, stream.desc)
-					continue
+					go host.onOpenStream(it.(*Listener), pb.head.DistIP(), pb.head.DistPort(), pb.head.SrcIP(), pb.head.SrcPort())
+				} else {
+					log.Printf("%v %v port=%v not available.\n", pb.head, pb.head.CmdStr(), pb.head.DistPort())
 				}
-
-				atomic.AddInt64(&host.streamsLen, 1)
-				if debug {
-					log.Printf("%v %v opened\n", pb.head, stream.desc)
-				}
-
-				it.(*Listener).pushStream(stream)
-				stream.opened()
 
 			case CmdCloseStream:
 				//
@@ -253,11 +241,10 @@ func (host *Host) readLoop() {
 				//
 				it, found := host.streams.LoadAndDelete(pb.head.StreamDataID())
 				if found {
+					atomic.AddInt64(&host.streamsLen, -1)
 					go func(stream *Stream) {
-						atomic.AddInt64(&host.streamsLen, -1)
-						// 关闭读取管道，收到对端的close指令后，不会再有新数据过来
-						stream.readPipe.Close()
-						stream.Close()
+						stream.closed()
+						host.availablePorts <- stream.localPort
 
 						if debug {
 							log.Printf("%v %v closed\n", pb.head, stream.desc)
@@ -406,4 +393,23 @@ func (host *Host) writeBuffer(bufs ...[]byte) error {
 		}
 	}
 	return nil
+}
+
+func (host *Host) onOpenStream(l *Listener, localIP HostIP, localPort uint16, remoteIP HostIP, remotePort uint16) {
+	stream := NewStream(host, false)
+	stream.SetAddr(localIP, localPort, remoteIP, remotePort)
+
+	_, found := host.streams.LoadOrStore(stream.dataID, stream)
+	if found {
+		log.Printf("%v exists\n", stream.desc)
+		return
+	}
+
+	atomic.AddInt64(&host.streamsLen, 1)
+	if debug {
+		log.Printf("%v opened\n", stream.desc)
+	}
+
+	l.pushStream(stream)
+	stream.opened()
 }

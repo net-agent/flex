@@ -22,7 +22,8 @@ type Stream struct {
 	dataID     uint64
 	desc       string
 
-	chanOpenACK chan struct{}
+	chanOpenACK  chan struct{}
+	chanCloseACK chan struct{}
 
 	readPipe *bytesPipe
 
@@ -43,7 +44,8 @@ func NewStream(host *Host, isClient bool) *Stream {
 		host:               host,
 		localIP:            ip,
 		isClient:           isClient,
-		chanOpenACK:        make(chan struct{}),
+		chanOpenACK:        make(chan struct{}, 10),
+		chanCloseACK:       make(chan struct{}, 10),
 		readPipe:           NewBytesPipe(),
 		writeClosed:        false,
 		writePoolSize:      1024 * 64, // 16字节缓冲
@@ -202,14 +204,40 @@ func (stream *Stream) increasePoolSize(size uint16) {
 // 对端可以从host.streams中解除绑定
 //
 func (stream *Stream) close() error {
+	log.Println("call stream close")
 	stream.writeLocker.Lock()
-	defer stream.writeLocker.Unlock()
+
 	if stream.writeClosed {
+		stream.writeLocker.Unlock()
 		return errors.New("close a closed stream")
 	}
-	stream.writeClosed = true
 
-	return stream.writePacket(CmdCloseStream, 0, nil)
+	err := stream.writePacket(CmdCloseStream, 0, nil)
+
+	if err != nil {
+		stream.writeLocker.Unlock()
+		return err
+	}
+	stream.writeClosed = true
+	stream.writeLocker.Unlock()
+
+	select {
+	case <-stream.chanCloseACK:
+		return stream.readPipe.Close()
+	case <-time.After(time.Second * 10):
+		return errors.New("wait close ack timeout")
+	}
+}
+
+func (stream *Stream) closed() {
+	log.Println("call stream closed")
+	// 关闭读取管道，收到对端的close指令后，不会再有新数据过来
+	stream.readPipe.Close()
+
+	stream.writeLocker.Lock()
+	stream.writeClosed = true
+	stream.writePacket(CmdACKFlag|CmdCloseStream, 0, nil)
+	stream.writeLocker.Unlock()
 }
 
 func (stream *Stream) LocalAddr() net.Addr {
