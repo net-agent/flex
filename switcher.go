@@ -5,6 +5,8 @@ import (
 	"log"
 	"net"
 	"sync"
+
+	"github.com/net-agent/cipherconn"
 )
 
 type switchContext struct {
@@ -26,6 +28,7 @@ func (ctx *switchContext) detach(sw *Switcher) {
 
 // Switcher packet交换器，根据ip、port进行路由和分发
 type Switcher struct {
+	password   string
 	ctxs       sync.Map // map[HostIP]*switchContext
 	domainCtxs sync.Map // map[string]*switchContext
 
@@ -37,8 +40,9 @@ type Switcher struct {
 
 }
 
-func NewSwitcher(staticIP map[string]HostIP) *Switcher {
+func NewSwitcher(staticIP map[string]HostIP, password string) *Switcher {
 	switcher := &Switcher{
+		password:     password,
 		availableIP:  make(chan HostIP, 0xFFFF),
 		chanPushData: make(chan *PacketBufs, 2048), // 缓冲区需要足够长
 	}
@@ -101,6 +105,14 @@ func (switcher *Switcher) Run(addr string) {
 }
 
 func (switcher *Switcher) Access(conn net.Conn) {
+	if switcher.password != "" {
+		cc, err := cipherconn.New(conn, switcher.password)
+		if err != nil {
+			conn.Close()
+			return
+		}
+		conn = cc
+	}
 	ctx, err := switcher.UpgradeHost(conn)
 	if err != nil {
 		conn.Close()
