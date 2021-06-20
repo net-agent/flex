@@ -11,6 +11,9 @@ import (
 	"time"
 )
 
+const defaultPoolBufferSize = 1024 * 1024 // 1MB的流控池大小
+const defaultMaxTransUnitSize = 1024 * 32 // 32KB的最大传输单元（最大64KB）
+
 type Stream struct {
 	host     *Host
 	isClient bool // 主动发起连接的一方
@@ -33,6 +36,7 @@ type Stream struct {
 	writePoolIncEvents chan struct{}
 	writenCount        int64
 	writenACKCount     int64
+	maxTransUnitSize   int
 }
 
 func NewStream(host *Host, isClient bool) *Stream {
@@ -48,8 +52,9 @@ func NewStream(host *Host, isClient bool) *Stream {
 		chanCloseACK:       make(chan struct{}, 10),
 		readPipe:           NewBytesPipe(),
 		writeClosed:        false,
-		writePoolSize:      1024 * 64, // 16字节缓冲
+		writePoolSize:      defaultPoolBufferSize,
 		writePoolIncEvents: make(chan struct{}, 128),
+		maxTransUnitSize:   defaultMaxTransUnitSize,
 	}
 }
 
@@ -85,7 +90,6 @@ func (stream *Stream) Read(dist []byte) (int, error) {
 }
 
 func (stream *Stream) Write(src []byte) (int, error) {
-	size := 1024 * 16
 	start := 0
 	end := 0
 	for start < len(src) {
@@ -112,8 +116,8 @@ func (stream *Stream) Write(src []byte) (int, error) {
 		}
 
 		sliceSize := int(atomic.LoadInt32(&stream.writePoolSize))
-		if sliceSize > size {
-			sliceSize = size
+		if sliceSize > stream.maxTransUnitSize {
+			sliceSize = stream.maxTransUnitSize
 		}
 		end = start + sliceSize
 		if end > len(src) {
