@@ -167,10 +167,6 @@ func (host *Host) readLoop() {
 			return
 		}
 
-		if debug {
-			log.Printf("%v %v\n", pb.head, pb.head.CmdStr())
-		}
-
 		if pb.head.Cmd() == CmdAlive {
 			host.readedAlivePackCount++
 			continue
@@ -178,88 +174,30 @@ func (host *Host) readLoop() {
 
 		if pb.head.IsACK() {
 			host.readedACKPackCount++
-			//
-			// 接收到对端应答
-			//
 			switch pb.head.Cmd() {
-
 			case CmdOpenStream:
-				log.Printf("%v open ack", pb.head)
-				it, found := host.localBinds.Load(pb.head.DistPort())
-				if found {
-					go func(stream *Stream) {
-						stream.SetAddr(stream.localIP, stream.localPort, pb.head.SrcIP(), stream.remotePort)
-						host.attach(stream)
-						stream.chanOpenACK <- struct{}{}
-					}(it.(*Stream))
-				} else {
-					log.Printf("%v open ack ignored\n", pb.head)
-				}
-
+				go host.onOpenStreamACK(
+					pb.head.SrcIP(), pb.head.SrcPort(),
+					pb.head.DistIP(), pb.head.DistPort())
 			case CmdCloseStream:
-
-				id := pb.head.StreamDataID()
-				it, found := host.streams.LoadAndDelete(id)
-				if found {
-					stream := it.(*Stream)
-					stream.chanCloseACK <- struct{}{}
-					host.availablePorts <- stream.localPort
-				} else {
-					log.Printf("%v data ack ignored\n", pb.head)
-				}
-
+				go host.onCloseStreamACK(pb.head.StreamDataID())
 			case CmdPushStreamData:
-
-				id := pb.head.StreamDataID()
-				it, found := host.streams.Load(id)
-				if found {
-					it.(*Stream).increasePoolSize(pb.head.ACKInfo())
-				} else {
-					log.Printf("%v data ack ignored\n", pb.head)
-				}
+				go host.onPushDataACK(pb.head.StreamDataID(), pb.head.ACKInfo())
 			}
+			continue
+		}
 
-		} else {
-			host.readedCmdPackCount++
-			//
-			// 接收到指令请求
-			//
-			switch pb.head.Cmd() {
-
-			case CmdOpenStream:
-				it, found := host.localBinds.Load(pb.head.DistPort())
-				if found {
-					go host.onOpenStream(it.(*Listener), pb.head.DistIP(), pb.head.DistPort(), pb.head.SrcIP(), pb.head.SrcPort())
-				} else {
-					log.Printf("%v %v port=%v not available.\n", pb.head, pb.head.CmdStr(), pb.head.DistPort())
-				}
-
-			case CmdCloseStream:
-				//
-				// 收到Close消息，可以确定对端不会再有数据包通过这个stream发过来
-				// 所以可以对StreamID进行清理操作
-				//
-				it, found := host.streams.LoadAndDelete(pb.head.StreamDataID())
-				if found {
-					atomic.AddInt64(&host.streamsLen, -1)
-					go func(stream *Stream) {
-						stream.closed()
-						host.availablePorts <- stream.localPort
-
-						if debug {
-							log.Printf("%v %v closed\n", pb.head, stream.desc)
-						}
-					}(it.(*Stream))
-				}
-
-			case CmdPushStreamData:
-				it, found := host.streams.Load(pb.head.StreamDataID())
-				if found {
-					it.(*Stream).readPipe.append(pb.payload)
-				} else {
-					log.Printf("%v data ignored\n", pb.head)
-				}
-			}
+		host.readedCmdPackCount++
+		switch pb.head.Cmd() {
+		case CmdOpenStream:
+			go host.onOpenStream(
+				pb.head.SrcIP(), pb.head.SrcPort(),
+				pb.head.DistIP(), pb.head.DistPort())
+		case CmdCloseStream:
+			go host.onCloseStream(pb.head.StreamDataID())
+		case CmdPushStreamData:
+			// 为了保证数据顺序，此处不能使用goroutine
+			host.onPushData(pb.head.StreamDataID(), pb.payload)
 		}
 	}
 }
@@ -393,23 +331,4 @@ func (host *Host) writeBuffer(bufs ...[]byte) error {
 		}
 	}
 	return nil
-}
-
-func (host *Host) onOpenStream(l *Listener, localIP HostIP, localPort uint16, remoteIP HostIP, remotePort uint16) {
-	stream := NewStream(host, false)
-	stream.SetAddr(localIP, localPort, remoteIP, remotePort)
-
-	_, found := host.streams.LoadOrStore(stream.dataID, stream)
-	if found {
-		log.Printf("%v exists\n", stream.desc)
-		return
-	}
-
-	atomic.AddInt64(&host.streamsLen, 1)
-	if debug {
-		log.Printf("%v opened\n", stream.desc)
-	}
-
-	l.pushStream(stream)
-	stream.opened()
 }

@@ -30,16 +30,17 @@ type Switcher struct {
 	domainCtxs sync.Map // map[string]*switchContext
 
 	// 分发由host传上来的数据包
-	chanPacketBufferRoute chan []byte
-	availableIP           chan HostIP
-	macIPBinds            sync.Map // map[mac string]HostIP
-	ipMacBinds            sync.Map // map[HostIP]string
+	chanPushData chan *PacketBufs // 用于保证Push的顺序和性能，同时避免writePool死锁
+	availableIP  chan HostIP
+	macIPBinds   sync.Map // map[mac string]HostIP
+	ipMacBinds   sync.Map // map[HostIP]string
+
 }
 
 func NewSwitcher(staticIP map[string]HostIP) *Switcher {
 	switcher := &Switcher{
-		chanPacketBufferRoute: make(chan []byte, 1024),
-		availableIP:           make(chan HostIP, 0xFFFF),
+		availableIP:  make(chan HostIP, 0xFFFF),
+		chanPushData: make(chan *PacketBufs, 2048), // 缓冲区需要足够长
 	}
 
 	for k, v := range staticIP {
@@ -55,6 +56,7 @@ func NewSwitcher(staticIP map[string]HostIP) *Switcher {
 		}
 	}
 
+	go switcher.pushDataLoop()
 	return switcher
 }
 
@@ -129,35 +131,49 @@ func (switcher *Switcher) hostReadLoop(host *Host) {
 
 		log.Printf("%v %v\n", pb.head.CmdStr(), pb.head)
 
-		// 通过域名来创建Stream，需要对报文进行转换
-		if pb.head.Cmd() == CmdOpenStreamDomain {
-			go func(pb *PacketBufs) {
-				domain := string(pb.payload)
-				it, found := switcher.domainCtxs.Load(domain)
-				if !found {
-					log.Printf("resolve domain failed: '%v' not found", domain)
-					return
-				}
-				ctx := it.(*switchContext)
-				pb.head[0] = CmdOpenStream
-				pb.SetDistIP(ctx.ip)
-				pb.SetPayload(nil)
-				ctx.host.writeBuffer(pb.head[:], pb.payload)
-			}(pb)
-			continue
+		switch pb.head[0] {
+		case CmdOpenStreamDomain:
+			go switcher.switchOpenDomain(pb)
+		case CmdPushStreamData:
+			switcher.chanPushData <- pb
+		default:
+			go switcher.switchData(pb)
 		}
+	}
+}
 
-		// write pb to dist hosts
-		it, found := switcher.ctxs.Load(pb.head.DistIP())
-		if !found {
-			log.Printf("%v%v -> %v discard\n", pb.head.CmdStr(), pb.head.Src(), pb.head.Dist())
-			continue
-		}
+func (switcher *Switcher) switchOpenDomain(pb *PacketBufs) {
+	domain := string(pb.payload)
+	it, found := switcher.domainCtxs.Load(domain)
+	if !found {
+		log.Printf("resolve domain failed: '%v' not found", domain)
+		return
+	}
+	ctx := it.(*switchContext)
+	pb.head[0] = CmdOpenStream
+	pb.SetDistIP(ctx.ip)
+	pb.SetPayload(nil)
+	ctx.host.writeBuffer(pb.head[:], pb.payload)
+}
 
-		err = it.(*switchContext).host.writeBuffer(pb.head[:], pb.payload)
-		if err != nil {
-			log.Printf("%v%v -> %v write failed. %v\n",
-				pb.head.CmdStr(), pb.head.Src(), pb.head.Dist(), err)
-		}
+func (switcher *Switcher) pushDataLoop() {
+
+	for pb := range switcher.chanPushData {
+		switcher.switchData(pb)
+	}
+}
+
+func (switcher *Switcher) switchData(pb *PacketBufs) {
+	// write pb to dist hosts
+	it, found := switcher.ctxs.Load(pb.head.DistIP())
+	if !found {
+		log.Printf("%v%v -> %v discard\n", pb.head.CmdStr(), pb.head.Src(), pb.head.Dist())
+		return
+	}
+
+	err := it.(*switchContext).host.writeBuffer(pb.head[:], pb.payload)
+	if err != nil {
+		log.Printf("%v%v -> %v write failed. %v\n",
+			pb.head.CmdStr(), pb.head.Src(), pb.head.Dist(), err)
 	}
 }
