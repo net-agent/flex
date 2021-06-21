@@ -3,30 +3,16 @@ package flex
 import (
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"net"
 	"strconv"
 	"sync"
 	"sync/atomic"
-	"time"
 )
 
 type HostIP = uint16
 type Host struct {
-	conn net.Conn
-	ip   HostIP
-
-	chanRead  chan *Packet
-	chanWrite chan *Packet
-
-	writeLocker           sync.Mutex
-	writtenCmdPackCount   uint32
-	writtenACKPackCount   uint32
-	writtenAlivePackCount uint32
-	readedCmdPackCount    uint32
-	readedACKPackCount    uint32
-	readedAlivePackCount  uint32
+	pc *PacketConn
 
 	// streams 用于路由对端发过来的数据
 	// streamID -> stream
@@ -35,36 +21,47 @@ type Host struct {
 
 	// localBinds 用于路由对端发过来的指令？
 	// localPort -> stream
-	localBinds sync.Map // map[uint16]*Listener
-
+	localBinds     sync.Map // map[uint16]*Listener
 	availablePorts chan uint16
+	ip             HostIP
 
 	switcher *Switcher
 }
 
-func NewHost(switcher *Switcher, conn net.Conn, ip HostIP) *Host {
-	h := &Host{
-		conn:           conn,
-		ip:             ip,
-		chanRead:       make(chan *Packet, 128),
-		chanWrite:      make(chan *Packet, 128),
-		availablePorts: make(chan uint16, 65536),
-		switcher:       switcher,
+// NewHost agent side host
+func NewHost(pc *PacketConn, ip HostIP) *Host {
+	host := &Host{
+		pc: pc,
+		ip: ip,
 	}
+	host.init()
+	return host
+}
 
+// NewSwitcherHost server side host
+func NewSwitcherHost(switcher *Switcher, pc *PacketConn) *Host {
+	host := &Host{
+		pc:       pc,
+		ip:       0xffff,
+		switcher: switcher,
+	}
+	host.init()
+	return host
+}
+
+func (host *Host) init() {
+	host.availablePorts = make(chan uint16, 65535)
 	for i := 1000; i < 65536; i++ {
-		h.availablePorts <- uint16(i)
+		host.availablePorts <- uint16(i)
 	}
 
-	if switcher != nil {
-		go switcher.hostReadLoop(h)
+	if host.switcher != nil {
+		go host.switcher.hostReadLoop(host)
 	} else {
-		go h.readLoop()
+		go host.readLoop()
 	}
 
-	go h.writeLoop()
-
-	return h
+	go host.pc.WriteLoop()
 }
 
 // Dial 请求对端创建连接
@@ -161,19 +158,17 @@ func (host *Host) readLoop() {
 	var pb PacketBufs
 
 	for {
-		_, err := pb.ReadFrom(host.conn)
+		err := host.pc.ReadPacket(&pb)
 		if err != nil {
 			host.emitReadErr(err)
 			return
 		}
 
 		if pb.head.Cmd() == CmdAlive {
-			host.readedAlivePackCount++
 			continue
 		}
 
 		if pb.head.IsACK() {
-			host.readedACKPackCount++
 			switch pb.head.Cmd() {
 			case CmdOpenStream:
 				go host.onOpenStreamACK(
@@ -187,7 +182,6 @@ func (host *Host) readLoop() {
 			continue
 		}
 
-		host.readedCmdPackCount++
 		switch pb.head.Cmd() {
 		case CmdOpenStream:
 			go host.onOpenStream(
@@ -202,71 +196,7 @@ func (host *Host) readLoop() {
 	}
 }
 
-//
-// writeLoop
-// 不断向连接中灌入数据
-//
-func (host *Host) writeLoop() {
-	aliveBuf := make([]byte, packetHeaderSize)
-	_, err := (&Packet{cmd: CmdAlive}).Read(aliveBuf)
-	if err != nil {
-		host.emitWriteErr(err)
-		return
-	}
-
-	for {
-		select {
-		case packet, ok := <-host.chanWrite:
-			if !ok {
-				host.emitWriteErr(io.EOF)
-				return
-			}
-
-			// todo: 优化内存池
-			payloadSize := len(packet.payload)
-			buf := make([]byte, packetHeaderSize+payloadSize)
-			_, err := packet.Read(buf)
-			if err != nil {
-				host.emitReadErr(err)
-				return
-			}
-			err = host.writeBuffer(buf)
-			// recycle buf here
-			if err != nil {
-				host.emitWriteErr(err)
-				return
-			}
-
-			if packet.done != nil {
-				packet.done <- struct{}{}
-				close(packet.done)
-			}
-			if packet.cmd&0x01 > 0 {
-				host.writtenACKPackCount++
-			} else {
-				host.writtenCmdPackCount++
-			}
-
-		case <-time.After(time.Minute * 3):
-			//
-			// 如果三分钟都没有传输数据的请求，则会触发一次心跳包，确保通道不会被关闭
-			//
-			// 直接发送提前构造好的数据包
-			//（此处对性能影响不大，需要发送心跳包的情况必然是数据传输压力小的时刻）
-			err := host.writeBuffer(aliveBuf)
-			if err != nil {
-				host.emitWriteErr(err)
-				return
-			}
-			host.writtenAlivePackCount++
-		}
-	}
-}
-
 func (host *Host) emitReadErr(err error) {
-	fmt.Println("[error]", err)
-}
-func (host *Host) emitWriteErr(err error) {
 	fmt.Println("[error]", err)
 }
 
@@ -277,53 +207,21 @@ func (host *Host) writePacket(
 	ackInfo uint16, payload []byte,
 ) error {
 	isCmd := (cmd&CmdACKFlag == 0)
-
-	p := &Packet{
-		cmd:      cmd,
-		srcHost:  srcIP,
-		distHost: distIP,
-		srcPort:  srcPort,
-		distPort: distPort,
-		ackInfo:  ackInfo,
-		payload:  payload,
-	}
-
+	pb := &PacketBufs{}
+	pb.SetBase(cmd, srcIP, srcPort, distIP, distPort)
 	if isCmd {
-		p.done = make(chan struct{})
+		pb.SetPayload(payload)
+	} else {
+		pb.SetACKInfo(ackInfo)
 	}
 
-	host.chanWrite <- p
-
-	if isCmd {
-		select {
-		case <-p.done:
-			return nil
-		case <-time.After(time.Second * 5):
-			return errors.New("timeout")
-		}
-	}
-
-	return nil
+	return host.pc.NonblockWritePacket(pb, isCmd)
 }
 
-func (host *Host) writeBuffer(bufs ...[]byte) error {
-	host.writeLocker.Lock()
-	defer host.writeLocker.Unlock()
+func (host *Host) LocalAddr() net.Addr {
+	return host.pc.raw.LocalAddr()
+}
 
-	for _, buf := range bufs {
-		wn := int(0)
-		for {
-			n, err := host.conn.Write(buf)
-			wn += n
-			if err != nil {
-				return err
-			}
-			if wn < len(buf) {
-				buf = buf[wn:]
-			} else {
-				break
-			}
-		}
-	}
-	return nil
+func (host *Host) RemoteAddr() net.Addr {
+	return host.pc.raw.RemoteAddr()
 }

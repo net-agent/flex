@@ -131,7 +131,7 @@ func (switcher *Switcher) Access(conn net.Conn) {
 func (switcher *Switcher) hostReadLoop(host *Host) {
 	for {
 		pb := NewPacketBufs()
-		_, err := pb.ReadFrom(host.conn)
+		err := host.pc.ReadPacket(pb)
 		if err != nil {
 			host.emitReadErr(err)
 			return
@@ -165,7 +165,7 @@ func (switcher *Switcher) switchOpenDomain(pb *PacketBufs) {
 	pb.head[0] = CmdOpenStream
 	pb.SetDistIP(ctx.ip)
 	pb.SetPayload(nil)
-	ctx.host.writeBuffer(pb.head[:], pb.payload)
+	ctx.host.pc.WritePacket(pb)
 }
 
 func (switcher *Switcher) pushDataLoop() {
@@ -183,7 +183,7 @@ func (switcher *Switcher) switchData(pb *PacketBufs) {
 		return
 	}
 
-	err := it.(*switchContext).host.writeBuffer(pb.head[:], pb.payload)
+	err := it.(*switchContext).host.pc.WritePacket(pb)
 	if err != nil {
 		log.Printf("%v%v -> %v write failed. %v\n",
 			pb.head.CmdStr(), pb.head.Src(), pb.head.Dist(), err)

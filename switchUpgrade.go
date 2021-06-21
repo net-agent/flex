@@ -49,7 +49,7 @@ func UpgradeToHost(conn net.Conn, req *HostRequest) (*Host, error) {
 
 	ip := binary.BigEndian.Uint16(buf[1:3])
 
-	return NewHost(nil, conn, ip), nil
+	return NewHost(NewPacketConn(conn), ip), nil
 }
 
 // UpgradeHost 把连接升级为Host，并返回对端HostIP
@@ -99,7 +99,7 @@ func (switcher *Switcher) UpgradeHost(conn net.Conn) (*switchContext, error) {
 	}
 
 	return &switchContext{
-		host:   NewHost(switcher, conn, 0xffff),
+		host:   NewSwitcherHost(switcher, NewPacketConn(conn)),
 		ip:     ip,
 		domain: req.Domain,
 		mac:    req.Mac,

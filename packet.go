@@ -2,7 +2,6 @@ package flex
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 )
@@ -15,49 +14,6 @@ const (
 	CmdAlive
 	CmdOpenStreamDomain // distIP不是数字IP，而是域名。在switcher处进行报文转换
 )
-
-type Packet struct {
-	cmd      byte
-	srcHost  HostIP
-	distHost HostIP
-	srcPort  uint16
-	distPort uint16
-	payload  []byte
-	ackInfo  uint16
-	done     chan struct{}
-}
-
-// Read 把packet的数据写入缓冲区中，缓冲区过大或过小都会失败
-func (p *Packet) Read(buf []byte) (int, error) {
-	payloadSize := len(p.payload)
-	if payloadSize > 0xFFFF {
-		return 0, errors.New("payload is too large")
-	}
-	if len(buf) < packetHeaderSize+payloadSize {
-		return 0, errors.New("buf is too small")
-	}
-
-	buf[0] = p.cmd
-	binary.BigEndian.PutUint16(buf[1:3], p.srcHost)
-	binary.BigEndian.PutUint16(buf[3:5], p.distHost)
-	binary.BigEndian.PutUint16(buf[5:7], p.srcPort)
-	binary.BigEndian.PutUint16(buf[7:9], p.distPort)
-
-	if (p.cmd & CmdACKFlag) > 0 {
-		binary.BigEndian.PutUint16(buf[9:11], p.ackInfo)
-		return packetHeaderSize, nil
-	} else {
-		binary.BigEndian.PutUint16(buf[9:11], uint16(payloadSize))
-		if payloadSize > 0 {
-			copy(buf[packetHeaderSize:], p.payload)
-		}
-		return (packetHeaderSize + payloadSize), nil
-	}
-}
-
-func (p *Packet) CmdStr() string {
-	return cmdStr(p.cmd)
-}
 
 // cmd(byte) +
 // srcHost(uint16) + distHost(uint16) +
@@ -109,8 +65,9 @@ func cmdStr(b byte) string {
 }
 
 type PacketBufs struct {
-	head    packetHeader
-	payload []byte
+	head      packetHeader
+	payload   []byte
+	writeDone chan struct{}
 }
 
 func NewPacketBufs() *PacketBufs {
@@ -138,10 +95,21 @@ func (pb *PacketBufs) ReadFrom(r io.Reader) (int64, error) {
 	return rn, nil
 }
 
+func (pb *PacketBufs) SetBase(cmd byte, srcIP, srcPort, distIP, distPort uint16) {
+	pb.head[0] = cmd
+	binary.BigEndian.PutUint16(pb.head[1:3], srcIP)
+	binary.BigEndian.PutUint16(pb.head[3:5], distIP)
+	binary.BigEndian.PutUint16(pb.head[5:7], srcPort)
+	binary.BigEndian.PutUint16(pb.head[7:9], distPort)
+}
+
 func (pb *PacketBufs) SetDistIP(ip HostIP) {
 	binary.BigEndian.PutUint16(pb.head[3:5], ip)
 }
 func (pb *PacketBufs) SetPayload(buf []byte) {
 	binary.BigEndian.PutUint16(pb.head[9:11], uint16(len(buf)))
 	pb.payload = buf
+}
+func (pb *PacketBufs) SetACKInfo(ack uint16) {
+	binary.BigEndian.PutUint16(pb.head[9:11], ack)
 }

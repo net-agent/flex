@@ -246,11 +246,11 @@ func (stream *Stream) closed() {
 }
 
 func (stream *Stream) LocalAddr() net.Addr {
-	return stream.host.conn.LocalAddr()
+	return stream.host.LocalAddr()
 }
 
 func (stream *Stream) RemoteAddr() net.Addr {
-	return stream.host.conn.RemoteAddr()
+	return stream.host.RemoteAddr()
 }
 
 func (stream *Stream) SetDeadline(t time.Time) error {

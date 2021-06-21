@@ -14,12 +14,20 @@ import (
 func TestHostWritePacket(t *testing.T) {
 	c1, c2 := net.Pipe()
 
-	host1 := NewHost(nil, c1, 0)
+	host1 := NewHost(NewPacketConn(c1), 0)
 
-	ps := []*Packet{
-		{CmdOpenStream, 1, 2, 1024, 80, nil, 0, nil},
-		{CmdCloseStream, 1, 2, 1024, 80, []byte("hello world"), 0, nil},
-		{CmdPushStreamData, 1, 2, 1024, 80, []byte("hello world"), 0, nil},
+	ps := []*struct {
+		cmd      byte
+		srcHost  HostIP
+		distHost HostIP
+		srcPort  uint16
+		distPort uint16
+		payload  []byte
+		ackInfo  uint16
+	}{
+		{CmdOpenStream, 1, 2, 1024, 80, nil, 0},
+		{CmdCloseStream, 1, 2, 1024, 80, []byte("hello world"), 0},
+		{CmdPushStreamData, 1, 2, 1024, 80, []byte("hello world"), 0},
 	}
 
 	go func() {
@@ -85,7 +93,7 @@ func TestHostDialAndListen(t *testing.T) {
 		// 等待服务端就绪
 		wg.Wait()
 
-		client := NewHost(nil, c1, 0)
+		client := NewHost(NewPacketConn(c1), 0)
 		stream, err := client.Dial("0:80")
 		if err != nil {
 			t.Error(err)
@@ -111,7 +119,7 @@ func TestHostDialAndListen(t *testing.T) {
 		}
 	}()
 
-	server := NewHost(nil, c2, 0)
+	server := NewHost(NewPacketConn(c2), 0)
 	listener, err := server.Listen(80)
 	if err != nil {
 		t.Error(err)
@@ -149,7 +157,7 @@ func TestHostStreamClose(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		wg.Wait()
-		host := NewHost(nil, c1, 0)
+		host := NewHost(NewPacketConn(c1), 0)
 		stream, err := host.Dial("0:80")
 		if err != nil {
 			t.Error(err)
@@ -166,7 +174,7 @@ func TestHostStreamClose(t *testing.T) {
 		// }
 	}()
 
-	host := NewHost(nil, c2, 0)
+	host := NewHost(NewPacketConn(c2), 0)
 	l, err := host.Listen(80)
 	if err != nil {
 		t.Error(err)
@@ -215,7 +223,6 @@ func TestHostStreamClose(t *testing.T) {
 }
 
 func TestConcurrencyStream(t *testing.T) {
-	debug = false
 	payloadSize := 1024 * 400
 	threadLen := 40
 	chanDuration := make(chan time.Duration, threadLen+1)
@@ -275,8 +282,8 @@ func TestConcurrencyStream(t *testing.T) {
 	}
 
 	c1, c2 := net.Pipe()
-	client := NewHost(nil, c1, 0)
-	server := NewHost(nil, c2, 0)
+	client := NewHost(NewPacketConn(c1), 0)
+	server := NewHost(NewPacketConn(c2), 0)
 
 	go func() {
 		streams := []*Stream{}
