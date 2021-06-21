@@ -14,7 +14,7 @@ func testConnect(t *testing.T, switcher *Switcher, domain, mac string) (*Host, e
 
 	go switcher.Access(c2)
 
-	host, err := UpgradeToHost(c1, &HostRequest{domain, mac})
+	host, err := UpgradeToHost(c1, "", &HostRequest{domain, mac})
 	if err != nil {
 		t.Error(err)
 		return nil, err
@@ -52,7 +52,7 @@ func TestSwitcherBase(t *testing.T) {
 	go func() {
 		defer wg.Done()
 
-		host, err := UpgradeToHost(c1, &HostRequest{"test", "mac"})
+		host, err := UpgradeToHost(c1, "", &HostRequest{"test", "mac"})
 		if err != nil {
 			t.Error(err)
 			return

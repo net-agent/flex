@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"net"
+
+	"github.com/net-agent/cipherconn"
 )
 
 type HostRequest struct {
@@ -17,7 +19,16 @@ type HostResponse struct {
 	IP HostIP
 }
 
-func UpgradeToHost(conn net.Conn, req *HostRequest) (*Host, error) {
+func UpgradeToHost(conn net.Conn, password string, req *HostRequest) (*Host, error) {
+	if password != "" {
+		cc, err := cipherconn.New(conn, password)
+		if err != nil {
+			conn.Close()
+			return nil, err
+		}
+		conn = cc
+	}
+
 	//
 	// send request
 	//

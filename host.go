@@ -55,12 +55,9 @@ func (host *Host) init() {
 		host.availablePorts <- uint16(i)
 	}
 
-	if host.switcher != nil {
-		go host.switcher.hostReadLoop(host)
-	} else {
+	if host.switcher == nil {
 		go host.readLoop()
 	}
-
 	go host.pc.WriteLoop()
 }
 
@@ -124,6 +121,15 @@ func (host *Host) attach(stream *Stream) error {
 	}
 	atomic.AddInt64(&host.streamsLen, 1)
 	return nil
+}
+
+func (host *Host) detach(dataID uint64) (*Stream, error) {
+	it, found := host.streams.LoadAndDelete(dataID)
+	if !found {
+		return nil, errors.New("dataID not found")
+	}
+	atomic.AddInt64(&host.streamsLen, -1)
+	return it.(*Stream), nil
 }
 
 // Listen 监听对端创建连接的请求

@@ -16,27 +16,31 @@ type switchContext struct {
 	mac    string
 }
 
-func (ctx *switchContext) attach(sw *Switcher) {
+func (sw *Switcher) attach(ctx *switchContext) {
 	sw.domainCtxs.Store(ctx.domain, ctx)
 	sw.ctxs.Store(ctx.ip, ctx)
 }
 
-func (ctx *switchContext) detach(sw *Switcher) {
+func (sw *Switcher) detach(ctx *switchContext) {
 	sw.domainCtxs.Delete(ctx.domain)
 	sw.ctxs.Delete(ctx.ip)
 }
 
 // Switcher packet交换器，根据ip、port进行路由和分发
 type Switcher struct {
-	password   string
-	ctxs       sync.Map // map[HostIP]*switchContext
-	domainCtxs sync.Map // map[string]*switchContext
+	password string
 
 	// 分发由host传上来的数据包
 	chanPushData chan *PacketBufs // 用于保证Push的顺序和性能，同时避免writePool死锁
 	availableIP  chan HostIP
-	macIPBinds   sync.Map // map[mac string]HostIP
 	ipMacBinds   sync.Map // map[HostIP]string
+	macIPBinds   sync.Map // map[mac string]HostIP
+
+	//
+	// context indexs
+	//
+	ctxs       sync.Map // map[ip HostIP]*switchContext
+	domainCtxs sync.Map // map[domain string]*switchContext
 
 }
 
@@ -87,21 +91,25 @@ func (switcher *Switcher) allocIP(mac string) (HostIP, error) {
 }
 
 func (switcher *Switcher) Run(addr string) {
-	listener, err := net.Listen("tcp4", addr)
+	l, err := net.Listen("tcp4", addr)
 	if err != nil {
 		log.Fatal(err)
 		return
 	}
 
-	log.Printf("switcher running, addr is %v\n", addr)
+	switcher.Serve(l)
+}
 
+func (switcher *Switcher) Serve(l net.Listener) {
+	log.Printf("switcher running, addr is %v\n", l.Addr())
 	for {
-		conn, err := listener.Accept()
+		conn, err := l.Accept()
 		if err != nil {
 			break
 		}
 		go switcher.Access(conn)
 	}
+	log.Println("switcher stopped")
 }
 
 func (switcher *Switcher) Access(conn net.Conn) {
@@ -119,9 +127,11 @@ func (switcher *Switcher) Access(conn net.Conn) {
 		log.Println("host upgrade failed", err)
 		return
 	}
-
-	ctx.attach(switcher) // detach on error
 	log.Printf("host upgrade success, ip is %v\n", ctx.ip)
+
+	switcher.attach(ctx)
+	switcher.hostReadLoop(ctx.host)
+	switcher.detach(ctx)
 }
 
 //
@@ -147,7 +157,12 @@ func (switcher *Switcher) hostReadLoop(host *Host) {
 		case CmdOpenStreamDomain:
 			go switcher.switchOpenDomain(pb)
 		case CmdPushStreamData:
-			switcher.chanPushData <- pb
+			//
+			// 使用队列进行解耦，降低数据包对cmd的影响
+			// todo，可以使用多个队列，降低相互影响
+			//
+			// switcher.chanPushData <- pb
+			switcher.switchData(pb)
 		default:
 			go switcher.switchData(pb)
 		}
