@@ -191,7 +191,9 @@ func (host *Host) readLoop() error {
 		case CmdOpenStream:
 			go host.onOpenStream(
 				pb.head.SrcIP(), pb.head.SrcPort(),
-				pb.head.DistIP(), pb.head.DistPort())
+				pb.head.DistIP(), pb.head.DistPort(),
+				string(pb.payload),
+			)
 		case CmdCloseStream:
 			go host.onCloseStream(pb.head.StreamDataID())
 		case CmdPushStreamData:

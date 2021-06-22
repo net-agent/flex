@@ -164,8 +164,8 @@ func (switcher *Switcher) hostReadLoop(ctx *switchContext) error {
 		// log.Printf("%v %v\n", pb.head.CmdStr(), pb.head)
 
 		switch pb.head[0] {
-		case CmdOpenStreamDomain:
-			go switcher.switchOpenDomain(pb)
+		case CmdOpenStream:
+			go switcher.switchOpen(ctx, pb)
 		case CmdPushStreamData:
 			//
 			// 使用队列进行解耦，降低数据包对cmd的影响
@@ -179,18 +179,27 @@ func (switcher *Switcher) hostReadLoop(ctx *switchContext) error {
 	}
 }
 
-func (switcher *Switcher) switchOpenDomain(pb *PacketBufs) {
+func (switcher *Switcher) switchOpen(caller *switchContext, pb *PacketBufs) {
 	domain := string(pb.payload)
+	if domain == "" {
+		pb.SetPayload([]byte(caller.domain))
+		switcher.switchData(pb)
+		return
+	}
+
+	//
+	// 通过域名解析进行请求路由
+	//
 	it, found := switcher.domainCtxs.Load(domain)
 	if !found {
 		log.Printf("resolve domain failed: '%v' not found", domain)
 		return
 	}
-	ctx := it.(*switchContext)
-	pb.head[0] = CmdOpenStream
-	pb.SetDistIP(ctx.ip)
-	pb.SetPayload(nil)
-	ctx.host.pc.WritePacket(pb)
+	dist := it.(*switchContext)
+
+	pb.SetDistIP(dist.ip)
+	pb.SetPayload([]byte(caller.domain))
+	dist.host.pc.WritePacket(pb)
 }
 
 func (switcher *Switcher) pushDataLoop() {

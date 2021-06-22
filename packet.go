@@ -12,7 +12,6 @@ const (
 	CmdCloseStream
 	CmdPushStreamData
 	CmdAlive
-	CmdOpenStreamDomain // distIP不是数字IP，而是域名。在switcher处进行报文转换
 )
 
 type PacketBufs struct {

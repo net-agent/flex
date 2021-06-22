@@ -6,7 +6,8 @@ import (
 
 // onOpenStream 处理创建Stream的请求
 func (host *Host) onOpenStream(
-	srcHost HostIP, srcPort uint16, distHost HostIP, distPort uint16) {
+	srcHost HostIP, srcPort uint16, distHost HostIP, distPort uint16,
+	dialer string) {
 
 	it, found := host.localBinds.Load(distPort)
 	if !found {
@@ -16,6 +17,7 @@ func (host *Host) onOpenStream(
 
 	stream := NewStream(host, false)
 	stream.SetAddr(distHost, distPort, srcHost, srcPort)
+	stream.dialer = dialer
 
 	err := host.attach(stream)
 	if err != nil {

@@ -23,6 +23,7 @@ type Stream struct {
 	remotePort uint16
 	dataID     uint64
 	desc       string
+	dialer     string // 创建连接的Host的Domain信息
 
 	chanOpenACK  chan struct{}
 	chanCloseACK chan struct{}
@@ -50,6 +51,7 @@ func NewStream(host *Host, isClient bool) *Stream {
 		host:               host,
 		localIP:            ip,
 		isClient:           isClient,
+		dialer:             "self",
 		chanOpenACK:        make(chan struct{}, 10),
 		chanCloseACK:       make(chan struct{}, 10),
 		readPipe:           NewBytesPipe(),
@@ -182,12 +184,7 @@ func (stream *Stream) Close() error {
 // open 主动开启连接
 func (stream *Stream) open(domain string) error {
 	cmd := CmdOpenStream
-	payload := []byte{}
-
-	if domain != "" {
-		cmd = CmdOpenStreamDomain
-		payload = []byte(domain)
-	}
+	payload := []byte(domain)
 
 	err := stream.writePacket(cmd, 0, payload)
 
