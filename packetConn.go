@@ -3,23 +3,14 @@ package flex
 import (
 	"errors"
 	"io"
-	"log"
 	"net"
 	"sync"
 	"time"
 )
 
-type PacketWriter interface {
+type PacketIO interface {
 	WritePacket(pb *PacketBufs) error
-}
-
-type PacketReader interface {
 	ReadPacket(pb *PacketBufs) error
-}
-
-type PacketReadWriteCloser interface {
-	PacketWriter
-	PacketReader
 	io.Closer
 }
 
@@ -31,7 +22,7 @@ type connPacketRWC struct {
 	wlock sync.Mutex
 }
 
-func NewConnPacketIO(conn net.Conn) PacketReadWriteCloser {
+func NewConnPacketIO(conn net.Conn) PacketIO {
 	return &connPacketRWC{
 		conn: conn,
 	}
@@ -39,15 +30,38 @@ func NewConnPacketIO(conn net.Conn) PacketReadWriteCloser {
 
 func (c *connPacketRWC) ReadPacket(pb *PacketBufs) error {
 	_, err := pb.ReadFrom(c.conn)
+	if err != nil {
+		c.conn.Close()
+	}
 	return err
 }
 
-func (c *connPacketRWC) WritePacket(pb *PacketBufs) error {
+func (c *connPacketRWC) WritePacket(pb *PacketBufs) (ret error) {
 	c.wlock.Lock()
-	defer c.wlock.Unlock()
+	defer func() {
+		if ret != nil {
+			c.conn.Close()
+		}
+		c.wlock.Unlock()
+	}()
 
-	c.conn.Write(pb.head[:])
-	c.conn.Write(pb.payload)
+	n, err := c.conn.Write(pb.head[:])
+	if err != nil {
+		return err
+	}
+	if n != len(pb.head) {
+		return errors.New("imcomplete packet head wrote")
+	}
+
+	if len(pb.payload) > 0 {
+		n, err = c.conn.Write(pb.payload)
+		if err != nil {
+			return err
+		}
+		if n != len(pb.payload) {
+			return errors.New("imcomplete packet payload wrote")
+		}
+	}
 
 	if pb.writeDone != nil {
 		pb.writeDone <- struct{}{}
@@ -64,17 +78,23 @@ func (c *connPacketRWC) Close() error {
 //
 //
 type PacketConn struct {
-	PacketReadWriteCloser
+	PacketIO
 	chanPacketBufs chan *PacketBufs
 	raw            net.Conn
 }
 
+// NewPacketConn 基于原始TCP连接进行协议升级
 func NewPacketConn(conn net.Conn) *PacketConn {
 	return &PacketConn{
-		raw:                   conn,
-		PacketReadWriteCloser: NewConnPacketIO(conn),
-		chanPacketBufs:        make(chan *PacketBufs, 1024),
+		raw:            conn,
+		PacketIO:       NewConnPacketIO(conn),
+		chanPacketBufs: make(chan *PacketBufs, 1024),
 	}
+}
+
+// todo: 基于WebSocket协议升级为PacketConn（复用ws的Message读写）
+func NewPacketWsConn(wsconn net.Conn) *PacketConn {
+	return nil
 }
 
 func (pc *PacketConn) NonblockWritePacket(pb *PacketBufs, waitResult bool) error {
@@ -103,17 +123,15 @@ func (pc *PacketConn) NonblockWritePacket(pb *PacketBufs, waitResult bool) error
 	return nil
 }
 
-func (pc *PacketConn) WriteLoop() {
+func (pc *PacketConn) WriteLoop() error {
+	defer pc.Close()
+
 	var err error
 	for pb := range pc.chanPacketBufs {
 		err = pc.WritePacket(pb)
 		if err != nil {
-			pc.EmitError(err)
-			return
+			return err
 		}
 	}
-}
-
-func (pc *PacketConn) EmitError(err error) {
-	log.Printf("[packetConn] err=%v\n", err)
+	return nil
 }

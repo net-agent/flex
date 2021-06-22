@@ -2,7 +2,6 @@ package flex
 
 import (
 	"errors"
-	"fmt"
 	"log"
 	"net"
 	"strconv"
@@ -160,14 +159,14 @@ func (host *Host) selectLocalPort() (uint16, error) {
 // readLoop
 // 不断读取连接中的数据，并且根据解包的结果进行数据派发
 //
-func (host *Host) readLoop() {
-	var pb PacketBufs
+func (host *Host) readLoop() error {
+	defer host.pc.Close()
 
+	var pb PacketBufs
 	for {
 		err := host.pc.ReadPacket(&pb)
 		if err != nil {
-			host.emitReadErr(err)
-			return
+			return err
 		}
 
 		if pb.head.Cmd() == CmdAlive {
@@ -200,10 +199,6 @@ func (host *Host) readLoop() {
 			host.onPushData(pb.head.StreamDataID(), pb.payload)
 		}
 	}
-}
-
-func (host *Host) emitReadErr(err error) {
-	fmt.Println("[error]", err)
 }
 
 func (host *Host) writePacket(

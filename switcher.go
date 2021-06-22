@@ -5,6 +5,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"sync/atomic"
 
 	"github.com/net-agent/cipherconn"
 )
@@ -39,8 +40,9 @@ type Switcher struct {
 	//
 	// context indexs
 	//
-	ctxs       sync.Map // map[ip HostIP]*switchContext
-	domainCtxs sync.Map // map[domain string]*switchContext
+	ctxs          sync.Map // map[ip HostIP]*switchContext
+	domainCtxs    sync.Map // map[domain string]*switchContext
+	activeCtxsLen int32
 }
 
 func NewSwitcher(staticIP map[string]HostIP, password string) *Switcher {
@@ -77,7 +79,7 @@ func (switcher *Switcher) selectIP(mac string) (HostIP, error) {
 		select {
 		case ip, ok := <-switcher.availableIP:
 			if !ok {
-				return 0, errors.New("alloc host ip failed")
+				return 0, errors.New("select host ip failed")
 			}
 			if _, found := switcher.ctxs.Load(ip); !found {
 				return ip, nil
@@ -112,24 +114,33 @@ func (switcher *Switcher) Serve(l net.Listener) {
 }
 
 func (switcher *Switcher) ServeHostConn(conn net.Conn) {
+	defer conn.Close()
+	remote := conn.RemoteAddr().String()
+
 	if switcher.password != "" {
 		cc, err := cipherconn.New(conn, switcher.password)
 		if err != nil {
-			conn.Close()
+			log.Printf("host(remote=%v) upgrade failed: %v\n", remote, err)
 			return
 		}
 		conn = cc
 	}
 	ctx, err := switcher.UpgradeHost(conn)
 	if err != nil {
-		conn.Close()
-		log.Println("host upgrade failed", err)
+		log.Printf("host(remote=%v) upgrade failed: %v\n", remote, err)
 		return
 	}
-	log.Printf("host upgrade success, ip is %v\n", ctx.ip)
 
 	switcher.attach(ctx)
-	switcher.hostReadLoop(ctx.host)
+
+	log.Printf("host(domain=%v ip=%v remote=%v active=%v) joined\n",
+		ctx.domain, ctx.ip, remote, atomic.AddInt32(&switcher.activeCtxsLen, 1))
+
+	err = switcher.hostReadLoop(ctx)
+
+	log.Printf("host(domain=%v ip=%v remote=%v active=%v) exit. err=%v\n",
+		ctx.domain, ctx.ip, remote, atomic.AddInt32(&switcher.activeCtxsLen, -1), err)
+
 	switcher.detach(ctx)
 }
 
@@ -137,14 +148,13 @@ func (switcher *Switcher) ServeHostConn(conn net.Conn) {
 // hostReadLoop
 // 不断读取连接中的数据，并根据DistIP对数据进行分发
 //
-func (switcher *Switcher) hostReadLoop(host *Host) {
+func (switcher *Switcher) hostReadLoop(ctx *switchContext) error {
 	for {
 		pb := NewPacketBufs()
 
-		err := host.pc.ReadPacket(pb)
+		err := ctx.host.pc.ReadPacket(pb)
 		if err != nil {
-			host.emitReadErr(err)
-			return
+			return err
 		}
 
 		if pb.head.Cmd() == CmdAlive {
