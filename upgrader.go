@@ -87,7 +87,7 @@ func (switcher *Switcher) UpgradeHost(conn net.Conn) (*switchContext, error) {
 		return nil, err
 	}
 
-	ip, err := switcher.allocIP(req.Mac)
+	ip, err := switcher.selectIP(req.Mac)
 	if err != nil {
 		return nil, err
 	}

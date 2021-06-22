@@ -12,7 +12,7 @@ import (
 func testConnect(t *testing.T, switcher *Switcher, domain, mac string) (*Host, error) {
 	c1, c2 := net.Pipe()
 
-	go switcher.Access(c2)
+	go switcher.ServeHostConn(c2)
 
 	host, err := UpgradeToHost(c1, "", &HostRequest{domain, mac})
 	if err != nil {

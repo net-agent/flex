@@ -82,7 +82,10 @@ func (pc *PacketConn) NonblockWritePacket(pb *PacketBufs, waitResult bool) error
 
 	if waitResult {
 		done = make(chan struct{}, 1)
-		defer close(done)
+		defer func() {
+			close(done)
+			pb.writeDone = nil
+		}()
 		pb.writeDone = done
 	}
 

@@ -41,7 +41,6 @@ type Switcher struct {
 	//
 	ctxs       sync.Map // map[ip HostIP]*switchContext
 	domainCtxs sync.Map // map[domain string]*switchContext
-
 }
 
 func NewSwitcher(staticIP map[string]HostIP, password string) *Switcher {
@@ -68,7 +67,7 @@ func NewSwitcher(staticIP map[string]HostIP, password string) *Switcher {
 	return switcher
 }
 
-func (switcher *Switcher) allocIP(mac string) (HostIP, error) {
+func (switcher *Switcher) selectIP(mac string) (HostIP, error) {
 	it, found := switcher.macIPBinds.Load(mac)
 	if found {
 		return it.(HostIP), nil
@@ -107,12 +106,12 @@ func (switcher *Switcher) Serve(l net.Listener) {
 		if err != nil {
 			break
 		}
-		go switcher.Access(conn)
+		go switcher.ServeHostConn(conn)
 	}
 	log.Println("switcher stopped")
 }
 
-func (switcher *Switcher) Access(conn net.Conn) {
+func (switcher *Switcher) ServeHostConn(conn net.Conn) {
 	if switcher.password != "" {
 		cc, err := cipherconn.New(conn, switcher.password)
 		if err != nil {
@@ -141,6 +140,7 @@ func (switcher *Switcher) Access(conn net.Conn) {
 func (switcher *Switcher) hostReadLoop(host *Host) {
 	for {
 		pb := NewPacketBufs()
+
 		err := host.pc.ReadPacket(pb)
 		if err != nil {
 			host.emitReadErr(err)

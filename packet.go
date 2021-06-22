@@ -15,6 +15,16 @@ const (
 	CmdOpenStreamDomain // distIP不是数字IP，而是域名。在switcher处进行报文转换
 )
 
+type PacketBufs struct {
+	head      packetHeader
+	payload   []byte
+	writeDone chan struct{}
+}
+
+func NewPacketBufs() *PacketBufs {
+	return &PacketBufs{}
+}
+
 // cmd(byte) +
 // srcHost(uint16) + distHost(uint16) +
 // srcPort(uint16) + distPort(uint16) +
@@ -32,23 +42,8 @@ func (h *packetHeader) DistPort() uint16     { return binary.BigEndian.Uint16(h[
 func (h *packetHeader) Src() string          { return fmt.Sprintf("%v:%v", h.SrcIP(), h.SrcPort()) }
 func (h *packetHeader) Dist() string         { return fmt.Sprintf("%v:%v", h.DistIP(), h.DistPort()) }
 func (h *packetHeader) StreamDataID() uint64 { return binary.BigEndian.Uint64(h[1:9]) }
-func (h *packetHeader) CmdStr() string       { return cmdStr(h[0]) }
-
-func (h *packetHeader) PayloadSize() uint16 {
-	if (h[0] & 0x01) == 1 {
-		return 0
-	}
-	return binary.BigEndian.Uint16(h[9:11])
-}
-
-func (h *packetHeader) ACKInfo() uint16 {
-	if (h[0] & 0x01) == 0 {
-		return 0
-	}
-	return binary.BigEndian.Uint16(h[9:11])
-}
-
-func cmdStr(b byte) string {
+func (h *packetHeader) CmdStr() string {
+	b := h[0]
 	strs := []string{"[ack]", "[open]", "[close]", "[push]", "[alive]", "[domain]"}
 	ret := ""
 	for i, str := range strs {
@@ -64,14 +59,18 @@ func cmdStr(b byte) string {
 	return ret
 }
 
-type PacketBufs struct {
-	head      packetHeader
-	payload   []byte
-	writeDone chan struct{}
+func (h *packetHeader) PayloadSize() uint16 {
+	if (h[0] & 0x01) == 1 {
+		return 0
+	}
+	return binary.BigEndian.Uint16(h[9:11])
 }
 
-func NewPacketBufs() *PacketBufs {
-	return &PacketBufs{}
+func (h *packetHeader) ACKInfo() uint16 {
+	if (h[0] & 0x01) == 0 {
+		return 0
+	}
+	return binary.BigEndian.Uint16(h[9:11])
 }
 
 func (pb *PacketBufs) ReadFrom(r io.Reader) (int64, error) {
