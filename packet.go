@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"runtime"
 )
 
 const (
@@ -42,6 +43,11 @@ func (h *packetHeader) DistPort() uint16     { return binary.BigEndian.Uint16(h[
 func (h *packetHeader) Src() string          { return fmt.Sprintf("%v:%v", h.SrcIP(), h.SrcPort()) }
 func (h *packetHeader) Dist() string         { return fmt.Sprintf("%v:%v", h.DistIP(), h.DistPort()) }
 func (h *packetHeader) StreamDataID() uint64 { return binary.BigEndian.Uint64(h[1:9]) }
+
+// CPUID 数值不超过runtime.NumCPU()
+func (h *packetHeader) CPUID() int {
+	return int(h[1]^h[2]^h[3]^h[4]^h[5]^h[6]^h[7]^h[8]) % runtime.NumCPU()
+}
 func (h *packetHeader) CmdStr() string {
 	b := h[0]
 	strs := []string{"[ack]", "[open]", "[close]", "[push]", "[alive]", "[domain]"}

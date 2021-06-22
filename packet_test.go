@@ -31,3 +31,10 @@ func TestChanBlock(t *testing.T) {
 	close(ch)
 	wg.Wait()
 }
+
+func BenchmarkCPUID(b *testing.B) {
+	var head packetHeader
+	for i := 0; i < b.N; i++ {
+		head.CPUID()
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"net"
+	"runtime"
 	"sync"
 	"sync/atomic"
 
@@ -32,10 +33,11 @@ type Switcher struct {
 	password string
 
 	// 分发由host传上来的数据包
-	chanPushData chan *PacketBufs // 用于保证Push的顺序和性能，同时避免writePool死锁
-	availableIP  chan HostIP
-	ipMacBinds   sync.Map // map[HostIP]string
-	macIPBinds   sync.Map // map[mac string]HostIP
+	dataChans []chan *PacketBufs // 用于保证Push的顺序和性能，同时避免writePool死锁
+
+	availableIP chan HostIP
+	ipMacBinds  sync.Map // map[HostIP]string
+	macIPBinds  sync.Map // map[mac string]HostIP
 
 	//
 	// context indexs
@@ -47,9 +49,14 @@ type Switcher struct {
 
 func NewSwitcher(staticIP map[string]HostIP, password string) *Switcher {
 	switcher := &Switcher{
-		password:     password,
-		availableIP:  make(chan HostIP, 0xFFFF),
-		chanPushData: make(chan *PacketBufs, 2048), // 缓冲区需要足够长
+		password:    password,
+		availableIP: make(chan HostIP, 0xFFFF),
+	}
+
+	// 初始化数据通道
+	switcher.dataChans = make([]chan *PacketBufs, 0)
+	for i := 0; i < runtime.NumCPU(); i++ {
+		switcher.dataChans = append(switcher.dataChans, make(chan *PacketBufs, 2048))
 	}
 
 	for k, v := range staticIP {
@@ -169,10 +176,11 @@ func (switcher *Switcher) hostReadLoop(ctx *switchContext) error {
 		case CmdPushStreamData:
 			//
 			// 使用队列进行解耦，降低数据包对cmd的影响
-			// todo，可以使用多个队列，降低相互影响
+			// 可以使用多个队列，降低相互影响
+			// CPUID算法决定队列流量的公平性（公平性待检验）
 			//
-			// switcher.chanPushData <- pb
-			switcher.switchData(pb)
+			switcher.dataChans[pb.head.CPUID()] <- pb
+			// switcher.switchData(pb)
 		default:
 			go switcher.switchData(pb)
 		}
@@ -203,10 +211,17 @@ func (switcher *Switcher) switchOpen(caller *switchContext, pb *PacketBufs) {
 }
 
 func (switcher *Switcher) pushDataLoop() {
-
-	for pb := range switcher.chanPushData {
-		switcher.switchData(pb)
+	var wg sync.WaitGroup
+	for i, ch := range switcher.dataChans {
+		wg.Add(1)
+		go func(index int, ch chan *PacketBufs) {
+			for pb := range ch {
+				switcher.switchData(pb)
+			}
+			wg.Done()
+		}(i, ch)
 	}
+	wg.Wait()
 }
 
 func (switcher *Switcher) switchData(pb *PacketBufs) {
