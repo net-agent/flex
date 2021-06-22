@@ -213,7 +213,13 @@ func (stream *Stream) readed(size uint16) {
 func (stream *Stream) increasePoolSize(size uint16) {
 	atomic.AddInt64(&stream.writenACKCount, int64(size))
 	atomic.AddInt32(&stream.writePoolSize, int32(size))
-	stream.writePoolIncEvents <- struct{}{}
+
+	// memory leak here
+	select {
+	case stream.writePoolIncEvents <- struct{}{}:
+	default:
+	}
+
 }
 
 // close 关闭的意思：停止发送数据，并且告诉对端，我不会再发送任何数据
