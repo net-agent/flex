@@ -2,7 +2,6 @@ package flex
 
 import (
 	"errors"
-	"log"
 	"net"
 	"strconv"
 	"sync"
@@ -97,11 +96,11 @@ func (host *Host) dial(remoteDomain string, remoteIP HostIP, remotePort uint16) 
 		return nil, errors.New("port not availble")
 	}
 
-	if remoteDomain == "" {
-		log.Printf("dial stream: %v:%v -> %v:%v\n", host.ip, localPort, remoteIP, remotePort)
-	} else {
-		log.Printf("dial stream: %v:%v -> %v:%v\n", host.ip, localPort, remoteDomain, remotePort)
-	}
+	// if remoteDomain == "" {
+	// 	log.Printf("dial stream: %v:%v -> %v:%v\n", host.ip, localPort, remoteIP, remotePort)
+	// } else {
+	// 	log.Printf("dial stream: %v:%v -> %v:%v\n", host.ip, localPort, remoteDomain, remotePort)
+	// }
 
 	err = stream.open(remoteDomain)
 	if err != nil {
@@ -227,4 +226,8 @@ func (host *Host) LocalAddr() net.Addr {
 
 func (host *Host) RemoteAddr() net.Addr {
 	return host.pc.raw.RemoteAddr()
+}
+
+func (host *Host) IP() HostIP {
+	return host.ip
 }

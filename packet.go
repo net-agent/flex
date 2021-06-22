@@ -12,6 +12,7 @@ const (
 	CmdCloseStream
 	CmdPushStreamData
 	CmdAlive
+	CmdPushMessage
 )
 
 type PacketBufs struct {

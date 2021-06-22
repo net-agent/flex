@@ -222,6 +222,10 @@ func (stream *Stream) increasePoolSize(size uint16) {
 //
 func (stream *Stream) close() error {
 	stream.writeLocker.Lock()
+	if stream.writeClosed {
+		stream.writeLocker.Unlock()
+		return nil
+	}
 	stream.writeClosed = true // 设置为true后，将不会再有数据写到对端
 	close(stream.writeCloseEvents)
 	err := stream.writePacket(CmdCloseStream, 0, nil) // CmdCloseStream相当于EOF
@@ -249,8 +253,16 @@ func (stream *Stream) closed() {
 	stream.readPipe.Close()
 
 	stream.writeLocker.Lock()
+	if stream.writeClosed {
+		stream.writeLocker.Unlock()
+		return
+	}
 	stream.writeClosed = true
-	close(stream.writeCloseEvents)
+	select {
+	case <-stream.writeCloseEvents:
+	default:
+		close(stream.writeCloseEvents)
+	}
 	stream.writePacket(CmdACKFlag|CmdCloseStream, 0, nil)
 	stream.writeLocker.Unlock()
 }

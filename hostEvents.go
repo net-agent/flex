@@ -88,7 +88,7 @@ func (host *Host) onPushData(dataID uint64, payload []byte) {
 func (host *Host) onPushDataACK(dataID uint64, ackInfo uint16) {
 	it, found := host.streams.Load(dataID)
 	if !found {
-		log.Printf("data ack ignored\n")
+		// log.Printf("data ack ignored\n")
 		return
 	}
 	it.(*Stream).increasePoolSize(ackInfo)

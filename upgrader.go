@@ -4,11 +4,26 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"math/rand"
 	"net"
+	"regexp"
+	"sync/atomic"
+	"time"
 
 	"github.com/net-agent/cipherconn"
 )
+
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
+
+var randDomainIndex int32
+
+func RandDomain() string {
+	return fmt.Sprintf("rnd_%x_%v", rand.Int63(), atomic.AddInt32(&randDomainIndex, 1))
+}
 
 type HostRequest struct {
 	Domain string
@@ -87,6 +102,12 @@ func (switcher *Switcher) UpgradeHost(conn net.Conn) (*switchContext, error) {
 		return nil, err
 	}
 
+	if req.Domain == "" {
+		req.Domain = RandDomain()
+	} else if !isValidDomain(req.Domain) {
+		return nil, errors.New("invalid domain")
+	}
+
 	ip, err := switcher.selectIP(req.Mac)
 	if err != nil {
 		return nil, err
@@ -115,4 +136,9 @@ func (switcher *Switcher) UpgradeHost(conn net.Conn) (*switchContext, error) {
 		domain: req.Domain,
 		mac:    req.Mac,
 	}, nil
+}
+
+func isValidDomain(domain string) bool {
+	re := regexp.MustCompile(`^[a-zA-Z]([a-zA-Z0-9_.]){2,255}[a-zA-Z0-9_]$`)
+	return re.MatchString(domain)
 }
