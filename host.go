@@ -33,6 +33,7 @@ func NewHost(pc *PacketConn, ip HostIP) *Host {
 		ip: ip,
 	}
 	host.init()
+	go host.Run()
 	return host
 }
 
@@ -52,11 +53,22 @@ func (host *Host) init() {
 	for i := 1000; i < 65536; i++ {
 		host.availablePorts <- uint16(i)
 	}
+}
 
-	if host.switcher == nil {
-		go host.readLoop()
-	}
-	go host.pc.WriteLoop()
+func (host *Host) Run() {
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		host.readLoop()
+		wg.Done()
+	}()
+	go func() {
+		host.pc.WriteLoop()
+		wg.Done()
+	}()
+
+	wg.Wait()
 }
 
 // Dial 请求对端创建连接
