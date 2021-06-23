@@ -3,12 +3,16 @@ package flex
 import (
 	"errors"
 	"io"
+	"log"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 type PacketIO interface {
+	Origin() interface{}
 	WritePacket(pb *PacketBufs) error
 	ReadPacket(pb *PacketBufs) error
 	io.Closer
@@ -17,18 +21,22 @@ type PacketIO interface {
 //
 // tcp conn implement
 //
-type connPacketRWC struct {
+type connPacketIO struct {
 	conn  net.Conn
 	wlock sync.Mutex
 }
 
 func NewConnPacketIO(conn net.Conn) PacketIO {
-	return &connPacketRWC{
+	return &connPacketIO{
 		conn: conn,
 	}
 }
 
-func (c *connPacketRWC) ReadPacket(pb *PacketBufs) error {
+func (c *connPacketIO) Origin() interface{} {
+	return c.conn
+}
+
+func (c *connPacketIO) ReadPacket(pb *PacketBufs) error {
 	_, err := pb.ReadFrom(c.conn)
 	if err != nil {
 		c.conn.Close()
@@ -36,7 +44,7 @@ func (c *connPacketRWC) ReadPacket(pb *PacketBufs) error {
 	return err
 }
 
-func (c *connPacketRWC) WritePacket(pb *PacketBufs) (ret error) {
+func (c *connPacketIO) WritePacket(pb *PacketBufs) (ret error) {
 	c.wlock.Lock()
 	defer func() {
 		if ret != nil {
@@ -69,8 +77,59 @@ func (c *connPacketRWC) WritePacket(pb *PacketBufs) (ret error) {
 	return nil
 }
 
-func (c *connPacketRWC) Close() error {
+func (c *connPacketIO) Close() error {
 	return c.conn.Close()
+}
+
+//
+// websocket conn implement
+//
+type wsPacketIO struct {
+	conn *websocket.Conn
+}
+
+func NewWsPacketIO(wsconn *websocket.Conn) PacketIO {
+	return &wsPacketIO{
+		conn: wsconn,
+	}
+}
+
+func (ws *wsPacketIO) Origin() interface{} {
+	return ws.conn
+}
+
+func (ws *wsPacketIO) WritePacket(pb *PacketBufs) error {
+	if len(pb.payload) == 0 {
+		return ws.conn.WriteMessage(websocket.BinaryMessage, pb.head[:])
+	}
+	buf := make([]byte, packetHeaderSize+len(pb.payload))
+	copy(buf[:packetHeaderSize], pb.head[:])
+	copy(buf[packetHeaderSize:], pb.payload)
+	return ws.conn.WriteMessage(websocket.BinaryMessage, buf)
+}
+
+func (ws *wsPacketIO) ReadPacket(pb *PacketBufs) error {
+	for {
+		msgType, buf, err := ws.conn.ReadMessage()
+		if err != nil {
+			return err
+		}
+		if msgType == websocket.BinaryMessage {
+			if len(buf) < packetHeaderSize {
+				return errors.New("imcompleted buf readed")
+			}
+			copy(pb.head[:], buf[:packetHeaderSize])
+			pb.payload = buf[packetHeaderSize:]
+			return nil
+		}
+
+		// 忽略非BinaryMessage数据包
+		log.Printf("ignored ws message. type=%v size=%v\n", msgType, len(buf))
+	}
+}
+
+func (ws *wsPacketIO) Close() error {
+	return ws.conn.Close()
 }
 
 //
@@ -80,14 +139,19 @@ func (c *connPacketRWC) Close() error {
 type PacketConn struct {
 	PacketIO
 	chanPacketBufs chan *PacketBufs
-	raw            net.Conn
 }
 
-// NewPacketConn 基于原始TCP连接进行协议升级
-func NewPacketConn(conn net.Conn) *PacketConn {
+// NewPacketConnFromConn 基于原始TCP连接进行协议升级
+func NewPacketConnFromConn(conn net.Conn) *PacketConn {
 	return &PacketConn{
-		raw:            conn,
 		PacketIO:       NewConnPacketIO(conn),
+		chanPacketBufs: make(chan *PacketBufs, 1024),
+	}
+}
+
+func NewPacketConnFromWebsocket(wsconn *websocket.Conn) *PacketConn {
+	return &PacketConn{
+		PacketIO:       NewWsPacketIO(wsconn),
 		chanPacketBufs: make(chan *PacketBufs, 1024),
 	}
 }

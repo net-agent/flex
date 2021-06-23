@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/gorilla/websocket"
 	"github.com/net-agent/cipherconn"
 )
 
@@ -98,6 +99,18 @@ func (switcher *Switcher) selectIP(mac string) (HostIP, error) {
 	}
 }
 
+func (switcher *Switcher) ServeWebsocket(wsconn *websocket.Conn) {
+	defer wsconn.Close()
+	remote := wsconn.RemoteAddr().String()
+
+	ctx, err := switcher.UpgradeToContext(NewPacketConnFromWebsocket(wsconn))
+	if err != nil {
+		log.Printf("host(remote=%v) upgrade failed: %v\n", remote, err)
+		return
+	}
+	switcher.ServeContext(ctx, remote)
+}
+
 func (switcher *Switcher) Run(addr string) {
 	l, err := net.Listen("tcp4", addr)
 	if err != nil {
@@ -115,12 +128,12 @@ func (switcher *Switcher) Serve(l net.Listener) {
 		if err != nil {
 			break
 		}
-		go switcher.ServeHostConn(conn)
+		go switcher.ServeConn(conn)
 	}
 	log.Println("switcher stopped")
 }
 
-func (switcher *Switcher) ServeHostConn(conn net.Conn) {
+func (switcher *Switcher) ServeConn(conn net.Conn) {
 	defer conn.Close()
 	remote := conn.RemoteAddr().String()
 
@@ -132,18 +145,23 @@ func (switcher *Switcher) ServeHostConn(conn net.Conn) {
 		}
 		conn = cc
 	}
-	ctx, err := switcher.UpgradeHost(conn)
+
+	ctx, err := switcher.UpgradeToContext(NewPacketConnFromConn(conn))
 	if err != nil {
 		log.Printf("host(remote=%v) upgrade failed: %v\n", remote, err)
 		return
 	}
+	switcher.ServeContext(ctx, remote)
+}
+
+func (switcher *Switcher) ServeContext(ctx *switchContext, remote string) {
 
 	switcher.attach(ctx)
 
 	log.Printf("host(domain=%v ip=%v remote=%v active=%v) joined\n",
 		ctx.domain, ctx.ip, remote, atomic.AddInt32(&switcher.activeCtxsLen, 1))
 
-	err = switcher.hostReadLoop(ctx)
+	err := switcher.contextReadLoop(ctx)
 
 	log.Printf("host(domain=%v ip=%v remote=%v active=%v) exit. err=%v\n",
 		ctx.domain, ctx.ip, remote, atomic.AddInt32(&switcher.activeCtxsLen, -1), err)
@@ -152,10 +170,10 @@ func (switcher *Switcher) ServeHostConn(conn net.Conn) {
 }
 
 //
-// hostReadLoop
+// contextReadLoop
 // 不断读取连接中的数据，并根据DistIP对数据进行分发
 //
-func (switcher *Switcher) hostReadLoop(ctx *switchContext) error {
+func (switcher *Switcher) contextReadLoop(ctx *switchContext) error {
 	for {
 		pb := NewPacketBufs()
 

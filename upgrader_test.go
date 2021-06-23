@@ -24,7 +24,7 @@ func TestUpgraderAndSwitcher(t *testing.T) {
 		return
 	}
 
-	h1, err := UpgradeToHost(conn, password, &HostRequest{Domain: "test", Mac: ""})
+	h1, err := UpgradeConnToHost(conn, password, &HostRequest{Domain: "test", Mac: ""})
 	if err != nil {
 		t.Error(err)
 		return
@@ -55,7 +55,7 @@ func TestUpgraderAndSwitcher(t *testing.T) {
 		return
 	}
 
-	h2, err := UpgradeToHost(conn, password, &HostRequest{Domain: "test2", Mac: ""})
+	h2, err := UpgradeConnToHost(conn, password, &HostRequest{Domain: "test2", Mac: ""})
 	if err != nil {
 		t.Error(err)
 		return
@@ -85,4 +85,7 @@ func TestUpgraderAndSwitcher(t *testing.T) {
 		t.Error("not equal")
 		return
 	}
+}
+
+func TestUpgraderAndSwitcherForWebsocket(t *testing.T) {
 }

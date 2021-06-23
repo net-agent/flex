@@ -1,3 +1,5 @@
+github.com/gorilla/websocket v1.4.2 h1:+/TMaTYc4QFitKJxsQ7Yye35DkWvkdLcvGKqM+x0Ufc=
+github.com/gorilla/websocket v1.4.2/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
 github.com/net-agent/cipherconn v1.0.0 h1:4OB7mq8Rke6aNpbGkkI7otgF8ckBSoRzQNOpvJVo/c0=
 github.com/net-agent/cipherconn v1.0.0/go.mod h1:jQcNE08ocR+XJNwYzGso9ZsmW3Ng0KGTZZwX61zs90Y=
 golang.org/x/crypto v0.0.0-20210616213533-5ff15b29337e h1:gsTQYXdTw2Gq7RBsWvlQ91b+aEQ6bXFUngBGuR8sPpI=

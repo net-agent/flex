@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math/rand"
 	"net"
 	"regexp"
@@ -34,70 +33,67 @@ type HostResponse struct {
 	IP HostIP
 }
 
-func UpgradeToHost(conn net.Conn, password string, req *HostRequest) (*Host, error) {
+func UpgradeConnToHost(conn net.Conn, password string, req *HostRequest) (*Host, error) {
 	if password != "" {
 		cc, err := cipherconn.New(conn, password)
 		if err != nil {
-			conn.Close()
 			return nil, err
 		}
 		conn = cc
 	}
 
+	return UpgradeToHost(NewPacketConnFromConn(conn), req)
+}
+
+func UpgradeToHost(pc *PacketConn, req *HostRequest) (retHost *Host, retErr error) {
+	var pb = NewPacketBufs()
 	//
 	// send request
 	//
-
 	data, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
-
-	buf := make([]byte, len(data)+3)
-	buf[0] = 0x01
-	binary.BigEndian.PutUint16(buf[1:3], uint16(len(data)))
-	copy(buf[3:], data)
-
-	_, err = conn.Write(buf)
+	pb.SetPayload(data)
+	err = pc.WritePacket(pb)
 	if err != nil {
 		return nil, err
 	}
 
-	//
-	// recv response
-	//
-
-	buf = make([]byte, 3)
-	_, err = io.ReadFull(conn, buf)
+	err = pc.ReadPacket(pb)
 	if err != nil {
 		return nil, err
 	}
+	if len(pb.payload) != 2 {
+		return nil, errors.New("unexpected resp size")
+	}
 
-	ip := binary.BigEndian.Uint16(buf[1:3])
-
-	return NewHost(NewPacketConn(conn), ip), nil
+	ip := binary.BigEndian.Uint16(pb.payload[0:2])
+	return NewHost(pc, ip), nil
 }
 
-// UpgradeHost 把连接升级为Host，并返回对端HostIP
-func (switcher *Switcher) UpgradeHost(conn net.Conn) (*switchContext, error) {
-	//
-	// recv request
-	//
-	head := make([]byte, 3)
-	_, err := io.ReadFull(conn, head)
-	if err != nil {
-		return nil, err
+func (switcher *Switcher) UpgradeConnToHost(conn net.Conn) (*switchContext, error) {
+	if switcher.password != "" {
+		cc, err := cipherconn.New(conn, switcher.password)
+		if err != nil {
+			return nil, err
+		}
+		conn = cc
 	}
-	payloadSize := binary.BigEndian.Uint16(head[1:3])
-	payload := make([]byte, payloadSize)
 
-	_, err = io.ReadFull(conn, payload)
+	return switcher.UpgradeToContext(NewPacketConnFromConn(conn))
+}
+
+// UpgradeToContext 把连接升级为Host，并返回对端HostIP
+func (switcher *Switcher) UpgradeToContext(pc *PacketConn) (retCtx *switchContext, retErr error) {
+	pb := NewPacketBufs()
+	err := pc.ReadPacket(pb)
 	if err != nil {
 		return nil, err
 	}
 
 	var req HostRequest
-	err = json.Unmarshal(payload, &req)
+	err = json.Unmarshal(pb.payload, &req)
 	if err != nil {
 		return nil, err
 	}
@@ -114,24 +110,18 @@ func (switcher *Switcher) UpgradeHost(conn net.Conn) (*switchContext, error) {
 	}
 
 	//
-	// add dns record
-	//
-
-	//
 	// send response
 	//
-	resp := make([]byte, 3)
-	binary.BigEndian.PutUint16(resp[1:3], ip)
-	wn, err := conn.Write(resp)
+	resp := make([]byte, 2)
+	binary.BigEndian.PutUint16(resp[0:2], ip)
+	pb.SetPayload(resp)
+	err = pc.WritePacket(pb)
 	if err != nil {
 		return nil, err
 	}
-	if wn != len(resp) {
-		return nil, errors.New("write failed")
-	}
 
 	return &switchContext{
-		host:   NewSwitcherHost(switcher, NewPacketConn(conn)),
+		host:   NewSwitcherHost(switcher, pc),
 		ip:     ip,
 		domain: req.Domain,
 		mac:    req.Mac,

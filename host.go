@@ -9,6 +9,13 @@ import (
 )
 
 type HostIP = uint16
+
+const (
+	MinIP      = HostIP(1000)
+	SwitcherIP = HostIP(0xFFFF)
+	LocalIP    = HostIP(0)
+)
+
 type Host struct {
 	pc *PacketConn
 
@@ -41,7 +48,7 @@ func NewHost(pc *PacketConn, ip HostIP) *Host {
 func NewSwitcherHost(switcher *Switcher, pc *PacketConn) *Host {
 	host := &Host{
 		pc:       pc,
-		ip:       0xffff,
+		ip:       SwitcherIP,
 		switcher: switcher,
 	}
 	host.init()
@@ -50,8 +57,8 @@ func NewSwitcherHost(switcher *Switcher, pc *PacketConn) *Host {
 
 func (host *Host) init() {
 	host.availablePorts = make(chan uint16, 65535)
-	for i := 1000; i < 65536; i++ {
-		host.availablePorts <- uint16(i)
+	for i := MinIP; i < SwitcherIP; i++ {
+		host.availablePorts <- i
 	}
 }
 
@@ -233,11 +240,19 @@ func (host *Host) writePacket(
 }
 
 func (host *Host) LocalAddr() net.Addr {
-	return host.pc.raw.LocalAddr()
+	it, ok := host.pc.Origin().(interface{ LocalAddr() net.Addr })
+	if !ok {
+		return nil
+	}
+	return it.LocalAddr()
 }
 
 func (host *Host) RemoteAddr() net.Addr {
-	return host.pc.raw.RemoteAddr()
+	it, ok := host.pc.Origin().(interface{ RemoteAddr() net.Addr })
+	if !ok {
+		return nil
+	}
+	return it.RemoteAddr()
 }
 
 func (host *Host) IP() HostIP {
