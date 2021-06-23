@@ -72,7 +72,7 @@ func UpgradeToHost(pc *PacketConn, req *HostRequest) (retHost *Host, retErr erro
 	return NewHost(pc, ip), nil
 }
 
-func (switcher *Switcher) UpgradeConnToHost(conn net.Conn) (*switchContext, error) {
+func (switcher *Switcher) UpgradeConnToContext(conn net.Conn) (*switchContext, error) {
 	if switcher.password != "" {
 		cc, err := cipherconn.New(conn, switcher.password)
 		if err != nil {

@@ -36,7 +36,7 @@ func TestSwitcherBase(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		switcher := NewSwitcher(nil, "")
-		ctx, err := switcher.UpgradeConnToHost(c2)
+		ctx, err := switcher.UpgradeConnToContext(c2)
 		if err != nil {
 			t.Error(err)
 			return
