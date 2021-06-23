@@ -174,6 +174,7 @@ func (ws *wsPacketIO) Close() error {
 type PacketConn struct {
 	PacketIO
 	chanPacketBufs chan *PacketBufs
+	onceClose      sync.Once
 }
 
 // NewPacketConnFromConn 基于原始TCP连接进行协议升级
@@ -233,4 +234,13 @@ func (pc *PacketConn) WriteLoop() error {
 		}
 	}
 	return nil
+}
+
+func (pc *PacketConn) Close() error {
+	var err error
+	pc.onceClose.Do(func() {
+		err = pc.PacketIO.Close()
+		close(pc.chanPacketBufs)
+	})
+	return err
 }
