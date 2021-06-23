@@ -195,8 +195,8 @@ func (stream *Stream) open(domain string) error {
 	select {
 	case <-stream.chanOpenACK:
 		return nil
-	case <-time.After(time.Second * 3):
-		return errors.New("timeout")
+	case <-time.After(time.Second * 300):
+		return errors.New("open stream timeout")
 	}
 }
 

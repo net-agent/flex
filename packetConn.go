@@ -11,6 +11,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const logRawPacket = false
+
 type PacketIO interface {
 	Origin() interface{}
 	WritePacket(pb *PacketBufs) error
@@ -41,6 +43,15 @@ func (c *connPacketIO) ReadPacket(pb *PacketBufs) error {
 	if err != nil {
 		c.conn.Close()
 	}
+
+	if logRawPacket {
+		payload := ""
+		if pb.head[0] == CmdOpenStream {
+			payload = string(pb.payload)
+		}
+		log.Printf("%v %v->%v %v %v\n", pb.head.CmdStr(), pb.head.Src(), pb.head.Dist(), pb.head, payload)
+	}
+
 	return err
 }
 
@@ -85,7 +96,8 @@ func (c *connPacketIO) Close() error {
 // websocket conn implement
 //
 type wsPacketIO struct {
-	conn *websocket.Conn
+	conn  *websocket.Conn
+	wlock sync.Mutex
 }
 
 func NewWsPacketIO(wsconn *websocket.Conn) PacketIO {
@@ -98,14 +110,28 @@ func (ws *wsPacketIO) Origin() interface{} {
 	return ws.conn
 }
 
-func (ws *wsPacketIO) WritePacket(pb *PacketBufs) error {
+func (ws *wsPacketIO) WritePacket(pb *PacketBufs) (ret error) {
+	ws.wlock.Lock()
+	defer func() {
+		if ret != nil {
+			ws.conn.Close()
+		}
+		ws.wlock.Unlock()
+	}()
 	if len(pb.payload) == 0 {
 		return ws.conn.WriteMessage(websocket.BinaryMessage, pb.head[:])
 	}
 	buf := make([]byte, packetHeaderSize+len(pb.payload))
 	copy(buf[:packetHeaderSize], pb.head[:])
 	copy(buf[packetHeaderSize:], pb.payload)
-	return ws.conn.WriteMessage(websocket.BinaryMessage, buf)
+	err := ws.conn.WriteMessage(websocket.BinaryMessage, buf)
+	if err != nil {
+		return err
+	}
+	if pb.writeDone != nil {
+		pb.writeDone <- struct{}{}
+	}
+	return nil
 }
 
 func (ws *wsPacketIO) ReadPacket(pb *PacketBufs) error {
@@ -120,6 +146,15 @@ func (ws *wsPacketIO) ReadPacket(pb *PacketBufs) error {
 			}
 			copy(pb.head[:], buf[:packetHeaderSize])
 			pb.payload = buf[packetHeaderSize:]
+
+			if logRawPacket {
+				payload := ""
+				if pb.head[0] == CmdOpenStream {
+					payload = string(pb.payload)
+				}
+				log.Printf("%v %v->%v %v %v\n", pb.head.CmdStr(), pb.head.Src(), pb.head.Dist(), pb.head, payload)
+			}
+
 			return nil
 		}
 
@@ -180,7 +215,7 @@ func (pc *PacketConn) NonblockWritePacket(pb *PacketBufs, waitResult bool) error
 		case <-done:
 			return nil
 		case <-time.After(time.Second * 5):
-			return errors.New("timeout")
+			return errors.New("nonblock write timeout")
 		}
 	}
 
