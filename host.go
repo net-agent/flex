@@ -18,7 +18,8 @@ const (
 )
 
 type Host struct {
-	pc *PacketConn
+	pc      *PacketConn
+	runLock sync.Mutex
 
 	// streams 用于路由对端发过来的数据
 	// streamID -> stream
@@ -34,14 +35,23 @@ type Host struct {
 	switcher *Switcher
 }
 
-// NewHost agent side host
-func NewHost(pc *PacketConn, ip HostIP) *Host {
+// NewHostAndRun agent side host
+func NewHostAndRun(pc *PacketConn, ip HostIP) *Host {
 	host := &Host{
 		pc: pc,
 		ip: ip,
 	}
 	host.init()
 	go host.Run()
+	return host
+}
+
+// NewHost agent side host
+func NewHost(pc *PacketConn, ip HostIP) *Host {
+	host := &Host{
+		pc: pc, ip: ip,
+	}
+	host.init()
 	return host
 }
 
@@ -52,7 +62,6 @@ func NewSwitcherHost(switcher *Switcher, pc *PacketConn) *Host {
 		ip:       SwitcherIP,
 		switcher: switcher,
 	}
-	host.init()
 	return host
 }
 
@@ -64,6 +73,9 @@ func (host *Host) init() {
 }
 
 func (host *Host) Run() {
+	host.runLock.Lock()
+	defer host.runLock.Unlock()
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -80,6 +92,18 @@ func (host *Host) Run() {
 
 	wg.Wait()
 	log.Println("host stopped.")
+}
+
+func (host *Host) Replace(pc *PacketConn) error {
+	host.runLock.Lock()
+	defer host.runLock.Unlock()
+
+	if host.pc != nil {
+		host.pc.Close()
+	}
+	host.pc = pc
+
+	return nil
 }
 
 // Dial 请求对端创建连接

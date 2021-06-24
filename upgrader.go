@@ -54,7 +54,7 @@ func UpgradeToHost(pc *PacketConn, req *HostRequest) (retHost *Host, retErr erro
 	}
 
 	ip := binary.BigEndian.Uint16(pb.payload[0:2])
-	return NewHost(pc, ip), nil
+	return NewHostAndRun(pc, ip), nil
 }
 
 // UpgradeToContext 把连接升级为Host，并返回对端HostIP
@@ -95,6 +95,7 @@ func (switcher *Switcher) UpgradeToContext(pc *PacketConn) (retCtx *switchContex
 
 	return &switchContext{
 		host:   NewSwitcherHost(switcher, pc),
+		id:     switcher.NextCtxID(),
 		ip:     ip,
 		domain: req.Domain,
 		mac:    req.Mac,
@@ -104,4 +105,11 @@ func (switcher *Switcher) UpgradeToContext(pc *PacketConn) (retCtx *switchContex
 func isValidDomain(domain string) bool {
 	re := regexp.MustCompile(`^[a-zA-Z]([a-zA-Z0-9_.]){2,255}[a-zA-Z0-9_]$`)
 	return re.MatchString(domain)
+}
+
+func (sw *Switcher) NextCtxID() uint64 {
+	r := rand.Uint32()
+	i := atomic.AddUint32(&sw.ctxIndex, 1)
+
+	return (uint64(r) << 32) | uint64(i)
 }

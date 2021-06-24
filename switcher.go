@@ -2,17 +2,20 @@ package flex
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
 
 type switchContext struct {
 	host   *Host
+	id     uint64 // 用于断线重连
 	ip     HostIP
 	domain string
 	mac    string
@@ -40,6 +43,8 @@ type Switcher struct {
 	//
 	// context indexs
 	//
+	waitReconn    sync.Map // 等待重连
+	ctxIndex      uint32
 	ctxs          sync.Map // map[ip HostIP]*switchContext
 	domainCtxs    sync.Map // map[domain string]*switchContext
 	activeCtxsLen int32
@@ -144,14 +149,26 @@ func (switcher *Switcher) ServeConn(conn net.Conn) {
 func (switcher *Switcher) ServeContext(ctx *switchContext, remote string) {
 
 	switcher.attach(ctx)
+	hostInfo := fmt.Sprintf("host(domain=%v ip=%v remote=%v)", ctx.domain, ctx.ip, remote)
 
-	log.Printf("host(domain=%v ip=%v remote=%v active=%v) joined\n",
-		ctx.domain, ctx.ip, remote, atomic.AddInt32(&switcher.activeCtxsLen, 1))
+	log.Printf("%v joined, active=%v\n", hostInfo, atomic.AddInt32(&switcher.activeCtxsLen, 1))
 
-	err := switcher.contextReadLoop(ctx)
+	for {
+		switcher.contextReadLoop(ctx)
+		pc, err := switcher.WaitReconnect(ctx.id)
+		if err != nil {
+			log.Printf("%v wait reconnect failed: %v\n", hostInfo, err)
+			break
+		}
+		err = ctx.host.Replace(pc)
+		if err != nil {
+			log.Printf("%v replace conn failed: %v\n", hostInfo, err)
+			break
+		}
+		log.Printf("%v reconnected\n", hostInfo)
+	}
 
-	log.Printf("host(domain=%v ip=%v remote=%v active=%v) exit. err=%v\n",
-		ctx.domain, ctx.ip, remote, atomic.AddInt32(&switcher.activeCtxsLen, -1), err)
+	log.Printf("%v exit, active=%v\n", hostInfo, atomic.AddInt32(&switcher.activeCtxsLen, -1))
 
 	switcher.detach(ctx)
 }
@@ -189,6 +206,42 @@ func (switcher *Switcher) contextReadLoop(ctx *switchContext) error {
 		default:
 			go switcher.switchData(pb)
 		}
+	}
+}
+
+func (switcher *Switcher) WaitReconnect(ctxid uint64) (*PacketConn, error) {
+	ch := make(chan *PacketConn, 1)
+	_, loaded := switcher.waitReconn.LoadOrStore(ctxid, ch)
+	if loaded {
+		return nil, errors.New("conflict ctxid")
+	}
+
+	select {
+	case pb, ok := <-ch:
+		if !ok {
+			return nil, errors.New("wait chan close unexpected")
+		}
+		return pb, nil
+	case <-time.After(time.Second * 60):
+		return nil, errors.New("wait chan timeout")
+	}
+}
+
+func (switcher *Switcher) PushReconn(ctxid uint64, pb *PacketConn) error {
+	it, found := switcher.waitReconn.LoadAndDelete(ctxid)
+	if !found {
+		return errors.New("ctxid not found in wait map")
+	}
+	ch, ok := it.(chan *PacketConn)
+	if !ok {
+		return errors.New("convert to channel failed")
+	}
+
+	select {
+	case ch <- pb:
+		return nil
+	case <-time.After(time.Second * 15):
+		return errors.New("push to wait map failed")
 	}
 }
 
