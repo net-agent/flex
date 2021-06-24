@@ -42,7 +42,7 @@ func UpgradeConnToHost(conn net.Conn, password string, req *HostRequest) (*Host,
 		conn = cc
 	}
 
-	return UpgradeToHost(NewPacketConnFromConn(conn), req)
+	return UpgradeToHost(NewTcpPacketConn(conn), req)
 }
 
 func UpgradeToHost(pc *PacketConn, req *HostRequest) (retHost *Host, retErr error) {
@@ -81,7 +81,7 @@ func (switcher *Switcher) UpgradeConnToContext(conn net.Conn) (*switchContext, e
 		conn = cc
 	}
 
-	return switcher.UpgradeToContext(NewPacketConnFromConn(conn))
+	return switcher.UpgradeToContext(NewTcpPacketConn(conn))
 }
 
 // UpgradeToContext 把连接升级为Host，并返回对端HostIP

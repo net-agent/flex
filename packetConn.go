@@ -2,7 +2,6 @@ package flex
 
 import (
 	"errors"
-	"io"
 	"log"
 	"net"
 	"sync"
@@ -15,9 +14,9 @@ const logRawPacket = false
 
 type PacketIO interface {
 	Origin() interface{}
-	WritePacket(pb *PacketBufs) error
 	ReadPacket(pb *PacketBufs) error
-	io.Closer
+	WritePacket(pb *PacketBufs) error
+	Close() error
 }
 
 //
@@ -28,7 +27,7 @@ type connPacketIO struct {
 	wlock sync.Mutex
 }
 
-func NewConnPacketIO(conn net.Conn) PacketIO {
+func NewTcpPacketIO(conn net.Conn) PacketIO {
 	return &connPacketIO{
 		conn: conn,
 	}
@@ -177,24 +176,19 @@ type PacketConn struct {
 	onceClose      sync.Once
 }
 
-// NewPacketConnFromConn 基于原始TCP连接进行协议升级
-func NewPacketConnFromConn(conn net.Conn) *PacketConn {
+// NewTcpPacketConn 基于原始TCP连接进行协议升级
+func NewTcpPacketConn(conn net.Conn) *PacketConn {
 	return &PacketConn{
-		PacketIO:       NewConnPacketIO(conn),
+		PacketIO:       NewTcpPacketIO(conn),
 		chanPacketBufs: make(chan *PacketBufs, 1024),
 	}
 }
 
-func NewPacketConnFromWebsocket(wsconn *websocket.Conn) *PacketConn {
+func NewWsPacketConn(wsconn *websocket.Conn) *PacketConn {
 	return &PacketConn{
 		PacketIO:       NewWsPacketIO(wsconn),
 		chanPacketBufs: make(chan *PacketBufs, 1024),
 	}
-}
-
-// todo: 基于WebSocket协议升级为PacketConn（复用ws的Message读写）
-func NewPacketWsConn(wsconn net.Conn) *PacketConn {
-	return nil
 }
 
 func (pc *PacketConn) NonblockWritePacket(pb *PacketBufs, waitResult bool) error {

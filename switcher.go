@@ -103,7 +103,7 @@ func (switcher *Switcher) ServeWebsocket(wsconn *websocket.Conn) {
 	defer wsconn.Close()
 	remote := wsconn.RemoteAddr().String()
 
-	ctx, err := switcher.UpgradeToContext(NewPacketConnFromWebsocket(wsconn))
+	ctx, err := switcher.UpgradeToContext(NewWsPacketConn(wsconn))
 	if err != nil {
 		log.Printf("host(remote=%v) upgrade failed: %v\n", remote, err)
 		return
@@ -146,7 +146,7 @@ func (switcher *Switcher) ServeConn(conn net.Conn) {
 		conn = cc
 	}
 
-	ctx, err := switcher.UpgradeToContext(NewPacketConnFromConn(conn))
+	ctx, err := switcher.UpgradeToContext(NewTcpPacketConn(conn))
 	if err != nil {
 		log.Printf("host(remote=%v) upgrade failed: %v\n", remote, err)
 		return
