@@ -81,7 +81,7 @@ func TestUpgraderAndSwitcher(t *testing.T) {
 	}
 
 	// 升级协议
-	h1, err := UpgradeConnToHost(conn, password, &HostRequest{Domain: "test", Mac: ""})
+	h1, err := UpgradeToHost(NewTcpPacketConn(conn), &HostRequest{Domain: "test", Mac: ""})
 	if err != nil {
 		t.Error(err)
 		return
@@ -98,7 +98,7 @@ func TestUpgraderAndSwitcher(t *testing.T) {
 	}
 
 	// 升级协议
-	h2, err := UpgradeConnToHost(conn, password, &HostRequest{Domain: "test2", Mac: ""})
+	h2, err := UpgradeToHost(NewTcpPacketConn(conn), &HostRequest{Domain: "test2", Mac: ""})
 	if err != nil {
 		t.Error(err)
 		return

@@ -6,12 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
-	"net"
 	"regexp"
 	"sync/atomic"
 	"time"
-
-	"github.com/net-agent/cipherconn"
 )
 
 func init() {
@@ -31,18 +28,6 @@ type HostRequest struct {
 
 type HostResponse struct {
 	IP HostIP
-}
-
-func UpgradeConnToHost(conn net.Conn, password string, req *HostRequest) (*Host, error) {
-	if password != "" {
-		cc, err := cipherconn.New(conn, password)
-		if err != nil {
-			return nil, err
-		}
-		conn = cc
-	}
-
-	return UpgradeToHost(NewTcpPacketConn(conn), req)
 }
 
 func UpgradeToHost(pc *PacketConn, req *HostRequest) (retHost *Host, retErr error) {
@@ -70,18 +55,6 @@ func UpgradeToHost(pc *PacketConn, req *HostRequest) (retHost *Host, retErr erro
 
 	ip := binary.BigEndian.Uint16(pb.payload[0:2])
 	return NewHost(pc, ip), nil
-}
-
-func (switcher *Switcher) UpgradeConnToContext(conn net.Conn) (*switchContext, error) {
-	if switcher.password != "" {
-		cc, err := cipherconn.New(conn, switcher.password)
-		if err != nil {
-			return nil, err
-		}
-		conn = cc
-	}
-
-	return switcher.UpgradeToContext(NewTcpPacketConn(conn))
 }
 
 // UpgradeToContext 把连接升级为Host，并返回对端HostIP

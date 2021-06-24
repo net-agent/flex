@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 
 	"github.com/gorilla/websocket"
-	"github.com/net-agent/cipherconn"
 )
 
 type switchContext struct {
@@ -31,8 +30,6 @@ func (sw *Switcher) detach(ctx *switchContext) {
 
 // Switcher packet交换器，根据ip、port进行路由和分发
 type Switcher struct {
-	password string
-
 	// 分发由host传上来的数据包
 	dataChans []chan *PacketBufs // 用于保证Push的顺序和性能，同时避免writePool死锁
 
@@ -50,7 +47,6 @@ type Switcher struct {
 
 func NewSwitcher(staticIP map[string]HostIP, password string) *Switcher {
 	switcher := &Switcher{
-		password:    password,
 		availableIP: make(chan HostIP, 0xFFFF),
 	}
 
@@ -136,15 +132,6 @@ func (switcher *Switcher) Serve(l net.Listener) {
 func (switcher *Switcher) ServeConn(conn net.Conn) {
 	defer conn.Close()
 	remote := conn.RemoteAddr().String()
-
-	if switcher.password != "" {
-		cc, err := cipherconn.New(conn, switcher.password)
-		if err != nil {
-			log.Printf("host(remote=%v) upgrade failed: %v\n", remote, err)
-			return
-		}
-		conn = cc
-	}
 
 	ctx, err := switcher.UpgradeToContext(NewTcpPacketConn(conn))
 	if err != nil {
