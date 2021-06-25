@@ -9,26 +9,39 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/gorilla/websocket"
 )
 
 type switchContext struct {
-	host   *Host
-	id     uint64 // 用于断线重连
-	ip     HostIP
-	domain string
-	mac    string
+	host           *Host
+	id             uint64 // 用于断线重连
+	ip             HostIP
+	domain         string
+	mac            string
+	chanRecoverErr chan error
+}
+
+func (ctx *switchContext) TryRecover() error {
+	select {
+	case err, ok := <-ctx.chanRecoverErr:
+		if !ok {
+			return errors.New("unexpected chan close error")
+		}
+		return err
+	case <-time.After(time.Minute):
+		return errors.New("wait connection timeout")
+	}
 }
 
 func (sw *Switcher) attach(ctx *switchContext) {
 	sw.domainCtxs.Store(ctx.domain, ctx)
 	sw.ctxs.Store(ctx.ip, ctx)
+	sw.ctxids.Store(ctx.id, ctx)
 }
 
 func (sw *Switcher) detach(ctx *switchContext) {
 	sw.domainCtxs.Delete(ctx.domain)
 	sw.ctxs.Delete(ctx.ip)
+	sw.ctxids.Delete(ctx.id)
 }
 
 // Switcher packet交换器，根据ip、port进行路由和分发
@@ -43,8 +56,8 @@ type Switcher struct {
 	//
 	// context indexs
 	//
-	waitReconn    sync.Map // 等待重连
 	ctxIndex      uint32
+	ctxids        sync.Map // 等待重连 map[uint64]*switchContext
 	ctxs          sync.Map // map[ip HostIP]*switchContext
 	domainCtxs    sync.Map // map[domain string]*switchContext
 	activeCtxsLen int32
@@ -100,18 +113,6 @@ func (switcher *Switcher) selectIP(mac string) (HostIP, error) {
 	}
 }
 
-func (switcher *Switcher) ServeWebsocket(wsconn *websocket.Conn) {
-	defer wsconn.Close()
-	remote := wsconn.RemoteAddr().String()
-
-	ctx, err := switcher.UpgradeToContext(NewWsPacketConn(wsconn))
-	if err != nil {
-		log.Printf("host(remote=%v) upgrade failed: %v\n", remote, err)
-		return
-	}
-	switcher.ServeContext(ctx, remote)
-}
-
 func (switcher *Switcher) Run(addr string) {
 	l, err := net.Listen("tcp4", addr)
 	if err != nil {
@@ -129,18 +130,21 @@ func (switcher *Switcher) Serve(l net.Listener) {
 		if err != nil {
 			break
 		}
-		go switcher.ServeConn(conn)
+		go switcher.ServePacketConn(NewTcpPacketConn(conn))
 	}
 	log.Println("switcher stopped")
 }
 
-func (switcher *Switcher) ServeConn(conn net.Conn) {
-	defer conn.Close()
-	remote := conn.RemoteAddr().String()
+func (switcher *Switcher) ServePacketConn(pc *PacketConn) {
+	defer pc.Close()
+	remote := pc.Origin().(interface{ RemoteAddr() net.Addr }).RemoteAddr().String()
 
-	ctx, err := switcher.UpgradeToContext(NewTcpPacketConn(conn))
+	ctx, err := switcher.UpgradeToContext(pc)
 	if err != nil {
-		log.Printf("host(remote=%v) upgrade failed: %v\n", remote, err)
+		// err == Reconnected 时，代表该连接为重连连接，忽略此错误
+		if err != ErrReconnected {
+			log.Printf("host(remote=%v) upgrade failed: %v\n", remote, err)
+		}
 		return
 	}
 	switcher.ServeContext(ctx, remote)
@@ -148,28 +152,22 @@ func (switcher *Switcher) ServeConn(conn net.Conn) {
 
 func (switcher *Switcher) ServeContext(ctx *switchContext, remote string) {
 
-	switcher.attach(ctx)
 	hostInfo := fmt.Sprintf("host(domain=%v ip=%v remote=%v)", ctx.domain, ctx.ip, remote)
 
+	switcher.attach(ctx)
 	log.Printf("%v joined, active=%v\n", hostInfo, atomic.AddInt32(&switcher.activeCtxsLen, 1))
 
-	for {
-		switcher.contextReadLoop(ctx)
-		pc, err := switcher.WaitReconnect(ctx.id)
-		if err != nil {
-			log.Printf("%v wait reconnect failed: %v\n", hostInfo, err)
-			break
-		}
-		err = ctx.host.Replace(pc)
-		if err != nil {
-			log.Printf("%v replace conn failed: %v\n", hostInfo, err)
-			break
-		}
-		log.Printf("%v reconnected\n", hostInfo)
+	switcher.contextReadLoop(ctx)
+	log.Printf("%v readloop stopped, waiting for recover.\n", hostInfo)
+
+	// 尝试等待重连，并恢复当前会话
+	err := ctx.TryRecover()
+	if err == nil {
+		log.Printf("%v recovered\n", hostInfo)
+		return
 	}
 
 	log.Printf("%v exit, active=%v\n", hostInfo, atomic.AddInt32(&switcher.activeCtxsLen, -1))
-
 	switcher.detach(ctx)
 }
 
@@ -178,6 +176,8 @@ func (switcher *Switcher) ServeContext(ctx *switchContext, remote string) {
 // 不断读取连接中的数据，并根据DistIP对数据进行分发
 //
 func (switcher *Switcher) contextReadLoop(ctx *switchContext) error {
+	defer ctx.host.pc.Close()
+
 	for {
 		pb := NewPacketBufs()
 
@@ -206,42 +206,6 @@ func (switcher *Switcher) contextReadLoop(ctx *switchContext) error {
 		default:
 			go switcher.switchData(pb)
 		}
-	}
-}
-
-func (switcher *Switcher) WaitReconnect(ctxid uint64) (*PacketConn, error) {
-	ch := make(chan *PacketConn, 1)
-	_, loaded := switcher.waitReconn.LoadOrStore(ctxid, ch)
-	if loaded {
-		return nil, errors.New("conflict ctxid")
-	}
-
-	select {
-	case pb, ok := <-ch:
-		if !ok {
-			return nil, errors.New("wait chan close unexpected")
-		}
-		return pb, nil
-	case <-time.After(time.Second * 60):
-		return nil, errors.New("wait chan timeout")
-	}
-}
-
-func (switcher *Switcher) PushReconn(ctxid uint64, pb *PacketConn) error {
-	it, found := switcher.waitReconn.LoadAndDelete(ctxid)
-	if !found {
-		return errors.New("ctxid not found in wait map")
-	}
-	ch, ok := it.(chan *PacketConn)
-	if !ok {
-		return errors.New("convert to channel failed")
-	}
-
-	select {
-	case ch <- pb:
-		return nil
-	case <-time.After(time.Second * 15):
-		return errors.New("push to wait map failed")
 	}
 }
 

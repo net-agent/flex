@@ -12,9 +12,9 @@ import (
 func testConnect(t *testing.T, switcher *Switcher, domain, mac string) (*Host, error) {
 	c1, c2 := net.Pipe()
 
-	go switcher.ServeConn(c2)
+	go switcher.ServePacketConn(NewTcpPacketConn(c2))
 
-	host, err := UpgradeToHost(NewTcpPacketConn(c1), &HostRequest{domain, mac})
+	host, _, err := UpgradeToHost(NewTcpPacketConn(c1), &HostRequest{domain, mac, 0})
 	if err != nil {
 		t.Error(err)
 		return nil, err
@@ -52,7 +52,7 @@ func TestSwitcherBase(t *testing.T) {
 	go func() {
 		defer wg.Done()
 
-		host, err := UpgradeToHost(NewTcpPacketConn(c1), &HostRequest{"test", "mac"})
+		host, _, err := UpgradeToHost(NewTcpPacketConn(c1), &HostRequest{"test", "mac", 0})
 		if err != nil {
 			t.Error(err)
 			return

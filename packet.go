@@ -118,3 +118,10 @@ func (pb *PacketBufs) SetPayload(buf []byte) {
 func (pb *PacketBufs) SetACKInfo(ack uint16) {
 	binary.BigEndian.PutUint16(pb.head[9:11], ack)
 }
+func (pb *PacketBufs) SetCtxid(ctxid uint64) {
+	pb.head[0] = 0
+	pb.head[1] = 0
+	pb.head[2] = 0
+	pb.head[3] = 1
+	binary.BigEndian.PutUint64(pb.head[4:8], ctxid)
+}
