@@ -173,6 +173,8 @@ func (ws *wsPacketIO) Close() error {
 type PacketConn struct {
 	PacketIO
 	chanPacketBufs chan *PacketBufs
+	chanLock       sync.RWMutex
+	chanClosed     bool
 	onceClose      sync.Once
 }
 
@@ -192,6 +194,12 @@ func NewWsPacketConn(wsconn *websocket.Conn) *PacketConn {
 }
 
 func (pc *PacketConn) NonblockWritePacket(pb *PacketBufs, waitResult bool) error {
+	pc.chanLock.RLock()
+	defer pc.chanLock.RUnlock()
+	if pc.chanClosed {
+		return errors.New("nonblocking chan closed")
+	}
+
 	var done chan struct{}
 
 	if waitResult {
@@ -233,8 +241,11 @@ func (pc *PacketConn) WriteLoop() error {
 func (pc *PacketConn) Close() error {
 	var err error
 	pc.onceClose.Do(func() {
-		err = pc.PacketIO.Close()
+		pc.chanLock.Lock()
+		pc.chanClosed = true
 		close(pc.chanPacketBufs)
+		pc.chanLock.Unlock()
+		err = pc.PacketIO.Close()
 	})
 	return err
 }
