@@ -2,7 +2,6 @@ package flex
 
 import (
 	"errors"
-	"log"
 	"net"
 	"strconv"
 	"sync"
@@ -81,17 +80,14 @@ func (host *Host) Run() {
 
 	go func() {
 		host.readLoop()
-		log.Println("host stop read")
 		wg.Done()
 	}()
 	go func() {
 		host.pc.WriteLoop()
-		log.Println("host stop write")
 		wg.Done()
 	}()
 
 	wg.Wait()
-	log.Println("host stopped.")
 }
 
 func (host *Host) Replace(pc *PacketConn) error {

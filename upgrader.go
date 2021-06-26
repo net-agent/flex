@@ -33,7 +33,7 @@ type HostResponse struct {
 	IP HostIP
 }
 
-func UpgradeToHost(pc *PacketConn, req *HostRequest) (retHost *Host, retCtxid uint64, retErr error) {
+func UpgradeToHost(pc *PacketConn, req *HostRequest, autoRun bool) (retHost *Host, retCtxid uint64, retErr error) {
 	var pb = NewPacketBufs()
 	//
 	// send request
@@ -64,7 +64,11 @@ func UpgradeToHost(pc *PacketConn, req *HostRequest) (retHost *Host, retCtxid ui
 		return nil, req.Ctxid, ErrReconnected
 	}
 
-	return NewHostAndRun(pc, ip), ctxid, nil
+	if autoRun {
+		return NewHostAndRun(pc, ip), ctxid, nil
+	}
+	return NewHost(pc, ip), ctxid, nil
+
 }
 
 // UpgradeToContext 把连接升级为Host，并返回对端HostIP
@@ -86,16 +90,18 @@ func (switcher *Switcher) UpgradeToContext(pc *PacketConn) (retCtx *switchContex
 	var respCtx *switchContext
 
 	// 尝试执行恢复逻辑
-	oldctx, err := switcher.RecoverCtx(req.Ctxid, pc)
+	oldctx, respErr := switcher.RecoverCtx(&req, pc)
 
-	switch err {
+	switch respErr {
 	case nil:
+		respErr = ErrReconnected
 		// 恢复成功，返回原有ctx
 		respIP = oldctx.ip
 		respCtxid = oldctx.id
 		respCtx = oldctx
 
 	case ErrCtxidNotFound:
+		respErr = nil
 		// 恢复失败，继续按照正常流程进行upgrade
 
 		if req.Domain == "" {
@@ -120,7 +126,7 @@ func (switcher *Switcher) UpgradeToContext(pc *PacketConn) (retCtx *switchContex
 
 	default:
 		// 恢复失败，出现意料之外的错误，终止upgrade
-		return nil, err
+		return nil, respErr
 	}
 
 	//
@@ -136,12 +142,17 @@ func (switcher *Switcher) UpgradeToContext(pc *PacketConn) (retCtx *switchContex
 		return nil, err
 	}
 
-	return respCtx, nil
+	return respCtx, respErr
 }
 
-func (switcher *Switcher) RecoverCtx(ctxid uint64, pc *PacketConn) (*switchContext, error) {
-	it, found := switcher.ctxids.LoadAndDelete(ctxid)
+// RecoverCtx 根据ctxid和pconn，恢复正在等待重连的ctx
+func (switcher *Switcher) RecoverCtx(req *HostRequest, pc *PacketConn) (*switchContext, error) {
+	it, found := switcher.ctxids.LoadAndDelete(req.Ctxid)
 	if !found {
+		_, domainExist := switcher.domainCtxs.Load(req.Domain)
+		if domainExist {
+			return nil, errors.New("domain conflict")
+		}
 		return nil, ErrCtxidNotFound
 	}
 

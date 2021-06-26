@@ -81,7 +81,10 @@ func TestUpgraderAndSwitcher(t *testing.T) {
 	}
 
 	// 升级协议
-	h1, _, err := UpgradeToHost(NewTcpPacketConn(conn), &HostRequest{Domain: "test", Mac: ""})
+	h1, _, err := UpgradeToHost(
+		NewTcpPacketConn(conn),
+		&HostRequest{Domain: "test", Mac: ""},
+		true)
 	if err != nil {
 		t.Error(err)
 		return
@@ -98,7 +101,10 @@ func TestUpgraderAndSwitcher(t *testing.T) {
 	}
 
 	// 升级协议
-	h2, _, err := UpgradeToHost(NewTcpPacketConn(conn), &HostRequest{Domain: "test2", Mac: ""})
+	h2, _, err := UpgradeToHost(
+		NewTcpPacketConn(conn),
+		&HostRequest{Domain: "test2", Mac: ""},
+		true)
 	if err != nil {
 		t.Error(err)
 		return
@@ -138,7 +144,10 @@ func TestUpgraderAndSwitcherForWebsocket(t *testing.T) {
 	}
 
 	// 升级协议
-	h1, _, err := UpgradeToHost(NewWsPacketConn(wsconn), &HostRequest{Domain: "test", Mac: ""})
+	h1, _, err := UpgradeToHost(
+		NewWsPacketConn(wsconn),
+		&HostRequest{Domain: "test", Mac: ""},
+		true)
 	if err != nil {
 		t.Error(err)
 		return
@@ -154,7 +163,10 @@ func TestUpgraderAndSwitcherForWebsocket(t *testing.T) {
 		return
 	}
 
-	h2, _, err := UpgradeToHost(NewWsPacketConn(wsconn), &HostRequest{Domain: "test2", Mac: ""})
+	h2, _, err := UpgradeToHost(
+		NewWsPacketConn(wsconn),
+		&HostRequest{Domain: "test2", Mac: ""},
+		true)
 	if err != nil {
 		t.Error(err)
 		return

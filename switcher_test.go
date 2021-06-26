@@ -14,7 +14,7 @@ func testConnect(t *testing.T, switcher *Switcher, domain, mac string) (*Host, e
 
 	go switcher.ServePacketConn(NewTcpPacketConn(c2))
 
-	host, _, err := UpgradeToHost(NewTcpPacketConn(c1), &HostRequest{domain, mac, 0})
+	host, _, err := UpgradeToHost(NewTcpPacketConn(c1), &HostRequest{domain, mac, 0}, true)
 	if err != nil {
 		t.Error(err)
 		return nil, err
@@ -52,7 +52,7 @@ func TestSwitcherBase(t *testing.T) {
 	go func() {
 		defer wg.Done()
 
-		host, _, err := UpgradeToHost(NewTcpPacketConn(c1), &HostRequest{"test", "mac", 0})
+		host, _, err := UpgradeToHost(NewTcpPacketConn(c1), &HostRequest{"test", "mac", 0}, true)
 		if err != nil {
 			t.Error(err)
 			return

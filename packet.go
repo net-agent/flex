@@ -17,9 +17,9 @@ const (
 )
 
 type PacketBufs struct {
-	head      packetHeader
-	payload   []byte
-	writeDone chan struct{}
+	head       packetHeader
+	payload    []byte
+	chWriteErr chan error
 }
 
 func NewPacketBufs() *PacketBufs {

@@ -27,15 +27,21 @@ func (ctx *switchContext) TryRecover() error {
 			return errors.New("unexpected chan close error")
 		}
 		return err
-	case <-time.After(time.Minute):
+	case <-time.After(time.Second * 5):
 		return errors.New("wait connection timeout")
 	}
 }
 
-func (sw *Switcher) attach(ctx *switchContext) {
-	sw.domainCtxs.Store(ctx.domain, ctx)
+func (sw *Switcher) attach(ctx *switchContext) error {
+	_, loaded := sw.domainCtxs.LoadOrStore(ctx.domain, ctx)
+	if loaded {
+		return errors.New("exist domain")
+	}
+
 	sw.ctxs.Store(ctx.ip, ctx)
 	sw.ctxids.Store(ctx.id, ctx)
+
+	return nil
 }
 
 func (sw *Switcher) detach(ctx *switchContext) {
@@ -136,35 +142,44 @@ func (switcher *Switcher) Serve(l net.Listener) {
 }
 
 func (switcher *Switcher) ServePacketConn(pc *PacketConn) {
-	defer pc.Close()
 	remote := pc.Origin().(interface{ RemoteAddr() net.Addr }).RemoteAddr().String()
 
 	ctx, err := switcher.UpgradeToContext(pc)
-	if err != nil {
-		// err == Reconnected 时，代表该连接为重连连接，忽略此错误
-		if err != ErrReconnected {
-			log.Printf("host(remote=%v) upgrade failed: %v\n", remote, err)
-		}
+	switch err {
+	case ErrReconnected:
+		return
+	case nil:
+		switcher.ServeContext(ctx, remote)
+		pc.Close()
+	default:
+		log.Printf("upgrade failed, err=%v\n", err)
+		pc.Close()
 		return
 	}
-	switcher.ServeContext(ctx, remote)
 }
 
 func (switcher *Switcher) ServeContext(ctx *switchContext, remote string) {
 
 	hostInfo := fmt.Sprintf("host(domain=%v ip=%v remote=%v)", ctx.domain, ctx.ip, remote)
 
-	switcher.attach(ctx)
+	err := switcher.attach(ctx)
+	if err != nil {
+		log.Printf("%v attach failed, err=%v\n", hostInfo, err)
+		return
+	}
 	log.Printf("%v joined, active=%v\n", hostInfo, atomic.AddInt32(&switcher.activeCtxsLen, 1))
 
-	switcher.contextReadLoop(ctx)
-	log.Printf("%v readloop stopped, waiting for recover.\n", hostInfo)
+	for {
+		switcher.contextReadLoop(ctx)
+		log.Printf("%v readloop stopped, waiting for recover.\n", hostInfo)
 
-	// 尝试等待重连，并恢复当前会话
-	err := ctx.TryRecover()
-	if err == nil {
+		// 尝试等待重连，并恢复当前会话
+		if err := ctx.TryRecover(); err != nil {
+			log.Printf("%v recover failed, err=%v\n", hostInfo, err)
+			break
+		}
+
 		log.Printf("%v recovered\n", hostInfo)
-		return
 	}
 
 	log.Printf("%v exit, active=%v\n", hostInfo, atomic.AddInt32(&switcher.activeCtxsLen, -1))

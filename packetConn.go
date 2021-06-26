@@ -81,8 +81,8 @@ func (c *connPacketIO) WritePacket(pb *PacketBufs) (ret error) {
 		}
 	}
 
-	if pb.writeDone != nil {
-		pb.writeDone <- struct{}{}
+	if pb.chWriteErr != nil {
+		pb.chWriteErr <- nil
 	}
 	return nil
 }
@@ -127,8 +127,8 @@ func (ws *wsPacketIO) WritePacket(pb *PacketBufs) (ret error) {
 	if err != nil {
 		return err
 	}
-	if pb.writeDone != nil {
-		pb.writeDone <- struct{}{}
+	if pb.chWriteErr != nil {
+		pb.chWriteErr <- nil
 	}
 	return nil
 }
@@ -200,23 +200,26 @@ func (pc *PacketConn) NonblockWritePacket(pb *PacketBufs, waitResult bool) error
 		return errors.New("nonblocking chan closed")
 	}
 
-	var done chan struct{}
+	var done chan error
 
 	if waitResult {
-		done = make(chan struct{}, 1)
+		done = make(chan error, 1)
 		defer func() {
 			close(done)
-			pb.writeDone = nil
+			pb.chWriteErr = nil
 		}()
-		pb.writeDone = done
+		pb.chWriteErr = done
 	}
 
 	pc.chanPacketBufs <- pb
 
 	if waitResult {
 		select {
-		case <-done:
-			return nil
+		case err, ok := <-done:
+			if !ok {
+				return errors.New("nonblock write chan closed")
+			}
+			return err
 		case <-time.After(time.Second * 5):
 			return errors.New("nonblock write timeout")
 		}
@@ -241,11 +244,22 @@ func (pc *PacketConn) WriteLoop() error {
 func (pc *PacketConn) Close() error {
 	var err error
 	pc.onceClose.Do(func() {
+		err = pc.PacketIO.Close()
+
 		pc.chanLock.Lock()
 		pc.chanClosed = true
 		close(pc.chanPacketBufs)
+		// 清除channels里面的数据
+		errClosedChan := errors.New("nonblock chan closed")
+		for pb := range pc.chanPacketBufs {
+			if pb.chWriteErr != nil {
+				select {
+				case pb.chWriteErr <- errClosedChan:
+				default:
+				}
+			}
+		}
 		pc.chanLock.Unlock()
-		err = pc.PacketIO.Close()
 	})
 	return err
 }
