@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/net-agent/cipherconn"
 )
 
 func h1Test(t *testing.T, h1 *Host) {
@@ -66,8 +67,8 @@ func TestUpgraderAndSwitcher(t *testing.T) {
 	password := "hahaha"
 
 	go func() {
-		sw := NewSwitcher(nil, password)
-		sw.Run(addr)
+		sw := NewSwitcher(nil)
+		sw.Run(addr, password)
 	}()
 
 	<-time.After(time.Millisecond * 100)
@@ -79,10 +80,15 @@ func TestUpgraderAndSwitcher(t *testing.T) {
 		t.Error(err)
 		return
 	}
+	cc, err := cipherconn.New(conn, password)
+	if err != nil {
+		t.Error(err)
+		return
+	}
 
 	// 升级协议
 	h1, _, err := UpgradeToHost(
-		NewTcpPacketConn(conn),
+		NewTcpPacketConn(cc),
 		&HostRequest{Domain: "test", Mac: ""},
 		true)
 	if err != nil {
@@ -99,10 +105,15 @@ func TestUpgraderAndSwitcher(t *testing.T) {
 		t.Error(err)
 		return
 	}
+	cc, err = cipherconn.New(conn, password)
+	if err != nil {
+		t.Error(err)
+		return
+	}
 
 	// 升级协议
 	h2, _, err := UpgradeToHost(
-		NewTcpPacketConn(conn),
+		NewTcpPacketConn(cc),
 		&HostRequest{Domain: "test2", Mac: ""},
 		true)
 	if err != nil {
@@ -119,7 +130,7 @@ func TestUpgraderAndSwitcherForWebsocket(t *testing.T) {
 	path := "/wsconn"
 	go func() {
 		upgrader := websocket.Upgrader{}
-		sw := NewSwitcher(nil, "")
+		sw := NewSwitcher(nil)
 		http.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
 			wsconn, err := upgrader.Upgrade(w, r, nil)
 			if err != nil {

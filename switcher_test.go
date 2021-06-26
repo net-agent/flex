@@ -35,7 +35,7 @@ func TestSwitcherBase(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		switcher := NewSwitcher(nil, "")
+		switcher := NewSwitcher(nil)
 		ctx, err := switcher.UpgradeToContext(NewTcpPacketConn(c2))
 		if err != nil {
 			t.Error(err)
@@ -67,7 +67,7 @@ func TestSwitcherBase(t *testing.T) {
 }
 
 func TestSwitcherMult(t *testing.T) {
-	switcher := NewSwitcher(nil, "")
+	switcher := NewSwitcher(nil)
 
 	h1, err := testConnect(t, switcher, "test1", "mac1")
 	if err != nil {

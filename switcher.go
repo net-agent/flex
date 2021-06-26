@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/net-agent/cipherconn"
 )
 
 type switchContext struct {
@@ -69,7 +71,7 @@ type Switcher struct {
 	activeCtxsLen int32
 }
 
-func NewSwitcher(staticIP map[string]HostIP, password string) *Switcher {
+func NewSwitcher(staticIP map[string]HostIP) *Switcher {
 	switcher := &Switcher{
 		availableIP: make(chan HostIP, 0xFFFF),
 	}
@@ -119,24 +121,35 @@ func (switcher *Switcher) selectIP(mac string) (HostIP, error) {
 	}
 }
 
-func (switcher *Switcher) Run(addr string) {
+func (switcher *Switcher) Run(addr string, password string) {
 	l, err := net.Listen("tcp4", addr)
 	if err != nil {
 		log.Fatal(err)
 		return
 	}
 
-	switcher.Serve(l)
+	switcher.Serve(l, password)
 }
 
-func (switcher *Switcher) Serve(l net.Listener) {
+func (switcher *Switcher) Serve(l net.Listener, password string) {
 	log.Printf("switcher running, addr is %v\n", l.Addr())
 	for {
 		conn, err := l.Accept()
 		if err != nil {
 			break
 		}
-		go switcher.ServePacketConn(NewTcpPacketConn(conn))
+		go func(conn net.Conn) {
+			if password != "" {
+				cc, err := cipherconn.New(conn, password)
+				if err != nil {
+					conn.Close()
+					return
+				}
+				conn = cc
+			}
+			pc := NewTcpPacketConn(conn)
+			switcher.ServePacketConn(pc)
+		}(conn)
 	}
 	log.Println("switcher stopped")
 }
