@@ -63,6 +63,10 @@ func NewStream(host *Host, isClient bool) *Stream {
 	}
 }
 
+func (stream *Stream) Dialer() string {
+	return stream.dialer
+}
+
 func (stream *Stream) SetAddr(localIP HostIP, localPort uint16, remoteIP HostIP, remotePort uint16) {
 	stream.localIP = localIP
 	stream.localPort = localPort

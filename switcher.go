@@ -8,49 +8,9 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/net-agent/cipherconn"
 )
-
-type switchContext struct {
-	host           *Host
-	id             uint64 // 用于断线重连
-	ip             HostIP
-	domain         string
-	mac            string
-	chanRecoverErr chan error
-}
-
-func (ctx *switchContext) TryRecover() error {
-	select {
-	case err, ok := <-ctx.chanRecoverErr:
-		if !ok {
-			return errors.New("unexpected chan close error")
-		}
-		return err
-	case <-time.After(time.Second * 5):
-		return errors.New("wait connection timeout")
-	}
-}
-
-func (sw *Switcher) attach(ctx *switchContext) error {
-	_, loaded := sw.domainCtxs.LoadOrStore(ctx.domain, ctx)
-	if loaded {
-		return errors.New("exist domain")
-	}
-
-	sw.ctxs.Store(ctx.ip, ctx)
-	sw.ctxids.Store(ctx.id, ctx)
-
-	return nil
-}
-
-func (sw *Switcher) detach(ctx *switchContext) {
-	sw.domainCtxs.Delete(ctx.domain)
-	sw.ctxs.Delete(ctx.ip)
-	sw.ctxids.Delete(ctx.id)
-}
 
 // Switcher packet交换器，根据ip、port进行路由和分发
 type Switcher struct {
@@ -171,7 +131,7 @@ func (switcher *Switcher) ServePacketConn(pc *PacketConn) {
 	}
 }
 
-func (switcher *Switcher) ServeContext(ctx *switchContext, remote string) {
+func (switcher *Switcher) ServeContext(ctx *SwContext, remote string) {
 
 	hostInfo := fmt.Sprintf("host(domain=%v ip=%v remote=%v)", ctx.domain, ctx.ip, remote)
 
@@ -203,7 +163,7 @@ func (switcher *Switcher) ServeContext(ctx *switchContext, remote string) {
 // contextReadLoop
 // 不断读取连接中的数据，并根据DistIP对数据进行分发
 //
-func (switcher *Switcher) contextReadLoop(ctx *switchContext) error {
+func (switcher *Switcher) contextReadLoop(ctx *SwContext) error {
 	defer ctx.host.pc.Close()
 
 	for {
@@ -237,7 +197,7 @@ func (switcher *Switcher) contextReadLoop(ctx *switchContext) error {
 	}
 }
 
-func (switcher *Switcher) switchOpen(caller *switchContext, pb *PacketBufs) {
+func (switcher *Switcher) switchOpen(caller *SwContext, pb *PacketBufs) {
 	domain := string(pb.payload)
 	if domain == "" {
 		pb.SetPayload([]byte(caller.domain))
@@ -253,7 +213,7 @@ func (switcher *Switcher) switchOpen(caller *switchContext, pb *PacketBufs) {
 		log.Printf("resolve domain failed: '%v' not found", domain)
 		return
 	}
-	dist := it.(*switchContext)
+	dist := it.(*SwContext)
 
 	pb.SetDistIP(dist.ip)
 	pb.SetPayload([]byte(caller.domain))
@@ -282,7 +242,7 @@ func (switcher *Switcher) switchData(pb *PacketBufs) {
 		return
 	}
 
-	err := it.(*switchContext).host.pc.WritePacket(pb)
+	err := it.(*SwContext).host.pc.WritePacket(pb)
 	if err != nil {
 		log.Printf("%v%v -> %v write failed. %v\n",
 			pb.head.CmdStr(), pb.head.Src(), pb.head.Dist(), err)
