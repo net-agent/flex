@@ -72,7 +72,7 @@ func UpgradeToHost(pc *PacketConn, req *HostRequest, autoRun bool) (retHost *Hos
 }
 
 // UpgradeToContext 把连接升级为Host，并返回对端HostIP
-func (switcher *Switcher) UpgradeToContext(pc *PacketConn) (retCtx *switchContext, retErr error) {
+func (switcher *Switcher) UpgradeToContext(pc *PacketConn) (retCtx *SwContext, retErr error) {
 	pb := NewPacketBufs()
 	err := pc.ReadPacket(pb)
 	if err != nil {
@@ -87,7 +87,7 @@ func (switcher *Switcher) UpgradeToContext(pc *PacketConn) (retCtx *switchContex
 
 	var respIP HostIP
 	var respCtxid uint64
-	var respCtx *switchContext
+	var respCtx *SwContext
 
 	// 尝试执行恢复逻辑
 	oldctx, respErr := switcher.RecoverCtx(&req, pc)
@@ -115,7 +115,7 @@ func (switcher *Switcher) UpgradeToContext(pc *PacketConn) (retCtx *switchContex
 			return nil, err
 		}
 		respCtxid = switcher.NextCtxID()
-		respCtx = &switchContext{
+		respCtx = &SwContext{
 			host:           NewSwitcherHost(switcher, pc),
 			id:             respCtxid,
 			ip:             respIP,
@@ -146,7 +146,7 @@ func (switcher *Switcher) UpgradeToContext(pc *PacketConn) (retCtx *switchContex
 }
 
 // RecoverCtx 根据ctxid和pconn，恢复正在等待重连的ctx
-func (switcher *Switcher) RecoverCtx(req *HostRequest, pc *PacketConn) (*switchContext, error) {
+func (switcher *Switcher) RecoverCtx(req *HostRequest, pc *PacketConn) (*SwContext, error) {
 	it, found := switcher.ctxids.LoadAndDelete(req.Ctxid)
 	if !found {
 		_, domainExist := switcher.domainCtxs.Load(req.Domain)
@@ -156,7 +156,7 @@ func (switcher *Switcher) RecoverCtx(req *HostRequest, pc *PacketConn) (*switchC
 		return nil, ErrCtxidNotFound
 	}
 
-	ctx, ok := it.(*switchContext)
+	ctx, ok := it.(*SwContext)
 	if !ok {
 		return nil, errors.New("convert to ctx failed")
 	}
