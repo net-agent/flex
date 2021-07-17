@@ -1,4 +1,4 @@
-package flex
+package packet
 
 import (
 	"errors"
@@ -14,8 +14,8 @@ const logRawPacket = false
 
 type PacketIO interface {
 	Origin() interface{}
-	ReadPacket(pb *PacketBufs) error
-	WritePacket(pb *PacketBufs) error
+	ReadPacket(pb *Buffer) error
+	WritePacket(pb *Buffer) error
 	Close() error
 }
 
@@ -37,8 +37,8 @@ func (c *connPacketIO) Origin() interface{} {
 	return c.conn
 }
 
-func (c *connPacketIO) ReadPacket(pb *PacketBufs) error {
-	_, err := pb.ReadFrom(c.conn)
+func (c *connPacketIO) ReadPacket(pb *Buffer) error {
+	err := ReadConn(c.conn, pb)
 	if err != nil {
 		c.conn.Close()
 	}
@@ -54,7 +54,7 @@ func (c *connPacketIO) ReadPacket(pb *PacketBufs) error {
 	return err
 }
 
-func (c *connPacketIO) WritePacket(pb *PacketBufs) (ret error) {
+func (c *connPacketIO) WritePacket(pb *Buffer) (ret error) {
 	c.wlock.Lock()
 	defer func() {
 		if ret != nil {
@@ -109,7 +109,7 @@ func (ws *wsPacketIO) Origin() interface{} {
 	return ws.conn
 }
 
-func (ws *wsPacketIO) WritePacket(pb *PacketBufs) (ret error) {
+func (ws *wsPacketIO) WritePacket(pb *Buffer) (ret error) {
 	ws.wlock.Lock()
 	defer func() {
 		if ret != nil {
@@ -120,9 +120,9 @@ func (ws *wsPacketIO) WritePacket(pb *PacketBufs) (ret error) {
 	if len(pb.payload) == 0 {
 		return ws.conn.WriteMessage(websocket.BinaryMessage, pb.head[:])
 	}
-	buf := make([]byte, packetHeaderSize+len(pb.payload))
-	copy(buf[:packetHeaderSize], pb.head[:])
-	copy(buf[packetHeaderSize:], pb.payload)
+	buf := make([]byte, HeaderSz+len(pb.payload))
+	copy(buf[:HeaderSz], pb.head[:])
+	copy(buf[HeaderSz:], pb.payload)
 	err := ws.conn.WriteMessage(websocket.BinaryMessage, buf)
 	if err != nil {
 		return err
@@ -133,18 +133,18 @@ func (ws *wsPacketIO) WritePacket(pb *PacketBufs) (ret error) {
 	return nil
 }
 
-func (ws *wsPacketIO) ReadPacket(pb *PacketBufs) error {
+func (ws *wsPacketIO) ReadPacket(pb *Buffer) error {
 	for {
 		msgType, buf, err := ws.conn.ReadMessage()
 		if err != nil {
 			return err
 		}
 		if msgType == websocket.BinaryMessage {
-			if len(buf) < packetHeaderSize {
+			if len(buf) < HeaderSz {
 				return errors.New("imcompleted buf readed")
 			}
-			copy(pb.head[:], buf[:packetHeaderSize])
-			pb.payload = buf[packetHeaderSize:]
+			copy(pb.head[:], buf[:HeaderSz])
+			pb.payload = buf[HeaderSz:]
 
 			if logRawPacket {
 				payload := ""
@@ -172,7 +172,7 @@ func (ws *wsPacketIO) Close() error {
 //
 type PacketConn struct {
 	PacketIO
-	chanPacketBufs chan *PacketBufs
+	chanPacketBufs chan *Buffer
 	chanLock       sync.RWMutex
 	chanClosed     bool
 	onceClose      sync.Once
@@ -182,18 +182,18 @@ type PacketConn struct {
 func NewTcpPacketConn(conn net.Conn) *PacketConn {
 	return &PacketConn{
 		PacketIO:       NewTcpPacketIO(conn),
-		chanPacketBufs: make(chan *PacketBufs, 1024),
+		chanPacketBufs: make(chan *Buffer, 1024),
 	}
 }
 
 func NewWsPacketConn(wsconn *websocket.Conn) *PacketConn {
 	return &PacketConn{
 		PacketIO:       NewWsPacketIO(wsconn),
-		chanPacketBufs: make(chan *PacketBufs, 1024),
+		chanPacketBufs: make(chan *Buffer, 1024),
 	}
 }
 
-func (pc *PacketConn) NonblockWritePacket(pb *PacketBufs, waitResult bool) error {
+func (pc *PacketConn) NonblockWritePacket(pb *Buffer, waitResult bool) error {
 	pc.chanLock.RLock()
 	defer pc.chanLock.RUnlock()
 	if pc.chanClosed {

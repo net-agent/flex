@@ -1,4 +1,4 @@
-package flex
+package packet
 
 import (
 	"fmt"
@@ -33,7 +33,7 @@ func TestChanBlock(t *testing.T) {
 }
 
 func BenchmarkCPUID(b *testing.B) {
-	var head packetHeader
+	var head Header
 	for i := 0; i < b.N; i++ {
 		head.CPUID()
 	}
