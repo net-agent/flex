@@ -22,11 +22,11 @@ func NewConnWriter(conn net.Conn) Writer {
 }
 
 func (writer *connWriter) WriteBuffer(buf *Buffer) error {
-	_, err := writer.conn.Write(buf.head[:])
+	_, err := writer.conn.Write(buf.Head[:])
 	if err != nil {
 		return err
 	}
-	_, err = writer.conn.Write(buf.payload)
+	_, err = writer.conn.Write(buf.Payload)
 	if err != nil {
 		return err
 	}
@@ -49,11 +49,11 @@ func (writer *wsWriter) WriteBuffer(pb *Buffer) error {
 	if err != nil {
 		return err
 	}
-	_, err = w.Write(pb.head[:])
+	_, err = w.Write(pb.Head[:])
 	if err != nil {
 		return err
 	}
-	_, err = w.Write(pb.payload)
+	_, err = w.Write(pb.Payload)
 	if err != nil {
 		return err
 	}

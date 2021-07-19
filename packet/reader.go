@@ -28,17 +28,17 @@ func NewConnReader(conn net.Conn) Reader {
 }
 
 func (reader *connReader) ReadBuffer() (*Buffer, error) {
-	pb := NewPacketBufs()
+	pb := NewBuffer()
 
-	_, err := io.ReadFull(reader.conn, pb.head[:])
+	_, err := io.ReadFull(reader.conn, pb.Head[:])
 	if err != nil {
 		return nil, err
 	}
 
-	sz := pb.head.PayloadSize()
+	sz := pb.Head.PayloadSize()
 	if sz > 0 {
-		pb.payload = make([]byte, sz)
-		_, err := io.ReadFull(reader.conn, pb.payload)
+		pb.Payload = make([]byte, sz)
+		_, err := io.ReadFull(reader.conn, pb.Payload)
 		if err != nil {
 			return nil, err
 		}
@@ -60,7 +60,7 @@ func NewWsReader(wsconn *websocket.Conn) Reader {
 }
 
 func (reader *wsReader) ReadBuffer() (*Buffer, error) {
-	buf := NewPacketBufs()
+	buf := NewBuffer()
 
 	mtype, data, err := reader.wsconn.ReadMessage()
 	if err != nil {
@@ -71,8 +71,8 @@ func (reader *wsReader) ReadBuffer() (*Buffer, error) {
 	}
 
 	// pb := NewPacketBufs()
-	copy(buf.head[:], data[:HeaderSz])
-	buf.payload = data[HeaderSz:]
+	copy(buf.Head[:], data[:HeaderSz])
+	buf.Payload = data[HeaderSz:]
 
 	return buf, nil
 }
