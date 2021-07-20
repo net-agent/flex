@@ -26,9 +26,11 @@ func (writer *connWriter) WriteBuffer(buf *Buffer) error {
 	if err != nil {
 		return err
 	}
-	_, err = writer.conn.Write(buf.Payload)
-	if err != nil {
-		return err
+	if len(buf.Payload) > 0 {
+		_, err = writer.conn.Write(buf.Payload)
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -49,13 +51,17 @@ func (writer *wsWriter) WriteBuffer(pb *Buffer) error {
 	if err != nil {
 		return err
 	}
+	defer w.Close()
+
 	_, err = w.Write(pb.Head[:])
 	if err != nil {
 		return err
 	}
-	_, err = w.Write(pb.Payload)
-	if err != nil {
-		return err
+	if len(pb.Payload) > 0 {
+		_, err = w.Write(pb.Payload)
+		if err != nil {
+			return err
+		}
 	}
 
 	return nil

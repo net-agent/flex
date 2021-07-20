@@ -2,7 +2,9 @@ package switcher
 
 import (
 	"errors"
+	"runtime"
 	"sync"
+	"sync/atomic"
 
 	"github.com/net-agent/flex/packet"
 )
@@ -10,6 +12,51 @@ import (
 type Server struct {
 	nodeDomains sync.Map // map[string]*Context
 	nodeIps     sync.Map // map[uint16]*Context
+
+	dataChans     []chan *packet.Buffer
+	dataChansMask int
+	dataOpenCount uint32
+}
+
+func NewServer() *Server {
+	//
+	// 创建与CPU核心数相关的goroutine数量
+	// 为了保证运行时效率，数量为2^n
+	num := runtime.NumCPU()
+	for {
+		next := num ^ (num - 1)
+		if next == 0 {
+			break
+		}
+		num = next
+	}
+	num = num << 1
+	mask := num - 1
+
+	var chans []chan *packet.Buffer
+	for i := 0; i < num; i++ {
+		chans = append(chans, make(chan *packet.Buffer, 2048))
+	}
+
+	return &Server{
+		dataChans:     chans,
+		dataChansMask: mask,
+	}
+}
+
+// Run 采用多线程的并发发送数据
+func (s *Server) Run() {
+	var wait sync.WaitGroup
+	for i, ch := range s.dataChans {
+		wait.Add(1)
+		go func(index int, ch chan *packet.Buffer) {
+			for pbuf := range ch {
+				s.RouteBuffer(pbuf)
+			}
+			wait.Done()
+		}(i, ch)
+	}
+	wait.Wait()
 }
 
 // AttachCtx 附加上下文
@@ -41,12 +88,7 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 		return err
 	}
 
-	ctx := &Context{
-		Name:   "default",
-		Domain: "sw-node-default",
-		IP:     0,
-		Conn:   pc,
-	}
+	ctx := NewContext("default", "localhoste", 0, pc)
 
 	err = s.AttachCtx(ctx)
 	if err != nil {
@@ -67,17 +109,17 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 			return err
 		}
 
-		if pbuf.Head.Cmd() == packet.CmdAlive {
+		if pbuf.Cmd() == packet.CmdAlive {
 			continue
 		}
 
-		switch pbuf.Head.Cmd() {
+		switch pbuf.Cmd() {
 		case packet.CmdOpenStream:
 			go s.ResolveOpenCmd(ctx, pbuf)
 		case packet.CmdPushStreamData:
-			s.RouteData(pbuf)
+			s.RouteDataBuffer(pbuf)
 		default:
-			go s.Route(pbuf)
+			go s.RouteBuffer(pbuf)
 		}
 
 	}
@@ -87,8 +129,10 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 func (s *Server) ResolveOpenCmd(caller *Context, pbuf *packet.Buffer) {
 	distDomain := string(pbuf.Payload)
 	if distDomain == "" {
+		openCount := atomic.AddUint32(&s.dataOpenCount, 1)
+		pbuf.SetToken(byte(openCount))
 		pbuf.SetPayload([]byte(caller.Domain))
-		s.Route(pbuf)
+		s.RouteBuffer(pbuf)
 		return
 	}
 
@@ -106,16 +150,16 @@ func (s *Server) ResolveOpenCmd(caller *Context, pbuf *packet.Buffer) {
 	distCtx.Conn.WriteBuffer(pbuf)
 }
 
-// Route 根据DistIP路由数据包，这些包可以无序
-func (s *Server) Route(pbuf *packet.Buffer) {
-	distIP := pbuf.GetDistIP()
+// RouteBuffer 根据DistIP路由数据包，这些包可以无序
+func (s *Server) RouteBuffer(pbuf *packet.Buffer) {
+	distIP := pbuf.DistIP()
 	it, found := s.nodeIps.Load(distIP)
 	if !found {
 		// 此处记录找不到ctx的错误，但不退出循环
 		return
 	}
 	ctx := it.(*Context)
-	err := ctx.Conn.WriteBuffer(pbuf)
+	err := ctx.WriteBuffer(pbuf)
 	if err != nil {
 		// 此处记录写入失败的日志，但不退出循环
 		return
@@ -123,6 +167,6 @@ func (s *Server) Route(pbuf *packet.Buffer) {
 }
 
 // RouteData 根据DistIP路由数据包，这些包需要保持有序
-func (s *Server) RouteData(pbuf *packet.Buffer) {
-	s.Route(pbuf) // todo
+func (s *Server) RouteDataBuffer(pbuf *packet.Buffer) {
+	s.dataChans[pbuf.Token()&byte(s.dataChansMask)] <- pbuf
 }

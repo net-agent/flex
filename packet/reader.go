@@ -35,7 +35,7 @@ func (reader *connReader) ReadBuffer() (*Buffer, error) {
 		return nil, err
 	}
 
-	sz := pb.Head.PayloadSize()
+	sz := pb.PayloadSize()
 	if sz > 0 {
 		pb.Payload = make([]byte, sz)
 		_, err := io.ReadFull(reader.conn, pb.Payload)

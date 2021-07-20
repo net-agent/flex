@@ -4,6 +4,28 @@ import (
 	"encoding/binary"
 )
 
+const (
+	CmdACKFlag = byte(1 << iota)
+	CmdOpenStream
+	CmdCloseStream
+	CmdPushStreamData
+	CmdAlive
+	CmdPushMessage
+)
+
+//
+// Header
+// +-------+------+--------+----------+--------+---------+-------+-------------+
+// | Field | Cmd  | DistIP | DistPort | SrcIP  | SrcPort | Token | PayloadSize |
+// +-------+------+--------+----------+--------+---------+-------+-------------+
+// | Type  | byte | uint16 | uint16   | uint16 | uint16  | byte  | uint16      |
+// | Pos   | 0    | 1      | 3        | 5      | 7       | 9     | 10          |
+// | Size  | 1    | 2      | 2        | 2      | 2       | 1     | 2           |
+// +-------+------+--------+----------+--------+---------+-------+-------------+
+//
+const HeaderSz = 1 + 2 + 2 + 2 + 2 + 1 + 2
+
+type Header [HeaderSz]byte
 type Buffer struct {
 	Head    Header
 	Payload []byte
@@ -13,32 +35,82 @@ func NewBuffer() *Buffer {
 	return &Buffer{}
 }
 
-func (pb *Buffer) SetBase(cmd byte, srcIP, srcPort, distIP, distPort uint16) {
-	pb.Head[0] = cmd
-	binary.BigEndian.PutUint16(pb.Head[1:3], srcIP)
-	binary.BigEndian.PutUint16(pb.Head[3:5], distIP)
-	binary.BigEndian.PutUint16(pb.Head[5:7], srcPort)
-	binary.BigEndian.PutUint16(pb.Head[7:9], distPort)
+//
+// Cmd
+//
+func (buf *Buffer) SetCmd(cmd byte) { buf.Head[0] = cmd }
+func (buf *Buffer) Cmd() byte       { return buf.Head[0] }
+
+//
+// Dist
+//
+func (buf *Buffer) SetDist(ip, port uint16) {
+	buf.SetDistIP(ip)
+	buf.SetDistPort(port)
+}
+func (buf *Buffer) SetDistIP(ip uint16) {
+	binary.BigEndian.PutUint16(buf.Head[1:3], ip)
+}
+func (buf *Buffer) SetDistPort(port uint16) {
+	binary.BigEndian.PutUint16(buf.Head[3:5], port)
+}
+func (buf *Buffer) DistIP() uint16   { return binary.BigEndian.Uint16(buf.Head[1:3]) }
+func (buf *Buffer) DistPort() uint16 { return binary.BigEndian.Uint16(buf.Head[3:5]) }
+
+//
+// Src
+//
+func (buf *Buffer) SetSrc(ip, port uint16) {
+	buf.SetSrcIP(ip)
+	buf.SetSrcPort(port)
+}
+func (buf *Buffer) SetSrcIP(ip uint16) {
+	binary.BigEndian.PutUint16(buf.Head[5:7], ip)
+}
+func (buf *Buffer) SetSrcPort(port uint16) {
+	binary.BigEndian.PutUint16(buf.Head[7:9], port)
+}
+func (buf *Buffer) SrcIP() uint16   { return binary.BigEndian.Uint16(buf.Head[5:7]) }
+func (buf *Buffer) SrcPort() uint16 { return binary.BigEndian.Uint16(buf.Head[7:9]) }
+
+//
+// Token
+//
+func (buf *Buffer) SetToken(b byte) {
+	buf.Head[9] = b
+}
+func (buf *Buffer) Token() byte {
+	return buf.Head[9]
 }
 
-func (pb *Buffer) GetDistIP() uint16 {
-	return binary.BigEndian.Uint16(pb.Head[3:5])
-}
-func (pb *Buffer) SetDistIP(ip uint16) {
-	binary.BigEndian.PutUint16(pb.Head[3:5], ip)
+//
+// Header
+//
+func (buf *Buffer) SetHeader(cmd byte, distIP, distPort, srcIP, srcPort uint16) {
+	buf.SetCmd(cmd)
+	buf.SetDist(distIP, distPort)
+	buf.SetSrc(srcIP, srcPort)
 }
 
-func (pb *Buffer) SetPayload(buf []byte) {
-	binary.BigEndian.PutUint16(pb.Head[9:11], uint16(len(buf)))
-	pb.Payload = buf
+// Payload
+func (buf *Buffer) SetPayload(payload []byte) {
+	binary.BigEndian.PutUint16(buf.Head[10:12], uint16(len(payload)))
+	buf.Payload = payload
 }
-func (pb *Buffer) SetACKInfo(ack uint16) {
-	binary.BigEndian.PutUint16(pb.Head[9:11], ack)
+func (buf *Buffer) PayloadSize() uint16 {
+	if (buf.Head[0] & 0x01) == 1 {
+		return 0
+	}
+	return binary.BigEndian.Uint16(buf.Head[10:12])
 }
-func (pb *Buffer) SetCtxid(ctxid uint64) {
-	pb.Head[0] = 0
-	pb.Head[1] = 0
-	pb.Head[2] = 0
-	pb.Head[3] = 1
-	binary.BigEndian.PutUint64(pb.Head[4:8], ctxid)
+
+// ACKInfo
+func (buf *Buffer) SetACKInfo(ack uint16) {
+	binary.BigEndian.PutUint16(buf.Head[10:12], ack)
+}
+func (buf *Buffer) ACKInfo() uint16 {
+	if (buf.Head[0] & 0x01) == 0 {
+		return 0
+	}
+	return binary.BigEndian.Uint16(buf.Head[10:12])
 }
