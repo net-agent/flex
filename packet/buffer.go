@@ -38,8 +38,14 @@ func NewBuffer() *Buffer {
 //
 // Cmd
 //
-func (buf *Buffer) SetCmd(cmd byte) { buf.Head[0] = cmd }
+func (buf *Buffer) SetCmd(cmd byte) { buf.Head[0] = cmd & 0xFE }
 func (buf *Buffer) Cmd() byte       { return buf.Head[0] }
+func (buf *Buffer) IsACK() bool     { return buf.Head[0]&CmdACKFlag > 0 }
+
+//
+func (buf *Buffer) SID() uint64 {
+	return binary.BigEndian.Uint64(buf.Head[1:9])
+}
 
 //
 // Dist
@@ -107,6 +113,7 @@ func (buf *Buffer) PayloadSize() uint16 {
 // ACKInfo
 func (buf *Buffer) SetACKInfo(ack uint16) {
 	binary.BigEndian.PutUint16(buf.Head[10:12], ack)
+	buf.Payload = nil
 }
 func (buf *Buffer) ACKInfo() uint16 {
 	if (buf.Head[0] & 0x01) == 0 {
