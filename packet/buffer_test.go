@@ -19,7 +19,7 @@ func TestSetGet(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		buf := NewBuffer()
+		buf := NewBuffer(nil)
 		buf.SetHeader(c.cmd, c.distIP, c.distPort, c.srcIP, c.srcPort)
 		buf.SetToken(c.token)
 		buf.SetPayload(c.payload)

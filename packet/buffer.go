@@ -27,18 +27,21 @@ const HeaderSz = 1 + 2 + 2 + 2 + 2 + 1 + 2
 
 type Header [HeaderSz]byte
 type Buffer struct {
-	Head    Header
+	Head    *Header
 	Payload []byte
 }
 
-func NewBuffer() *Buffer {
-	return &Buffer{}
+func NewBuffer(head *Header) *Buffer {
+	if head == nil {
+		head = &Header{}
+	}
+	return &Buffer{Head: head}
 }
 
 //
 // Cmd
 //
-func (buf *Buffer) SetCmd(cmd byte) { buf.Head[0] = cmd & 0xFE }
+func (buf *Buffer) SetCmd(cmd byte) { buf.Head[0] = cmd }
 func (buf *Buffer) Cmd() byte       { return buf.Head[0] }
 func (buf *Buffer) IsACK() bool     { return buf.Head[0]&CmdACKFlag > 0 }
 
@@ -100,11 +103,14 @@ func (buf *Buffer) SetHeader(cmd byte, distIP, distPort, srcIP, srcPort uint16) 
 
 // Payload
 func (buf *Buffer) SetPayload(payload []byte) {
+	if len(payload) > 0xFFFF {
+		panic("payload overflow")
+	}
 	binary.BigEndian.PutUint16(buf.Head[10:12], uint16(len(payload)))
 	buf.Payload = payload
 }
 func (buf *Buffer) PayloadSize() uint16 {
-	if (buf.Head[0] & 0x01) == 1 {
+	if buf.Cmd() == CmdPushStreamData|CmdACKFlag {
 		return 0
 	}
 	return binary.BigEndian.Uint16(buf.Head[10:12])
@@ -116,7 +122,7 @@ func (buf *Buffer) SetACKInfo(ack uint16) {
 	buf.Payload = nil
 }
 func (buf *Buffer) ACKInfo() uint16 {
-	if (buf.Head[0] & 0x01) == 0 {
+	if buf.Cmd() != CmdPushStreamData|CmdACKFlag {
 		return 0
 	}
 	return binary.BigEndian.Uint16(buf.Head[10:12])

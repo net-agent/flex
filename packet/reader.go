@@ -28,7 +28,7 @@ func NewConnReader(conn net.Conn) Reader {
 }
 
 func (reader *connReader) ReadBuffer() (*Buffer, error) {
-	pb := NewBuffer()
+	pb := NewBuffer(nil)
 
 	_, err := io.ReadFull(reader.conn, pb.Head[:])
 	if err != nil {
@@ -60,7 +60,7 @@ func NewWsReader(wsconn *websocket.Conn) Reader {
 }
 
 func (reader *wsReader) ReadBuffer() (*Buffer, error) {
-	buf := NewBuffer()
+	buf := NewBuffer(nil)
 
 	mtype, data, err := reader.wsconn.ReadMessage()
 	if err != nil {

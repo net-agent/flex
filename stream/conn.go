@@ -2,56 +2,78 @@ package stream
 
 import (
 	"errors"
-	"sync/atomic"
+	"sync"
+	"time"
+
+	"github.com/net-agent/flex/packet"
 )
 
+type OpenResp struct {
+	ErrCode int
+	ErrMsg  string
+	DistIP  uint16
+}
+
 type Conn struct {
+	isDialer             bool
+	local                addr
+	localIP, localPort   uint16
+	remote               addr
+	remoteIP, remotePort uint16
+
+	// for open
+	openAck chan *packet.Buffer
+
+	// for reader
+	rclosed   bool
 	bytesChan chan []byte
 	currBuf   []byte
 
-	openAck  chan []byte
-	bucketSz int32
+	// for writer
+	wmut       sync.Mutex
+	wclosed    bool
+	pwriter    packet.Writer
+	pushBuf    *packet.Buffer
+	pushAckBuf *packet.Buffer
+	bucketSz   int32
+	bucketEv   chan struct{}
 }
 
-func New() *Conn {
-	return &Conn{}
-}
-
-func (s *Conn) AppendData(buf []byte) {
-	s.bytesChan <- buf
-}
-
-func (s *Conn) Read(dist []byte) (int, error) {
-	if len(s.currBuf) == 0 {
-		s.currBuf = <-s.bytesChan
+func New(isDialer bool) *Conn {
+	return &Conn{
+		isDialer:  isDialer,
+		openAck:   make(chan *packet.Buffer, 1),
+		bytesChan: make(chan []byte, 1024),
+		bucketSz:  1024 * 1024 * 1,
+		bucketEv:  make(chan struct{}, 16),
 	}
-
-	n := copy(dist, s.currBuf)
-	s.currBuf = s.currBuf[n:]
-	return n, nil
 }
 
-func (s *Conn) Open() error {
-	payload := <-s.openAck
-	if len(payload) > 0 {
-		return errors.New(string(payload))
+func (s *Conn) GetUsedPort() (uint16, error) {
+	if s.isDialer {
+		return s.localPort, nil
 	}
-	return nil
-}
-
-func (s *Conn) Opened(payload []byte) {
-	s.openAck <- payload
+	return s.localPort, errors.New("local port still on listen")
 }
 
 func (s *Conn) Close() error {
-	return nil
+	return s.CloseWrite(false)
 }
 
-func (s *Conn) IncreaseBucket(size uint16) {
-	atomic.AddInt32(&s.bucketSz, int32(size))
-	// todo: notify
+func (s *Conn) WaitOpenResp() (*packet.Buffer, error) {
+	select {
+	case pbuf := <-s.openAck:
+		msg := string(pbuf.Payload)
+		if msg != "" {
+			return nil, errors.New(msg)
+		}
+		return pbuf, nil
+
+	case <-time.After(time.Second * 500):
+		return nil, errors.New("dial timeout")
+	}
 }
 
-func (s *Conn) AppendEOF() {}
-
-func (s *Conn) StopWrite() {}
+func (s *Conn) Opened(pbuf *packet.Buffer) {
+	s.openAck <- pbuf
+}

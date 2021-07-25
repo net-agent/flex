@@ -10,8 +10,8 @@ import (
 )
 
 type Node struct {
+	ip uint16
 	packet.Conn
-	openChan chan *packet.Buffer
 	pushChan chan *packet.Buffer
 
 	freePorts   chan uint16
@@ -20,110 +20,117 @@ type Node struct {
 	streams     sync.Map
 }
 
+func New(conn packet.Conn) *Node {
+	freePorts := make(chan uint16, 65536)
+	for i := 1024; i < 65536; i++ {
+		freePorts <- uint16(i)
+	}
+
+	return &Node{
+		Conn:      conn,
+		pushChan:  make(chan *packet.Buffer, 1024),
+		freePorts: freePorts,
+	}
+}
+
 func (node *Node) Run() {
-	go node.openBufLoop()
 	go node.pushBufLoop()
 
-	// do read
+	// quick read loop
+	// 不在此循环中做太多逻辑，确保读取效率
 	for {
 		pbuf, err := node.ReadBuffer()
 		if err != nil {
 			return
 		}
 
+		fmt.Printf("read %v sz=%v\n", pbuf.Head, pbuf.PayloadSize())
+
 		switch pbuf.Cmd() {
 		case packet.CmdOpenStream:
-			node.openChan <- pbuf
-
-		// 为了保证时序，close、close-ack必须放在push序列中
-		case packet.CmdCloseStream:
+			if pbuf.IsACK() {
+				node.pushChan <- pbuf
+			} else {
+				go node.OnOpen(pbuf)
+			}
+		default:
 			node.pushChan <- pbuf
-		case packet.CmdPushStreamData:
-			node.pushChan <- pbuf
+			// case packet.CmdCloseStream:
+			// 	node.pushChan <- pbuf
+			// case packet.CmdPushStreamData:
+			// 	node.pushChan <- pbuf
 		}
 	}
 }
 
-// ackLoop 处理应答包的逻辑
-func (node *Node) ackLoop() {
-	for pbuf := range node.ackChan {
-		switch pbuf.Cmd() {
+// OnOpen 响应创建链接的需求
+func (node *Node) OnOpen(pbuf *packet.Buffer) {
 
-		// open-ack
-		// 收到open应答包，代表对端已经做好接收数据的准备
-		// 调用stream.Opend回调，解除stream.open阻塞
-		// 此时此刻，stream可以安全进行双向通信
-		case packet.CmdOpenStream:
-			it, found := node.usedPorts.LoadAndDelete(pbuf.DistPort())
-			if !found {
-				log.Printf("localports not found (open-ack)\n")
-				continue
-			}
-			s := it.(*stream.Conn)
-			s.Opened(pbuf.Payload)
-
-		// close-ack
-		// 收到close应答包，代表对端已经不会再发送数据
-		// 此刻可以安全解除stream与node的绑定
-		// 此时此刻，stream完全关闭双向通信
-		case packet.CmdCloseStream:
-			// 收到close-ack，代表EOF，可以放心删除stream
-			it, loaded := node.streams.LoadAndDelete(pbuf.SID())
-			if !loaded {
-				log.Printf("detach failed (close-ack)\n")
-				return
-			}
-			s, ok := it.(*stream.Conn)
-			if !ok {
-				log.Printf("internal error (close-ack)\n")
-				continue
-			}
-			node.freePorts <- s.LocalPort()
-			s.Closed()
-
-		case packet.CmdPushStreamData:
-		}
+	it, found := node.listenPorts.Load(pbuf.DistPort())
+	if !found {
+		node.WriteBuffer(pbuf.SetOpenACK("open on port refused"))
+		return
 	}
+	listener, ok := it.(*Listener)
+	if !ok {
+		node.WriteBuffer(pbuf.SetOpenACK("open internal error"))
+		return
+	}
+
+	// 收到对端发过来的open请求，开始准备创建连接
+	s := stream.New(false)
+	s.SetLocal(pbuf.DistIP(), pbuf.DistPort())
+	s.SetRemote(pbuf.SrcIP(), pbuf.SrcPort())
+	s.InitWriter(node)
+
+	// 直接进行绑定，做好读数据准备
+	_, loaded := node.streams.LoadOrStore(pbuf.SID(), s)
+	if loaded {
+		log.Printf("stream exist\n")
+		return
+	}
+
+	// 告诉对端，连接创建成功了
+	// 因为通道能够保证包是顺序的，所以不需要对端的ACK，即可开始发送数据
+	node.WriteBuffer(pbuf.SetOpenACK(""))
+	listener.AppendConn(s)
 }
 
-// openBufLoop 处理open请求的逻辑
-func (node *Node) openBufLoop() {
-	for pbuf := range node.openChan {
-		it, found := node.listenPorts.Load(pbuf.DistPort())
-		if !found {
-			log.Printf("port not listened\n")
-			continue
-		}
-
-		listener, ok := it.(*Listener)
-		if !ok {
-			log.Printf("open internal error\n")
-			continue
-		}
-
-		s := stream.New()
-		_, loaded := node.streams.LoadOrStore(pbuf.SID(), s)
-		if loaded {
-			log.Printf("stream exist\n")
-			continue
-		}
-
-		go func(buf *packet.Buffer) {
-			// 告诉对端，连接创建成功了
-			pbuf.SetOpenACK(nil)
-			node.WriteBuffer(pbuf)
-
-			// 告诉caller，可以开始发送数据了
-			listener.openedStream <- s
-		}(pbuf)
+// OnOpenACK
+// 对端已经做好读写准备，可以通知stream，完成open操作
+func (node *Node) OnOpenACK(pbuf *packet.Buffer) {
+	it, loaded := node.usedPorts.LoadAndDelete(pbuf.DistPort())
+	if !loaded {
+		log.Printf("local not found\n")
+		return
 	}
+
+	s, ok := it.(*stream.Conn)
+	if !ok {
+		log.Printf("internal error (open-ack)\n")
+		return
+	}
+
+	// bind streams
+	_, loaded = node.streams.LoadOrStore(pbuf.SID(), s)
+	if loaded {
+		log.Printf("stream exists (open-ack)\n")
+		return
+	}
+
+	s.Opened(pbuf)
 }
 
-// pushBufLoop 处理流数据传输的逻辑
+// pushBufLoop 处理流数据传输的逻辑（open-ack -> push -> push-ack -> close -> close-ack）
 func (node *Node) pushBufLoop() {
 	for pbuf := range node.pushChan {
 
-		switch pbuf.Cmd() {
+		switch pbuf.Cmd() & 0xFE {
+
+		case packet.CmdOpenStream:
+			// 外部的筛选逻辑确保此处全是open-ack
+			// 必须顺序处理ACK，才能确保push不会先于open-ack被执行（会有丢包发生）
+			node.OnOpenACK(pbuf)
 
 		case packet.CmdPushStreamData:
 
@@ -140,8 +147,12 @@ func (node *Node) pushBufLoop() {
 			}
 
 			if pbuf.IsACK() {
+				// push-ack
+				// 收到确认包，此时应该根据ack信息，恢复stream的数据桶容量
 				c.IncreaseBucket(pbuf.ACKInfo())
 			} else {
+				// push
+				// 收到新的数据，追加到strema中
 				c.AppendData(pbuf.Payload)
 			}
 
@@ -159,10 +170,21 @@ func (node *Node) pushBufLoop() {
 			}
 
 			go func(conn *stream.Conn, isACK bool) {
+				usedPort, err := conn.GetUsedPort()
+				if err == nil {
+					node.freePorts <- usedPort
+				}
+
 				if isACK {
+					// close-ack
+					// 当前连接已经处于“半关闭”状态，写状态已提前关闭，因此只需要把读状态关闭即可
 					conn.AppendEOF()
 				} else {
-					conn.Close() // stop read and write
+					// close
+					// 收到对端发过来的close消息，可以确定对端已经不会再有数据过来，所以EOF
+					// 同时，应该马上关闭写状态（暂时不允许半开状态长时间保留）
+					conn.AppendEOF()
+					conn.CloseWrite(true)
 				}
 			}(c, pbuf.IsACK())
 		}

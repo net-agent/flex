@@ -2,7 +2,6 @@ package packet
 
 import (
 	"bytes"
-	"net"
 	"net/http"
 	"net/url"
 	"sync"
@@ -26,7 +25,7 @@ func equalBufTest(buf1, buf2 *Buffer, t *testing.T) bool {
 
 func dataTransferTest(pc1 Reader, pc2 Writer, t *testing.T) {
 	msg := []byte("hello world")
-	buf := NewBuffer()
+	buf := NewBuffer(nil)
 	buf.SetHeader(CmdCloseStream, 0, 1, 2, 3)
 	buf.SetPayload(msg)
 
@@ -54,16 +53,13 @@ func dataTransferTest(pc1 Reader, pc2 Writer, t *testing.T) {
 }
 
 func TestNetConn(t *testing.T) {
-	c1, c2 := net.Pipe()
-	pc1 := NewWithConn(c1)
-	pc2 := NewWithConn(c2)
-
+	pc1, pc2 := Pipe()
 	dataTransferTest(pc1, pc2, t)
 }
 
 func TestWebsocket(t *testing.T) {
 	msg := []byte("hello world")
-	buf := NewBuffer()
+	buf := NewBuffer(nil)
 	buf.SetHeader(CmdCloseStream, 0, 1, 2, 3)
 	buf.SetPayload(msg)
 
