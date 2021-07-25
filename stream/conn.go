@@ -49,13 +49,6 @@ func New(isDialer bool) *Conn {
 	}
 }
 
-func (s *Conn) GetUsedPort() (uint16, error) {
-	if s.isDialer {
-		return s.localPort, nil
-	}
-	return s.localPort, errors.New("local port still on listen")
-}
-
 func (s *Conn) Close() error {
 	return s.CloseWrite(false)
 }

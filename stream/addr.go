@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"errors"
 	"fmt"
 	"net"
 )
@@ -30,9 +31,16 @@ func (s *Conn) SetRemote(ip, port uint16) {
 }
 
 func (s *Conn) LocalAddr() net.Addr {
-	return nil
+	return &s.local
 }
 
 func (s *Conn) RemoteAddr() net.Addr {
-	return nil
+	return &s.remote
+}
+
+func (s *Conn) GetUsedPort() (uint16, error) {
+	if s.isDialer {
+		return s.localPort, nil
+	}
+	return s.localPort, errors.New("local port still on listen")
 }
