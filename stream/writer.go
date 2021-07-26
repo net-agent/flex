@@ -3,7 +3,6 @@ package stream
 import (
 	"errors"
 	"log"
-	"math/rand"
 	"runtime"
 	"sync/atomic"
 	"time"
@@ -11,33 +10,20 @@ import (
 	"github.com/net-agent/flex/packet"
 )
 
-var tokenIndex uint64
-
-func init() {
-	rand.Seed(time.Now().UnixNano())
-	tokenIndex = rand.Uint64()
-}
-
-func getToken() (byte, byte) {
-	base := atomic.AddUint64(&tokenIndex, 2)
-	return byte(base & 0xFF), byte((base + 1) & 0xFF)
-}
-
-func (s *Conn) InitWriter(w packet.Writer) {
+func (s *Conn) InitWriter(w packet.Writer, token byte) {
 	s.pwriter = w
-	t1, t2 := getToken()
 
 	s.pushBuf = packet.NewBuffer(nil)
 	s.pushBuf.SetCmd(packet.CmdPushStreamData)
 	s.pushBuf.SetSrc(s.localIP, s.localPort)
 	s.pushBuf.SetDist(s.remoteIP, s.remotePort)
-	s.pushBuf.SetToken(t1)
+	s.pushBuf.SetToken(token)
 
 	s.pushAckBuf = packet.NewBuffer(nil)
 	s.pushAckBuf.SetCmd(packet.CmdPushStreamData | packet.CmdACKFlag)
 	s.pushAckBuf.SetSrc(s.localIP, s.localPort)
 	s.pushAckBuf.SetDist(s.remoteIP, s.remotePort)
-	s.pushAckBuf.SetToken(t2)
+	s.pushAckBuf.SetToken(token + 1)
 }
 
 // CloseWrite 设置写状态为不可写，并且告诉对端

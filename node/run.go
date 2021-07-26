@@ -35,6 +35,10 @@ func New(conn packet.Conn) *Node {
 	}
 }
 
+func (node *Node) SetIP(ip uint16) {
+	node.ip = ip
+}
+
 // WriteBuffer goroutine safe writer
 func (node *Node) WriteBuffer(pbuf *packet.Buffer) error {
 	node.writeMut.Lock()
@@ -91,7 +95,7 @@ func (node *Node) OnOpen(pbuf *packet.Buffer) {
 	s := stream.New(false)
 	s.SetLocal(pbuf.DistIP(), pbuf.DistPort())
 	s.SetRemote(pbuf.SrcIP(), pbuf.SrcPort())
-	s.InitWriter(node)
+	s.InitWriter(node, pbuf.Token()+2)
 
 	// 直接进行绑定，做好读数据准备
 	_, loaded := node.streams.LoadOrStore(pbuf.SID(), s)

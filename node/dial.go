@@ -51,6 +51,6 @@ func (node *Node) dial(distDomain string, distIP, distPort uint16) (*stream.Conn
 	}
 	s.SetLocal(pbuf.DistIP(), pbuf.DistPort())
 	s.SetRemote(pbuf.SrcIP(), pbuf.SrcPort())
-	s.InitWriter(node)
+	s.InitWriter(node, NextToken())
 	return s, nil
 }

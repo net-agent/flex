@@ -2,29 +2,30 @@ package switcher
 
 import (
 	"errors"
-	"runtime"
+	"fmt"
+	"net"
 	"sync"
-	"sync/atomic"
 
 	"github.com/net-agent/flex/packet"
 )
 
 type Server struct {
+	freeIps     chan uint16
 	nodeDomains sync.Map // map[string]*Context
 	nodeIps     sync.Map // map[uint16]*Context
 
 	dataChans     []chan *packet.Buffer
 	dataChansMask int
-	dataOpenCount uint32
 }
 
 func NewServer() *Server {
 	//
 	// 创建与CPU核心数相关的goroutine数量
 	// 为了保证运行时效率，数量为2^n
-	num := runtime.NumCPU()
+	// num := runtime.NumCPU()
+	num := 4
 	for {
-		next := num ^ (num - 1)
+		next := num & (num - 1)
 		if next == 0 {
 			break
 		}
@@ -39,6 +40,7 @@ func NewServer() *Server {
 	}
 
 	return &Server{
+		freeIps:       getFreeIpCh(1, 0xFFFF),
 		dataChans:     chans,
 		dataChansMask: mask,
 	}
@@ -57,6 +59,24 @@ func (s *Server) Run() {
 		}(i, ch)
 	}
 	wait.Wait()
+}
+
+func (s *Server) Serve(l net.Listener) {
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			return
+		}
+
+		go s.ServeConn(packet.NewWithConn(conn))
+	}
+}
+
+func (s *Server) Close() error {
+	for _, ch := range s.dataChans {
+		close(ch)
+	}
+	return nil
 }
 
 // AttachCtx 附加上下文
@@ -81,56 +101,10 @@ func (s *Server) DetachCtx(ctx *Context) {
 	s.nodeIps.Delete(ctx.IP)
 }
 
-// ServeConn
-func (s *Server) ServeConn(pc packet.Conn) error {
-	pbuf, err := pc.ReadBuffer()
-	if err != nil {
-		return err
-	}
-
-	ctx := NewContext("default", "localhoste", 0, pc)
-
-	err = s.AttachCtx(ctx)
-	if err != nil {
-		return err
-	}
-	defer s.DetachCtx(ctx)
-
-	// response
-	err = pc.WriteBuffer(pbuf)
-	if err != nil {
-		return err
-	}
-
-	// read loop
-	for {
-		pbuf, err = pc.ReadBuffer()
-		if err != nil {
-			return err
-		}
-
-		if pbuf.Cmd() == packet.CmdAlive {
-			continue
-		}
-
-		switch pbuf.Cmd() {
-		case packet.CmdOpenStream:
-			go s.ResolveOpenCmd(ctx, pbuf)
-		case packet.CmdPushStreamData:
-			s.RouteDataBuffer(pbuf)
-		default:
-			go s.RouteBuffer(pbuf)
-		}
-
-	}
-}
-
 // ResolveOpenCmd 解析open命令
 func (s *Server) ResolveOpenCmd(caller *Context, pbuf *packet.Buffer) {
 	distDomain := string(pbuf.Payload)
 	if distDomain == "" {
-		openCount := atomic.AddUint32(&s.dataOpenCount, 1)
-		pbuf.SetToken(byte(openCount))
 		pbuf.SetPayload([]byte(caller.Domain))
 		s.RouteBuffer(pbuf)
 		return
@@ -153,6 +127,9 @@ func (s *Server) ResolveOpenCmd(caller *Context, pbuf *packet.Buffer) {
 // RouteBuffer 根据DistIP路由数据包，这些包可以无序
 func (s *Server) RouteBuffer(pbuf *packet.Buffer) {
 	distIP := pbuf.DistIP()
+
+	fmt.Printf("route to %v: %v sz=%v\n", distIP, pbuf.Head, pbuf.ACKInfo()+pbuf.PayloadSize())
+
 	it, found := s.nodeIps.Load(distIP)
 	if !found {
 		// 此处记录找不到ctx的错误，但不退出循环
