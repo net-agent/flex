@@ -9,6 +9,9 @@ func (s *Conn) AppendData(buf []byte) {
 }
 
 func (s *Conn) AppendEOF() {
+	if s.rclosed {
+		return
+	}
 	s.rclosed = true
 	close(s.bytesChan)
 }

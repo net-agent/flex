@@ -18,6 +18,8 @@ type Node struct {
 	listenPorts sync.Map
 	usedPorts   sync.Map
 	streams     sync.Map
+
+	writeMut sync.Mutex
 }
 
 func New(conn packet.Conn) *Node {
@@ -33,6 +35,14 @@ func New(conn packet.Conn) *Node {
 	}
 }
 
+// WriteBuffer goroutine safe writer
+func (node *Node) WriteBuffer(pbuf *packet.Buffer) error {
+	node.writeMut.Lock()
+	defer node.writeMut.Unlock()
+
+	return node.Conn.WriteBuffer(pbuf)
+}
+
 func (node *Node) Run() {
 	go node.pushBufLoop()
 
@@ -44,7 +54,7 @@ func (node *Node) Run() {
 			return
 		}
 
-		fmt.Printf("read %v sz=%v\n", pbuf.Head, pbuf.PayloadSize())
+		// fmt.Printf("read %v sz=%v\n", pbuf.Head, pbuf.PayloadSize())
 
 		switch pbuf.Cmd() {
 		case packet.CmdOpenStream:
@@ -87,6 +97,7 @@ func (node *Node) OnOpen(pbuf *packet.Buffer) {
 	_, loaded := node.streams.LoadOrStore(pbuf.SID(), s)
 	if loaded {
 		log.Printf("stream exist\n")
+		node.WriteBuffer(pbuf.SetOpenACK("stream exist"))
 		return
 	}
 
