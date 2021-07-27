@@ -1,7 +1,7 @@
 package stream
 
 import (
-	"errors"
+	"fmt"
 	"io"
 	"time"
 )
@@ -30,14 +30,15 @@ func (s *Conn) Read(dist []byte) (int, error) {
 			s.currBuf = buf
 
 		case <-time.After(time.Second * 5):
-			return 0, errors.New("timeout")
+			return 0, fmt.Errorf("read timeout. %v:%v -> %v:%v",
+				s.localIP, s.localPort, s.remoteIP, s.remotePort)
 		}
 	}
 
 	n := copy(dist, s.currBuf)
 	s.currBuf = s.currBuf[n:]
 	if n > 0 {
-		go s.writeACK(uint16(n))
+		s.writeACK(uint16(n))
 	}
 	return n, nil
 }

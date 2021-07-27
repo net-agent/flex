@@ -41,5 +41,5 @@ func TestClient(t *testing.T) {
 		return
 	}
 
-	node.HelpTest2Node(t, client1, client2, 2)
+	node.HelpTest2Node(t, client1, client2, 1)
 }

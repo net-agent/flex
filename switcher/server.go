@@ -128,9 +128,9 @@ func (s *Server) ResolveOpenCmd(caller *Context, pbuf *packet.Buffer) {
 func (s *Server) RouteBuffer(pbuf *packet.Buffer) {
 	distIP := pbuf.DistIP()
 
-	fmt.Printf("%v:%v -> %v:%v %v sz=%v ack=%v\n",
-		pbuf.SrcIP(), pbuf.SrcPort(), pbuf.DistIP(), pbuf.DistPort(),
-		pbuf.Head, pbuf.PayloadSize(), pbuf.ACKInfo())
+	// fmt.Printf("%v:%v -> %v:%v %v sz=%v ack=%v\n",
+	// 	pbuf.SrcIP(), pbuf.SrcPort(), pbuf.DistIP(), pbuf.DistPort(),
+	// 	pbuf.Head, pbuf.PayloadSize(), pbuf.ACKInfo())
 
 	it, found := s.nodeIps.Load(distIP)
 	if !found {

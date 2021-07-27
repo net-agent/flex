@@ -2,6 +2,7 @@ package stream
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"runtime"
 	"sync/atomic"
@@ -62,7 +63,8 @@ func (s *Conn) Write(buf []byte) (int, error) {
 			case <-s.bucketEv:
 				continue
 			case <-time.After(time.Second * 5):
-				return wn, errors.New("bucket dry")
+
+				return wn, fmt.Errorf("bucket dry. %v:%v -> %v:%v", s.localIP, s.localPort, s.remoteIP, s.remotePort)
 			}
 		}
 
