@@ -128,22 +128,31 @@ func (s *Server) ResolveOpenCmd(caller *Context, pbuf *packet.Buffer) {
 func (s *Server) RouteBuffer(pbuf *packet.Buffer) {
 	distIP := pbuf.DistIP()
 
-	fmt.Printf("route to %v: %v sz=%v\n", distIP, pbuf.Head, pbuf.ACKInfo()+pbuf.PayloadSize())
+	fmt.Printf("%v:%v -> %v:%v %v sz=%v ack=%v\n",
+		pbuf.SrcIP(), pbuf.SrcPort(), pbuf.DistIP(), pbuf.DistPort(),
+		pbuf.Head, pbuf.PayloadSize(), pbuf.ACKInfo())
 
 	it, found := s.nodeIps.Load(distIP)
 	if !found {
 		// 此处记录找不到ctx的错误，但不退出循环
+		fmt.Printf("node not found ip=%v\n", distIP)
 		return
 	}
 	ctx := it.(*Context)
 	err := ctx.WriteBuffer(pbuf)
 	if err != nil {
 		// 此处记录写入失败的日志，但不退出循环
+		fmt.Printf("node.write failed ip=%v\n", distIP)
 		return
 	}
 }
 
 // RouteData 根据DistIP路由数据包，这些包需要保持有序
 func (s *Server) RouteDataBuffer(pbuf *packet.Buffer) {
-	s.dataChans[pbuf.Token()&byte(s.dataChansMask)] <- pbuf
+	// select {
+	// case s.dataChans[0] <- pbuf:
+	// case <-time.After(time.Second * 3):
+	// 	panic("buf channel overflow")
+	// }
+	s.RouteBuffer(pbuf)
 }

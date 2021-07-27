@@ -10,17 +10,12 @@ func (buf *Buffer) SwapSrcDist() {
 func (buf *Buffer) SetOpenACK(msg string) *Buffer {
 	buf.Head[0] |= CmdACKFlag
 	buf.SwapSrcDist()
+	buf.SetToken(buf.Token() + 1)
 
 	if msg == "" {
 		buf.SetPayload(nil)
 	} else {
 		buf.SetPayload([]byte(msg))
 	}
-	return buf
-}
-
-func (buf *Buffer) SetPushACK(n uint16) *Buffer {
-	buf.Head[0] |= CmdACKFlag
-	buf.SetACKInfo(n)
 	return buf
 }

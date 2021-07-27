@@ -103,6 +103,7 @@ func HelpTest2Node(t *testing.T, node1, node2 *Node, concurrent int) {
 				t.Error(err)
 				return
 			}
+			fmt.Printf("[%v] write success, sz=%v\n", index, len(payload))
 		}()
 
 		buf := make([]byte, len(payload))

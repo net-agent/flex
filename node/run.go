@@ -58,8 +58,6 @@ func (node *Node) Run() {
 			return
 		}
 
-		// fmt.Printf("read %v sz=%v\n", pbuf.Head, pbuf.PayloadSize())
-
 		switch pbuf.Cmd() {
 		case packet.CmdOpenStream:
 			if pbuf.IsACK() {
@@ -69,10 +67,6 @@ func (node *Node) Run() {
 			}
 		default:
 			node.pushChan <- pbuf
-			// case packet.CmdCloseStream:
-			// 	node.pushChan <- pbuf
-			// case packet.CmdPushStreamData:
-			// 	node.pushChan <- pbuf
 		}
 	}
 }

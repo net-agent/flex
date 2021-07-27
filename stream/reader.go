@@ -1,6 +1,10 @@
 package stream
 
-import "io"
+import (
+	"errors"
+	"io"
+	"time"
+)
 
 func (s *Conn) AppendData(buf []byte) {
 	if len(buf) > 0 && !s.rclosed {
@@ -18,11 +22,16 @@ func (s *Conn) AppendEOF() {
 
 func (s *Conn) Read(dist []byte) (int, error) {
 	if len(s.currBuf) == 0 {
-		s.currBuf = <-s.bytesChan
-	}
+		select {
+		case buf, ok := <-s.bytesChan:
+			if !ok {
+				return 0, io.EOF
+			}
+			s.currBuf = buf
 
-	if len(s.currBuf) == 0 {
-		return 0, io.EOF
+		case <-time.After(time.Second * 5):
+			return 0, errors.New("timeout")
+		}
 	}
 
 	n := copy(dist, s.currBuf)
