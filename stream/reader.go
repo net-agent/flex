@@ -48,7 +48,7 @@ func (s *Conn) Read(dist []byte) (int, error) {
 	s.counter.Read += int64(n)
 	s.currBuf = s.currBuf[n:]
 	if n > 0 {
-		s.writeACK(uint16(n))
+		go s.writeACK(uint16(n))
 	}
 	return n, nil
 }

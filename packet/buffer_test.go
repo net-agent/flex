@@ -21,7 +21,6 @@ func TestSetGet(t *testing.T) {
 	for _, c := range cases {
 		buf := NewBuffer(nil)
 		buf.SetHeader(c.cmd, c.distIP, c.distPort, c.srcIP, c.srcPort)
-		buf.SetToken(c.token)
 		buf.SetPayload(c.payload)
 
 		if buf.Cmd() != c.cmd {
@@ -42,10 +41,6 @@ func TestSetGet(t *testing.T) {
 		}
 		if buf.SrcPort() != c.srcPort {
 			t.Error("src port not equal")
-			return
-		}
-		if buf.Token() != c.token {
-			t.Error("token not equal")
 			return
 		}
 		if !bytes.Equal(buf.Payload, c.payload) {

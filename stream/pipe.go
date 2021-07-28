@@ -29,11 +29,11 @@ func Pipe() (*Conn, *Conn) {
 	}
 
 	s1 := New(false)
-	s1.InitWriter(pc1, 0)
+	s1.InitWriter(pc1)
 	go copybuf(s1, pc1)
 
 	s2 := New(false)
-	s2.InitWriter(pc2, 2)
+	s2.InitWriter(pc2)
 	go copybuf(s2, pc2)
 
 	return s1, s2

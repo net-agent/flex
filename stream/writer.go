@@ -11,20 +11,18 @@ import (
 	"github.com/net-agent/flex/packet"
 )
 
-func (s *Conn) InitWriter(w packet.Writer, token byte) {
+func (s *Conn) InitWriter(w packet.Writer) {
 	s.pwriter = w
 
 	s.pushBuf = packet.NewBuffer(nil)
 	s.pushBuf.SetCmd(packet.CmdPushStreamData)
 	s.pushBuf.SetSrc(s.localIP, s.localPort)
 	s.pushBuf.SetDist(s.remoteIP, s.remotePort)
-	s.pushBuf.SetToken(token)
 
 	s.pushAckBuf = packet.NewBuffer(nil)
 	s.pushAckBuf.SetCmd(packet.CmdPushStreamData | packet.CmdACKFlag)
 	s.pushAckBuf.SetSrc(s.localIP, s.localPort)
 	s.pushAckBuf.SetDist(s.remoteIP, s.remotePort)
-	s.pushAckBuf.SetToken(token + 1)
 }
 
 // CloseWrite 设置写状态为不可写，并且告诉对端

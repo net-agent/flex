@@ -84,7 +84,7 @@ func (node *Node) OnOpen(pbuf *packet.Buffer) {
 	s := stream.New(false)
 	s.SetLocal(pbuf.DistIP(), pbuf.DistPort())
 	s.SetRemote(pbuf.SrcIP(), pbuf.SrcPort())
-	s.InitWriter(node, pbuf.Token()+2)
+	s.InitWriter(node)
 
 	// 直接进行绑定，做好读数据准备
 	_, loaded := node.streams.LoadOrStore(pbuf.SID(), s)
