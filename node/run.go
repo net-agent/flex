@@ -60,11 +60,7 @@ func (node *Node) Run() {
 
 		switch pbuf.Cmd() {
 		case packet.CmdOpenStream:
-			if pbuf.IsACK() {
-				node.pushChan <- pbuf
-			} else {
-				go node.OnOpen(pbuf)
-			}
+			go node.OnOpen(pbuf)
 		default:
 			node.pushChan <- pbuf
 		}

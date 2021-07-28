@@ -49,15 +49,15 @@ func NewServer() *Server {
 // Run 采用多线程的并发发送数据
 func (s *Server) Run() {
 	var wait sync.WaitGroup
-	for i, ch := range s.dataChans {
-		wait.Add(1)
-		go func(index int, ch chan *packet.Buffer) {
-			for pbuf := range ch {
-				s.RouteBuffer(pbuf)
-			}
-			wait.Done()
-		}(i, ch)
-	}
+	// for i, ch := range s.dataChans {
+	// 	wait.Add(1)
+	// 	go func(index int, ch chan *packet.Buffer) {
+	// 		for pbuf := range ch {
+	// 			s.RouteBuffer(pbuf)
+	// 		}
+	// 		wait.Done()
+	// 	}(i, ch)
+	// }
 	wait.Wait()
 }
 
@@ -145,6 +145,11 @@ func (s *Server) RouteBuffer(pbuf *packet.Buffer) {
 		fmt.Printf("node.write failed ip=%v\n", distIP)
 		return
 	}
+
+	// if pbuf.Cmd() == packet.CmdPushStreamData {
+	// 	log.Printf("route data %v:%v -> %v:%v, sz=%v\n",
+	// 		pbuf.SrcIP(), pbuf.SrcPort(), pbuf.DistIP(), pbuf.DistPort(), pbuf.PayloadSize())
+	// }
 }
 
 // RouteData 根据DistIP路由数据包，这些包需要保持有序

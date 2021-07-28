@@ -10,6 +10,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	"github.com/net-agent/flex/stream"
 )
 
 func HelpTest2Node(t *testing.T, node1, node2 *Node, concurrent int) {
@@ -54,22 +56,25 @@ func HelpTest2Node(t *testing.T, node1, node2 *Node, concurrent int) {
 
 				var rn int = 0
 				var wn int = 0
-				buf := make([]byte, 1024*4)
+				buf := make([]byte, 1024*1024*1024)
 				for {
 					rn, err = conn.Read(buf)
 					if err != nil {
 						break
 					}
-					log.Printf("read buf, size=%v\n", rn)
+					// log.Printf("read buf, size=%v\n", rn)
 
 					wn, err = conn.Write(buf[:rn])
 					n += int64(wn)
 					if err != nil {
 						break
 					}
-					log.Printf("wrte buf, size=%v\n", rn)
+					// log.Printf("wrte buf, size=%v\n", rn)
 				}
-				log.Printf("copy stopped, n=%v err=%v\n", n, err)
+				log.Printf("copy stopped, copied=%v err=%v\n", n, err)
+				if s, ok := conn.(*stream.Conn); ok {
+					log.Printf("copy state=%v\n", s.State())
+				}
 			}()
 		}
 	}(l)
@@ -122,6 +127,7 @@ func HelpTest2Node(t *testing.T, node1, node2 *Node, concurrent int) {
 			_, err := conn.Write(payload)
 			if err != nil {
 				t.Error(err)
+				fmt.Printf("stream state: %v\n", conn.State())
 				return
 			}
 			fmt.Printf("[%v] write success, sz=%v\n", index, len(payload))
