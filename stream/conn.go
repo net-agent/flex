@@ -12,9 +12,9 @@ import (
 const (
 	KB                  = 1024
 	MB                  = 1024 * KB
-	DefaultBucketSize   = 512 * KB
-	DefaultSplitSize    = 16 * KB
-	DefaultBytesChanCap = 2 * DefaultBucketSize / DefaultSplitSize
+	DefaultBucketSize   = 2 * MB
+	DefaultSplitSize    = 63 * KB
+	DefaultBytesChanCap = 4 * DefaultBucketSize / DefaultSplitSize
 )
 
 type OpenResp struct {
