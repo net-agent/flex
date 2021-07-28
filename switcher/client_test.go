@@ -7,6 +7,65 @@ import (
 	"github.com/net-agent/flex/node"
 )
 
+func TestClient(t *testing.T) {
+	client1, client2, err := makeTwoNodes("localhost:12345")
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	node.HelpTest2Node(t, client1, client2, 0)
+}
+
+func TestDialDomain(t *testing.T) {
+	client1, client2, err := makeTwoNodes("localhost:12346")
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	go client1.Run()
+	go client2.Run()
+	defer client1.Close()
+	defer client2.Close()
+
+	_, err = client1.DialDomain("test2", 80)
+	if err == nil {
+		t.Error("unexpected nil err")
+		return
+	}
+
+	_, err = client2.Listen(80)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	c, err := client1.DialDomain("test2", 80)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	c.Close()
+}
+
+func makeTwoNodes(addr string) (*node.Node, *node.Node, error) {
+	_, err := startTestServer(addr)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	client1, err := ConnectServer(addr, "test1")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	client2, err := ConnectServer(addr, "test2")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return client1, client2, nil
+}
+
 func startTestServer(addr string) (*Server, error) {
 	app := NewServer()
 
@@ -15,31 +74,7 @@ func startTestServer(addr string) (*Server, error) {
 		return nil, err
 	}
 
-	go app.Run()
 	go app.Serve(l)
 
 	return app, nil
-}
-
-func TestClient(t *testing.T) {
-	addr := "localhost:12345"
-	_, err := startTestServer(addr)
-	if err != nil {
-		t.Error(err)
-		return
-	}
-
-	client1, err := ConnectServer(addr, "test1")
-	if err != nil {
-		t.Error(err)
-		return
-	}
-
-	client2, err := ConnectServer(addr, "test2")
-	if err != nil {
-		t.Error(err)
-		return
-	}
-
-	node.HelpTest2Node(t, client1, client2, 1)
 }

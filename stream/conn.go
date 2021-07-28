@@ -34,33 +34,25 @@ type Conn struct {
 	openAck chan *packet.Buffer
 
 	// for reader
-	rclosed      bool
-	bytesChan    chan []byte
-	currBuf      []byte
-	readedCount  int64 // 成功被读走的数据总量
-	appendCount  int64 // 从对端发送过来的总量
-	readAckCount int64 // 回应给对端的ack总量
+	rclosed   bool
+	bytesChan chan []byte
+	currBuf   []byte
 
 	// for writer
-	wmut          sync.Mutex
-	wclosed       bool
-	pwriter       packet.Writer
-	pushBuf       *packet.Buffer
-	pushAckBuf    *packet.Buffer
-	bucketSz      int32
-	bucketEv      chan struct{}
-	writedCount   int64 // 发送给对方的总量
-	writeAckCount int64 // 对端确认收到的总量
+	wmut       sync.Mutex
+	wclosed    bool
+	pwriter    packet.Writer
+	pushBuf    *packet.Buffer
+	pushAckBuf *packet.Buffer
+	bucketSz   int32
+	bucketEv   chan struct{}
+
+	// counter
+	counter Counter
 }
 
-func (s *Conn) String() string {
-	return fmt.Sprintf("%v:%v->%v:%v", s.localIP, s.localPort, s.remoteIP, s.remotePort)
-}
-
-func (s *Conn) State() string {
-	return fmt.Sprintf("%v append=%v readed=%v readack=%v writed=%v writeack=%v",
-		s.String(), s.appendCount, s.readedCount, s.readAckCount, s.writedCount, s.writeAckCount)
-}
+func (s *Conn) String() string { return fmt.Sprintf("<%v,%v>", s.local.String(), s.remote.String()) }
+func (s *Conn) State() string  { return fmt.Sprintf("%v %v", s.String(), s.counter.String()) }
 
 func New(isDialer bool) *Conn {
 	return &Conn{

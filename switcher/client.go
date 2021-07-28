@@ -48,7 +48,7 @@ func ConnectServer(addr, domain string) (retNode *node.Node, retErr error) {
 
 	node := node.New(pc)
 	node.SetIP(resp.IP)
-	go node.Run()
+	// go node.Run()
 
 	return node, nil
 }

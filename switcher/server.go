@@ -2,7 +2,7 @@ package switcher
 
 import (
 	"errors"
-	"fmt"
+	"log"
 	"net"
 	"sync"
 
@@ -13,52 +13,12 @@ type Server struct {
 	freeIps     chan uint16
 	nodeDomains sync.Map // map[string]*Context
 	nodeIps     sync.Map // map[uint16]*Context
-
-	dataChans     []chan *packet.Buffer
-	dataChansMask int
 }
 
 func NewServer() *Server {
-	//
-	// 创建与CPU核心数相关的goroutine数量
-	// 为了保证运行时效率，数量为2^n
-	// num := runtime.NumCPU()
-	num := 4
-	for {
-		next := num & (num - 1)
-		if next == 0 {
-			break
-		}
-		num = next
-	}
-	num = num << 1
-	mask := num - 1
-
-	var chans []chan *packet.Buffer
-	for i := 0; i < num; i++ {
-		chans = append(chans, make(chan *packet.Buffer, 2048))
-	}
-
 	return &Server{
-		freeIps:       getFreeIpCh(1, 0xFFFF),
-		dataChans:     chans,
-		dataChansMask: mask,
+		freeIps: getFreeIpCh(1, 0xFFFF),
 	}
-}
-
-// Run 采用多线程的并发发送数据
-func (s *Server) Run() {
-	var wait sync.WaitGroup
-	// for i, ch := range s.dataChans {
-	// 	wait.Add(1)
-	// 	go func(index int, ch chan *packet.Buffer) {
-	// 		for pbuf := range ch {
-	// 			s.RouteBuffer(pbuf)
-	// 		}
-	// 		wait.Done()
-	// 	}(i, ch)
-	// }
-	wait.Wait()
 }
 
 func (s *Server) Serve(l net.Listener) {
@@ -73,9 +33,6 @@ func (s *Server) Serve(l net.Listener) {
 }
 
 func (s *Server) Close() error {
-	for _, ch := range s.dataChans {
-		close(ch)
-	}
 	return nil
 }
 
@@ -127,37 +84,17 @@ func (s *Server) ResolveOpenCmd(caller *Context, pbuf *packet.Buffer) {
 // RouteBuffer 根据DistIP路由数据包，这些包可以无序
 func (s *Server) RouteBuffer(pbuf *packet.Buffer) {
 	distIP := pbuf.DistIP()
-
-	// fmt.Printf("%v:%v -> %v:%v %v sz=%v ack=%v\n",
-	// 	pbuf.SrcIP(), pbuf.SrcPort(), pbuf.DistIP(), pbuf.DistPort(),
-	// 	pbuf.Head, pbuf.PayloadSize(), pbuf.ACKInfo())
-
 	it, found := s.nodeIps.Load(distIP)
 	if !found {
 		// 此处记录找不到ctx的错误，但不退出循环
-		fmt.Printf("node not found ip=%v\n", distIP)
+		log.Printf("node not found ip=%v\n", distIP)
 		return
 	}
 	ctx := it.(*Context)
 	err := ctx.WriteBuffer(pbuf)
 	if err != nil {
 		// 此处记录写入失败的日志，但不退出循环
-		fmt.Printf("node.write failed ip=%v\n", distIP)
+		log.Printf("node.write failed ip=%v\n", distIP)
 		return
 	}
-
-	// if pbuf.Cmd() == packet.CmdPushStreamData {
-	// 	log.Printf("route data %v:%v -> %v:%v, sz=%v\n",
-	// 		pbuf.SrcIP(), pbuf.SrcPort(), pbuf.DistIP(), pbuf.DistPort(), pbuf.PayloadSize())
-	// }
-}
-
-// RouteData 根据DistIP路由数据包，这些包需要保持有序
-func (s *Server) RouteDataBuffer(pbuf *packet.Buffer) {
-	// select {
-	// case s.dataChans[0] <- pbuf:
-	// case <-time.After(time.Second * 3):
-	// 	panic("buf channel overflow")
-	// }
-	s.RouteBuffer(pbuf)
 }

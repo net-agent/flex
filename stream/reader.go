@@ -12,7 +12,7 @@ func (s *Conn) AppendData(buf []byte) {
 	if len(buf) > 0 && !s.rclosed {
 		select {
 		case s.bytesChan <- buf:
-			atomic.AddInt64(&s.appendCount, int64(len(buf)))
+			atomic.AddInt64(&s.counter.AppendData, int64(len(buf)))
 		case <-time.After(time.Second * 2):
 			log.Printf("append data timeout")
 		}
@@ -40,13 +40,12 @@ func (s *Conn) Read(dist []byte) (int, error) {
 			s.currBuf = buf
 
 		case <-time.After(time.Second * 5):
-			return 0, fmt.Errorf("read timeout. %v:%v -> %v:%v, len(bch)=%v, readed=%v, append=%v",
-				s.localIP, s.localPort, s.remoteIP, s.remotePort, len(s.bytesChan), s.readedCount, s.appendCount)
+			return 0, fmt.Errorf("read timeout. %v", s.State())
 		}
 	}
 
 	n := copy(dist, s.currBuf)
-	s.readedCount += int64(n)
+	s.counter.Read += int64(n)
 	s.currBuf = s.currBuf[n:]
 	if n > 0 {
 		s.writeACK(uint16(n))

@@ -65,8 +65,7 @@ func (s *Conn) Write(buf []byte) (int, error) {
 				continue
 			case <-time.After(time.Second * 5):
 
-				return wn, fmt.Errorf("bucket dry. %v:%v -> %v:%v, wn=%v/%v, bucket=%v, ack=%v",
-					s.localIP, s.localPort, s.remoteIP, s.remotePort, wn, buflen, s.bucketSz, s.writeAckCount)
+				return wn, fmt.Errorf("bucket dry. writed=%v/%v state=%v", wn, buflen, s.State())
 			}
 		}
 
@@ -109,7 +108,7 @@ func (s *Conn) write(buf []byte) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	atomic.AddInt64(&s.writedCount, int64(len(buf)))
+	atomic.AddInt64(&s.counter.Write, int64(len(buf)))
 	return len(buf), nil
 }
 
@@ -127,12 +126,12 @@ func (s *Conn) writeACK(n uint16) {
 		log.Println("write push-ack failed")
 	}
 
-	atomic.AddInt64(&s.readAckCount, int64(n))
+	atomic.AddInt64(&s.counter.WriteAck, int64(n))
 }
 
 func (s *Conn) IncreaseBucket(size uint16) {
 	atomic.AddInt32(&s.bucketSz, int32(size))
-	atomic.AddInt64(&s.writeAckCount, int64(size))
+	atomic.AddInt64(&s.counter.IncreaseBucket, int64(size))
 
 	select {
 	case s.bucketEv <- struct{}{}:

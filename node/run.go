@@ -1,7 +1,6 @@
 package node
 
 import (
-	"fmt"
 	"log"
 	"sync"
 
@@ -170,7 +169,7 @@ func (node *Node) pushBufLoop() {
 			}
 			c, ok := it.(*stream.Conn)
 			if !ok {
-				fmt.Printf("internal error (close)")
+				log.Printf("internal error (close)\n")
 				continue
 			}
 

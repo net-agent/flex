@@ -68,17 +68,11 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 		if pbuf.Cmd() == packet.CmdAlive {
 			continue
 		}
+		if pbuf.Cmd() == packet.CmdOpenStream {
+			go s.ResolveOpenCmd(ctx, pbuf)
+			continue
+		}
 
 		s.RouteBuffer(pbuf)
-
-		// switch pbuf.Cmd() {
-		// case packet.CmdOpenStream:
-		// 	s.ResolveOpenCmd(ctx, pbuf)
-		// case packet.CmdPushStreamData:
-		// 	s.RouteDataBuffer(pbuf)
-		// default:
-		// 	s.RouteBuffer(pbuf)
-		// }
-
 	}
 }
