@@ -7,6 +7,8 @@ import (
 	"github.com/net-agent/flex/node"
 )
 
+var testPassword = "abc"
+
 func TestClient(t *testing.T) {
 	client1, client2, err := makeTwoNodes("localhost:12345")
 	if err != nil {
@@ -53,12 +55,12 @@ func makeTwoNodes(addr string) (*node.Node, *node.Node, error) {
 		return nil, nil, err
 	}
 
-	client1, err := ConnectServer(addr, "test1")
+	client1, err := ConnectServer(addr, "test1", testPassword)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	client2, err := ConnectServer(addr, "test2")
+	client2, err := ConnectServer(addr, "test2", testPassword)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -67,7 +69,7 @@ func makeTwoNodes(addr string) (*node.Node, *node.Node, error) {
 }
 
 func startTestServer(addr string) (*Server, error) {
-	app := NewServer()
+	app := NewServer(testPassword)
 
 	l, err := net.Listen("tcp4", addr)
 	if err != nil {

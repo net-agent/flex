@@ -8,7 +8,7 @@ import (
 	"github.com/net-agent/flex/packet"
 )
 
-func ConnectServer(addr, domain string) (retNode *node.Node, retErr error) {
+func ConnectServer(addr, domain, password string) (retNode *node.Node, retErr error) {
 	conn, err := net.Dial("tcp4", addr)
 	if err != nil {
 		return nil, err
@@ -25,6 +25,7 @@ func ConnectServer(addr, domain string) (retNode *node.Node, retErr error) {
 	var req Request
 	req.Domain = domain
 	req.Mac = "test-mac-info"
+	req.IV = packet.GetIV()
 	reqBuf, err := json.Marshal(&req)
 	if err != nil {
 		return nil, err
@@ -46,9 +47,15 @@ func ConnectServer(addr, domain string) (retNode *node.Node, retErr error) {
 		return nil, err
 	}
 
+	packet.Xor(&req.IV, &resp.IV)
+
+	pc, err = packet.UpgradeCipher(pc, password, req.IV)
+	if err != nil {
+		return nil, err
+	}
+
 	node := node.New(pc)
 	node.SetIP(resp.IP)
-	// go node.Run()
 
 	return node, nil
 }

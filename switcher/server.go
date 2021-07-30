@@ -10,14 +10,16 @@ import (
 )
 
 type Server struct {
+	password    string
 	freeIps     chan uint16
 	nodeDomains sync.Map // map[string]*Context
 	nodeIps     sync.Map // map[uint16]*Context
 }
 
-func NewServer() *Server {
+func NewServer(password string) *Server {
 	return &Server{
-		freeIps: getFreeIpCh(1, 0xFFFF),
+		password: password,
+		freeIps:  getFreeIpCh(1, 0xFFFF),
 	}
 }
 

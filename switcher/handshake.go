@@ -9,10 +9,12 @@ import (
 type Request struct {
 	Domain string
 	Mac    string
+	IV     packet.IV
 }
 
 type Response struct {
 	IP uint16
+	IV packet.IV
 }
 
 // ServeConn
@@ -44,9 +46,12 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 	}
 	defer s.DetachCtx(ctx)
 
+	iv := packet.GetIV()
+
 	// response
 	var resp Response
 	resp.IP = ip
+	resp.IV = iv
 	respBuf, err := json.Marshal(&resp)
 	if err != nil {
 		return err
@@ -54,6 +59,13 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 
 	pbuf.SetPayload(respBuf)
 	err = pc.WriteBuffer(pbuf)
+	if err != nil {
+		return err
+	}
+
+	packet.Xor(&iv, &req.IV)
+
+	pc, err = packet.UpgradeCipher(pc, s.password, iv)
 	if err != nil {
 		return err
 	}
