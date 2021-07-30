@@ -58,6 +58,10 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 		return err
 	}
 
+	pbufChan := make(chan *packet.Buffer, 128)
+	defer close(pbufChan)
+	go s.routeLoop(ctx, pbufChan)
+
 	// read loop
 	for {
 		pbuf, err = pc.ReadBuffer()
@@ -65,6 +69,12 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 			return err
 		}
 
+		pbufChan <- pbuf
+	}
+}
+
+func (s *Server) routeLoop(ctx *Context, pbufChan <-chan *packet.Buffer) {
+	for pbuf := range pbufChan {
 		if pbuf.Cmd() == packet.CmdAlive {
 			continue
 		}

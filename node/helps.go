@@ -52,25 +52,26 @@ func HelpTest2Node(t *testing.T, node1, node2 *Node, concurrent int) {
 				defer wg.Done()
 				var n int64
 				var err error
-				// n, err = io.Copy(conn, conn)
+				n, err = io.Copy(conn, conn)
 
-				var rn int = 0
-				var wn int = 0
-				buf := make([]byte, 1024*1024*1024)
-				for {
-					rn, err = conn.Read(buf)
-					if err != nil {
-						break
-					}
-					// log.Printf("read buf, size=%v\n", rn)
+				// var rn int = 0
+				// var wn int = 0
+				// buf := make([]byte, 1024*1024*1024)
+				// for {
+				// 	rn, err = conn.Read(buf)
+				// 	if err != nil {
+				// 		break
+				// 	}
+				// 	// log.Printf("read buf, size=%v\n", rn)
 
-					wn, err = conn.Write(buf[:rn])
-					n += int64(wn)
-					if err != nil {
-						break
-					}
-					// log.Printf("wrte buf, size=%v\n", rn)
-				}
+				// 	wn, err = conn.Write(buf[:rn])
+				// 	n += int64(wn)
+				// 	if err != nil {
+				// 		break
+				// 	}
+				// 	// log.Printf("wrte buf, size=%v\n", rn)
+				// }
+
 				log.Printf("copy stopped, copied=%v err=%v\n", n, err)
 				if s, ok := conn.(*stream.Conn); ok {
 					log.Printf("copy state=%v\n", s.State())
