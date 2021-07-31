@@ -25,7 +25,6 @@ func ConnectServer(addr, domain, password string) (retNode *node.Node, retErr er
 	var req Request
 	req.Domain = domain
 	req.Mac = "test-mac-info"
-	req.IV = packet.GetIV()
 	reqBuf, err := json.Marshal(&req)
 	if err != nil {
 		return nil, err
@@ -43,13 +42,6 @@ func ConnectServer(addr, domain, password string) (retNode *node.Node, retErr er
 		return nil, err
 	}
 	err = json.Unmarshal(pbuf.Payload, &resp)
-	if err != nil {
-		return nil, err
-	}
-
-	packet.Xor(&req.IV, &resp.IV)
-
-	pc, err = packet.UpgradeCipher(pc, password, req.IV)
 	if err != nil {
 		return nil, err
 	}
