@@ -55,12 +55,12 @@ func makeTwoNodes(addr string) (*node.Node, *node.Node, error) {
 		return nil, nil, err
 	}
 
-	client1, err := ConnectServer(addr, "test1", testPassword)
+	client1, err := ConnectServer(addr, "test1", "mac1", testPassword)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	client2, err := ConnectServer(addr, "test2", testPassword)
+	client2, err := ConnectServer(addr, "test2", "mac2", testPassword)
 	if err != nil {
 		return nil, nil, err
 	}

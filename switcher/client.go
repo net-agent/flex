@@ -3,28 +3,35 @@ package switcher
 import (
 	"encoding/json"
 	"net"
+	"time"
 
 	"github.com/net-agent/flex/node"
 	"github.com/net-agent/flex/packet"
 )
 
-func ConnectServer(addr, domain, password string) (retNode *node.Node, retErr error) {
+func ConnectServer(addr, domain, mac, password string) (retNode *node.Node, retErr error) {
 	conn, err := net.Dial("tcp4", addr)
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if retErr != nil && conn != nil {
-			conn.Close()
-		}
-	}()
-
 	pc := packet.NewWithConn(conn)
+
+	node, err := UpgradeToNode(pc, domain, mac, password)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return node, nil
+}
+
+func UpgradeToNode(pc packet.Conn, domain, mac, password string) (*node.Node, error) {
 	pbuf := packet.NewBuffer(nil)
 
 	var req Request
 	req.Domain = domain
-	req.Mac = "test-mac-info"
+	req.Mac = mac
+	req.Timestamp = time.Now().UnixNano()
+	req.Sum = req.CalcSum(password)
 	reqBuf, err := json.Marshal(&req)
 	if err != nil {
 		return nil, err

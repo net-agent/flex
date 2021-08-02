@@ -7,17 +7,17 @@ import (
 )
 
 type Context struct {
-	Name     string
 	Domain   string
+	Mac      string
 	IP       uint16
 	Conn     packet.Conn
 	writeMut sync.Mutex
 }
 
-func NewContext(name, domain string, ip uint16, conn packet.Conn) *Context {
+func NewContext(domain, mac string, ip uint16, conn packet.Conn) *Context {
 	return &Context{
-		Name:   name,
 		Domain: domain,
+		Mac:    mac,
 		IP:     ip,
 		Conn:   conn,
 	}

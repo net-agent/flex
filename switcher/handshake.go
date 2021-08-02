@@ -1,14 +1,29 @@
 package switcher
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"log"
+	"sync"
 
 	"github.com/net-agent/flex/packet"
 )
 
 type Request struct {
-	Domain string
-	Mac    string
+	Domain    string
+	Mac       string
+	Timestamp int64
+	Sum       string
+}
+
+// GenSum sha256(domain + mac + timestamp + password)
+func (req *Request) CalcSum(password string) string {
+	h := sha256.New()
+	h.Write([]byte(fmt.Sprintf("CalcSumStart,%v,%v,%v,CalcSumEnd", req.Domain, req.Mac, req.Timestamp)))
+	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
 type Response struct {
@@ -29,6 +44,9 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 	if err != nil {
 		return err
 	}
+	if req.Sum != req.CalcSum(s.password) {
+		return errors.New("invalid checksum detected")
+	}
 
 	ip, err := s.GetIP(req.Domain)
 	if err != nil {
@@ -36,7 +54,7 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 	}
 	defer s.FreeIP(ip)
 
-	ctx := NewContext("default", req.Domain, ip, pc)
+	ctx := NewContext(req.Mac, req.Domain, ip, pc)
 
 	err = s.AttachCtx(ctx)
 	if err != nil {
@@ -60,17 +78,31 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 
 	pbufChan := make(chan *packet.Buffer, 128)
 	defer close(pbufChan)
-	go s.routeLoop(ctx, pbufChan)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		s.routeLoop(ctx, pbufChan)
+		wg.Done()
+	}()
+
+	log.Printf("node connected. domain='%v' mac='%v'\n", req.Domain, req.Mac)
 
 	// read loop
 	for {
 		pbuf, err = pc.ReadBuffer()
 		if err != nil {
-			return err
+			log.Printf("node read loop stopped. domain='%v' mac='%v'\n", req.Domain, req.Mac)
+			break
 		}
 
 		pbufChan <- pbuf
 	}
+	close(pbufChan)
+	ctx.Conn.Close()
+
+	wg.Wait()
+	log.Printf("node disconnected. domain='%v' mac='%v'\n", req.Domain, req.Mac)
+	return nil
 }
 
 func (s *Server) routeLoop(ctx *Context, pbufChan <-chan *packet.Buffer) {
@@ -85,4 +117,6 @@ func (s *Server) routeLoop(ctx *Context, pbufChan <-chan *packet.Buffer) {
 
 		s.RouteBuffer(pbuf)
 	}
+	ctx.Conn.Close()
+	log.Printf("node route loop stopped. domain='%v' mac='%v'\n", ctx.Domain, ctx.Mac)
 }
