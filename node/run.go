@@ -3,9 +3,14 @@ package node
 import (
 	"log"
 	"sync"
+	"time"
 
 	"github.com/net-agent/flex/packet"
 	"github.com/net-agent/flex/stream"
+)
+
+const (
+	DefaultHeartbeatInterval = time.Second * 15
 )
 
 type Node struct {
@@ -18,7 +23,8 @@ type Node struct {
 	usedPorts   sync.Map
 	streams     sync.Map
 
-	writeMut sync.Mutex
+	writeMut      sync.Mutex
+	lastWriteTime time.Time
 }
 
 func New(conn packet.Conn) *Node {
@@ -28,9 +34,10 @@ func New(conn packet.Conn) *Node {
 	}
 
 	return &Node{
-		Conn:      conn,
-		pushChan:  make(chan *packet.Buffer, 1024),
-		freePorts: freePorts,
+		Conn:          conn,
+		pushChan:      make(chan *packet.Buffer, 1024),
+		freePorts:     freePorts,
+		lastWriteTime: time.Now(),
 	}
 }
 
@@ -43,10 +50,13 @@ func (node *Node) WriteBuffer(pbuf *packet.Buffer) error {
 	node.writeMut.Lock()
 	defer node.writeMut.Unlock()
 
+	node.lastWriteTime = time.Now()
 	return node.Conn.WriteBuffer(pbuf)
 }
 
 func (node *Node) Run() {
+	ticker := time.NewTicker(DefaultHeartbeatInterval)
+	go node.heartbeatLoop(ticker)
 	go node.pushBufLoop()
 
 	// quick read loop
@@ -193,5 +203,24 @@ func (node *Node) pushBufLoop() {
 			}(c, pbuf.IsACK())
 		}
 
+	}
+}
+
+func (node *Node) heartbeatLoop(ticker *time.Ticker) {
+	pbuf := packet.NewBuffer(nil)
+	pbuf.SetSrc(node.ip, 0)
+	pbuf.SetDist(0xffff, 0)
+	pbuf.SetPayload(nil)
+
+	for range ticker.C {
+		if time.Since(node.lastWriteTime) > (DefaultHeartbeatInterval - time.Second) {
+			err := node.WriteBuffer(pbuf)
+			if err != nil {
+				node.Close()
+				ticker.Stop()
+				return
+			}
+			log.Println("beat-!")
+		}
 	}
 }

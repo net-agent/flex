@@ -5,6 +5,10 @@ import (
 	"time"
 )
 
+const (
+	DefaultIPAllocTimeout = time.Millisecond * 50
+)
+
 func getFreeIpCh(min, max uint16) chan uint16 {
 	ch := make(chan uint16, max-min)
 	for i := min; i < max; i++ {
@@ -25,7 +29,7 @@ func (s *Server) GetIP(domain string) (uint16, error) {
 				continue
 			}
 			return ip, nil
-		case <-time.After(time.Millisecond * 50):
+		case <-time.After(DefaultIPAllocTimeout):
 			return 0, errors.New("alloc ip timeout")
 		}
 	}

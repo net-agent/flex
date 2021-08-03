@@ -15,6 +15,10 @@ const (
 	DefaultBucketSize   = 2 * MB
 	DefaultSplitSize    = 63 * KB
 	DefaultBytesChanCap = 4 * DefaultBucketSize / DefaultSplitSize
+
+	DialTimeout              = time.Second * 5  // 此参数设置应该考虑网络延时，延时大的情况下需设置大一些
+	DefaultAppendDataTimeout = time.Second * 2  // 此参数设置过小会导致丢包。过大会导致全局阻塞
+	DefaultReadTimeout       = time.Minute * 10 // 此参数设置过小会导致长连接容易断开
 )
 
 type OpenResp struct {
@@ -77,7 +81,7 @@ func (s *Conn) WaitOpenResp() (*packet.Buffer, error) {
 		}
 		return pbuf, nil
 
-	case <-time.After(time.Second * 500):
+	case <-time.After(DialTimeout):
 		return nil, errors.New("dial timeout")
 	}
 }

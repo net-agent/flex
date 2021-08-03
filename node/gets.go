@@ -5,6 +5,10 @@ import (
 	"time"
 )
 
+const (
+	DefaultGetFreePortTimeout = time.Second * 2
+)
+
 func (node *Node) GetIP() uint16 {
 	return node.ip
 }
@@ -19,7 +23,7 @@ func (node *Node) GetFreePort() (uint16, error) {
 				continue
 			}
 			return port, nil
-		case <-time.After(time.Second):
+		case <-time.After(DefaultGetFreePortTimeout):
 			return 0, errors.New("free port dry")
 		}
 	}

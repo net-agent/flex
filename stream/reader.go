@@ -13,7 +13,7 @@ func (s *Conn) AppendData(buf []byte) {
 		select {
 		case s.bytesChan <- buf:
 			atomic.AddInt64(&s.counter.AppendData, int64(len(buf)))
-		case <-time.After(time.Second * 2):
+		case <-time.After(DefaultAppendDataTimeout):
 			log.Printf("append data timeout")
 		}
 
@@ -39,7 +39,7 @@ func (s *Conn) Read(dist []byte) (int, error) {
 			}
 			s.currBuf = buf
 
-		case <-time.After(time.Second * 5):
+		case <-time.After(DefaultReadTimeout):
 			return 0, fmt.Errorf("read timeout. %v", s.State())
 		}
 	}
