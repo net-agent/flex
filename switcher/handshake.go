@@ -77,21 +77,21 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 	}
 
 	pbufChan := make(chan *packet.Buffer, 128)
-	defer close(pbufChan)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
-		s.routeLoop(ctx, pbufChan)
+		s.routeLoop(ctx, pbufChan) // close(pbufChan) to stop this loop
+		log.Printf("node route loop stopped. domain='%v' id='%v'\n", ctx.Domain, ctx.id)
 		wg.Done()
 	}()
 
-	log.Printf("node connected. domain='%v' mac='%v'\n", req.Domain, req.Mac)
+	log.Printf("node connected. domain='%v' id='%v'\n", req.Domain, ctx.id)
 
 	// read loop
 	for {
 		pbuf, err = pc.ReadBuffer()
 		if err != nil {
-			log.Printf("node read loop stopped. domain='%v' mac='%v'\n", req.Domain, req.Mac)
+			log.Printf("node read loop stopped. domain='%v' id='%v'\n", req.Domain, ctx.id)
 			break
 		}
 
@@ -101,7 +101,7 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 	ctx.Conn.Close()
 
 	wg.Wait()
-	log.Printf("node disconnected. domain='%v' mac='%v'\n", req.Domain, req.Mac)
+	log.Printf("node disconnected. domain='%v' id='%v'\n", req.Domain, ctx.id)
 	return nil
 }
 
@@ -118,5 +118,4 @@ func (s *Server) routeLoop(ctx *Context, pbufChan <-chan *packet.Buffer) {
 		s.RouteBuffer(pbuf)
 	}
 	ctx.Conn.Close()
-	log.Printf("node route loop stopped. domain='%v' mac='%v'\n", ctx.Domain, ctx.Mac)
 }

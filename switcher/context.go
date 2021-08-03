@@ -2,11 +2,15 @@ package switcher
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/net-agent/flex/packet"
 )
 
+var ctxindex int32
+
 type Context struct {
+	id       int
 	Domain   string
 	Mac      string
 	IP       uint16
@@ -16,6 +20,7 @@ type Context struct {
 
 func NewContext(domain, mac string, ip uint16, conn packet.Conn) *Context {
 	return &Context{
+		id:     int(atomic.AddInt32(&ctxindex, 1)),
 		Domain: domain,
 		Mac:    mac,
 		IP:     ip,
