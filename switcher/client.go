@@ -2,6 +2,7 @@ package switcher
 
 import (
 	"encoding/json"
+	"fmt"
 	"net"
 	"time"
 
@@ -51,6 +52,9 @@ func UpgradeToNode(pc packet.Conn, domain, mac, password string) (*node.Node, er
 	err = json.Unmarshal(pbuf.Payload, &resp)
 	if err != nil {
 		return nil, err
+	}
+	if resp.ErrCode != 0 {
+		return nil, fmt.Errorf("close by peer: %v", resp.ErrMsg)
 	}
 
 	node := node.New(pc)

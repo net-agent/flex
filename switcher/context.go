@@ -3,6 +3,7 @@ package switcher
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/net-agent/flex/packet"
 )
@@ -10,21 +11,23 @@ import (
 var ctxindex int32
 
 type Context struct {
-	id       int
-	Domain   string
-	Mac      string
-	IP       uint16
-	Conn     packet.Conn
-	writeMut sync.Mutex
+	id           int
+	Domain       string
+	Mac          string
+	IP           uint16
+	Conn         packet.Conn
+	writeMut     sync.Mutex
+	LastReadTime time.Time
 }
 
 func NewContext(domain, mac string, ip uint16, conn packet.Conn) *Context {
 	return &Context{
-		id:     int(atomic.AddInt32(&ctxindex, 1)),
-		Domain: domain,
-		Mac:    mac,
-		IP:     ip,
-		Conn:   conn,
+		id:           int(atomic.AddInt32(&ctxindex, 1)),
+		Domain:       domain,
+		Mac:          mac,
+		IP:           ip,
+		Conn:         conn,
+		LastReadTime: time.Now(),
 	}
 }
 

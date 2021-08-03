@@ -28,12 +28,28 @@ func (req *Request) CalcSum(password string) string {
 }
 
 type Response struct {
-	IP uint16
+	ErrCode int
+	ErrMsg  string
+	IP      uint16
 }
 
 // ServeConn
-func (s *Server) ServeConn(pc packet.Conn) error {
-	defer pc.Close()
+func (s *Server) ServeConn(pc packet.Conn) (retErr error) {
+	defer func() {
+		if retErr != nil {
+			var resp Response
+			resp.ErrCode = -1
+			resp.ErrMsg = retErr.Error()
+			resp.IP = 0
+			data, err := json.Marshal(&resp)
+			if err == nil {
+				pbuf := packet.NewBuffer(nil)
+				pbuf.SetPayload(data)
+				pc.WriteBuffer(pbuf)
+			}
+		}
+		pc.Close()
+	}()
 
 	pbuf, err := pc.ReadBuffer()
 	if err != nil {
@@ -74,12 +90,19 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 	pbuf.SetPayload(respBuf)
 	err = pc.WriteBuffer(pbuf)
 	if err != nil {
-		return err
+		log.Printf("node handshake failed, WriteBuffer err: %v\n", err)
+		return nil
 	}
 
+	s.serve(ctx)
+	return nil
+}
+
+func (s *Server) serve(ctx *Context) {
 	start := time.Now()
 	pbufChan := make(chan *packet.Buffer, 128)
 	var wg sync.WaitGroup
+
 	wg.Add(1)
 	go func() {
 		s.routeLoop(ctx, pbufChan) // close(pbufChan) to stop this loop
@@ -87,25 +110,24 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 		wg.Done()
 	}()
 
-	log.Printf("node connected. domain='%v' id='%v'\n", req.Domain, ctx.id)
-
 	// read loop
+	log.Printf("node connected. domain='%v' id='%v'\n", ctx.Domain, ctx.id)
 	for {
-		pbuf, err = pc.ReadBuffer()
+		pbuf, err := ctx.Conn.ReadBuffer()
 		if err != nil {
-			log.Printf("node read loop stopped. domain='%v' id='%v'\n", req.Domain, ctx.id)
+			log.Printf("node read loop stopped. domain='%v' id='%v'\n", ctx.Domain, ctx.id)
 			break
 		}
 
+		ctx.LastReadTime = time.Now()
 		pbufChan <- pbuf
 	}
 	close(pbufChan)
 	ctx.Conn.Close()
 
 	wg.Wait()
-	log.Printf("node disconnected. domain='%v' id='%v' dur='%v'\n", req.Domain, ctx.id,
+	log.Printf("node disconnected. domain='%v' id='%v' dur='%v'\n", ctx.Domain, ctx.id,
 		time.Since(start).Round(time.Second))
-	return nil
 }
 
 func (s *Server) routeLoop(ctx *Context, pbufChan <-chan *packet.Buffer) {
