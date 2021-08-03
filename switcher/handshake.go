@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/net-agent/flex/packet"
 )
@@ -76,6 +77,7 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 		return err
 	}
 
+	start := time.Now()
 	pbufChan := make(chan *packet.Buffer, 128)
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -101,7 +103,7 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 	ctx.Conn.Close()
 
 	wg.Wait()
-	log.Printf("node disconnected. domain='%v' id='%v'\n", req.Domain, ctx.id)
+	log.Printf("node disconnected. domain='%v' id='%v' dur='%v'\n", req.Domain, ctx.id, time.Since(start))
 	return nil
 }
 
