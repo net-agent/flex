@@ -2,13 +2,31 @@ package node
 
 import (
 	"errors"
+	"fmt"
+	"net"
+	"strconv"
 
 	"github.com/net-agent/flex/packet"
 	"github.com/net-agent/flex/stream"
 )
 
 func (node *Node) Dial(addr string) (*stream.Conn, error) {
-	return nil, errors.New("not implement")
+	hostStr, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, fmt.Errorf("split address to host/port failed: %v", err)
+	}
+	// parse port
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse port string to number failed: %v", err)
+	}
+	// try to parse host as ip
+	ip, err := strconv.Atoi(hostStr)
+	if err != nil || ip > 65535 {
+		return node.DialDomain(hostStr, uint16(port))
+	}
+
+	return node.DialIP(uint16(ip), uint16(port))
 }
 
 func (node *Node) DialDomain(domain string, port uint16) (*stream.Conn, error) {
