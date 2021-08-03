@@ -94,6 +94,7 @@ func (node *Node) OnOpen(pbuf *packet.Buffer) {
 	s := stream.New(false)
 	s.SetLocal(pbuf.DistIP(), pbuf.DistPort())
 	s.SetRemote(pbuf.SrcIP(), pbuf.SrcPort())
+	s.SetDialer(string(pbuf.Payload))
 	s.InitWriter(node)
 
 	// 直接进行绑定，做好读数据准备
@@ -208,6 +209,7 @@ func (node *Node) pushBufLoop() {
 
 func (node *Node) heartbeatLoop(ticker *time.Ticker) {
 	pbuf := packet.NewBuffer(nil)
+	pbuf.SetCmd(packet.CmdAlive)
 	pbuf.SetSrc(node.ip, 0)
 	pbuf.SetDist(0xffff, 0)
 	pbuf.SetPayload(nil)
@@ -220,7 +222,6 @@ func (node *Node) heartbeatLoop(ticker *time.Ticker) {
 				ticker.Stop()
 				return
 			}
-			log.Println("beat-!")
 		}
 	}
 }

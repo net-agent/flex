@@ -29,6 +29,7 @@ type OpenResp struct {
 
 type Conn struct {
 	isDialer             bool
+	dialer               string
 	local                addr
 	localIP, localPort   uint16
 	remote               addr
@@ -61,11 +62,27 @@ func (s *Conn) State() string  { return fmt.Sprintf("%v %v", s.String(), s.count
 func New(isDialer bool) *Conn {
 	return &Conn{
 		isDialer:  isDialer,
+		dialer:    "self",
 		openAck:   make(chan *packet.Buffer, 1),
 		bytesChan: make(chan []byte, DefaultBytesChanCap),
 		bucketSz:  DefaultBucketSize,
 		bucketEv:  make(chan struct{}, 16),
 	}
+}
+
+func (s *Conn) Dialer() string {
+	if s.isDialer {
+		return "self"
+	}
+	return s.dialer
+}
+
+func (s *Conn) SetDialer(dialer string) error {
+	if s.isDialer {
+		return errors.New("conn is dialer, can't set new dialer info")
+	}
+	s.dialer = fmt.Sprintf("%v:%v", dialer, s.remotePort)
+	return nil
 }
 
 func (s *Conn) Close() error {

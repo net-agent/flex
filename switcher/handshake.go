@@ -131,8 +131,12 @@ func (s *Server) serve(ctx *Context) {
 }
 
 func (s *Server) routeLoop(ctx *Context, pbufChan <-chan *packet.Buffer) {
+	beatBuf := packet.NewBuffer(nil)
+	beatBuf.SetCmd(packet.CmdAlive | packet.CmdACKFlag)
+
 	for pbuf := range pbufChan {
 		if pbuf.Cmd() == packet.CmdAlive {
+			go ctx.WriteBuffer(beatBuf)
 			continue
 		}
 		if pbuf.Cmd() == packet.CmdOpenStream {
