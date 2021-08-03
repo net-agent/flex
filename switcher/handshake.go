@@ -55,7 +55,7 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 	}
 	defer s.FreeIP(ip)
 
-	ctx := NewContext(req.Mac, req.Domain, ip, pc)
+	ctx := NewContext(req.Domain, req.Mac, ip, pc)
 
 	err = s.AttachCtx(ctx)
 	if err != nil {
@@ -103,7 +103,8 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 	ctx.Conn.Close()
 
 	wg.Wait()
-	log.Printf("node disconnected. domain='%v' id='%v' dur='%v'\n", req.Domain, ctx.id, time.Since(start))
+	log.Printf("node disconnected. domain='%v' id='%v' dur='%v'\n", req.Domain, ctx.id,
+		time.Since(start).Round(time.Second))
 	return nil
 }
 
