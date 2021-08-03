@@ -74,13 +74,14 @@ func (s *Server) ResolveOpenCmd(caller *Context, pbuf *packet.Buffer) {
 	//
 	it, found := s.nodeDomains.Load(distDomain)
 	if !found {
+		log.Printf("resolve domain failed, '%v' not found\n", distDomain)
 		return
 	}
 	distCtx := it.(*Context)
 
 	pbuf.SetDistIP(distCtx.IP)
 	pbuf.SetPayload([]byte(caller.Domain))
-	distCtx.Conn.WriteBuffer(pbuf)
+	distCtx.WriteBuffer(pbuf)
 }
 
 // RouteBuffer 根据DistIP路由数据包，这些包可以无序
