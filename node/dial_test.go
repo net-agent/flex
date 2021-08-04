@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/packet"
+	"github.com/net-agent/flex/v2/packet"
 )
 
 func TestChanNil(t *testing.T) {

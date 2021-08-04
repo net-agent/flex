@@ -6,7 +6,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/net-agent/flex/packet"
+	"github.com/net-agent/flex/v2/packet"
 )
 
 type Server struct {

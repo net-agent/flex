@@ -6,8 +6,8 @@ import (
 	"net"
 	"strconv"
 
-	"github.com/net-agent/flex/packet"
-	"github.com/net-agent/flex/stream"
+	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v2/stream"
 )
 
 func (node *Node) Dial(addr string) (*stream.Conn, error) {

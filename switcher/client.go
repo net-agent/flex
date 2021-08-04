@@ -6,8 +6,8 @@ import (
 	"net"
 	"time"
 
-	"github.com/net-agent/flex/node"
-	"github.com/net-agent/flex/packet"
+	"github.com/net-agent/flex/v2/node"
+	"github.com/net-agent/flex/v2/packet"
 )
 
 func ConnectServer(addr, domain, mac, password string) (retNode *node.Node, retErr error) {

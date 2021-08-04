@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/net-agent/flex/packet"
+	"github.com/net-agent/flex/v2/packet"
 )
 
 type Request struct {

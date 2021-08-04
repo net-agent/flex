@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/net-agent/flex/packet"
+	"github.com/net-agent/flex/v2/packet"
 )
 
 func (s *Conn) InitWriter(w packet.Writer) {

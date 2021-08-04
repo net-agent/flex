@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/net-agent/flex/stream"
+	"github.com/net-agent/flex/v2/stream"
 )
 
 func HelpTest2Node(t *testing.T, node1, node2 *Node, concurrent int) {

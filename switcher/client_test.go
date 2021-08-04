@@ -4,7 +4,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/net-agent/flex/node"
+	"github.com/net-agent/flex/v2/node"
 )
 
 var testPassword = "abc"

@@ -3,9 +3,9 @@ package flex
 import (
 	"fmt"
 
-	"github.com/net-agent/flex/node"
-	"github.com/net-agent/flex/stream"
-	"github.com/net-agent/flex/switcher"
+	"github.com/net-agent/flex/v2/node"
+	"github.com/net-agent/flex/v2/stream"
+	"github.com/net-agent/flex/v2/switcher"
 )
 
 type FlexDemo struct {

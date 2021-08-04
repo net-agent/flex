@@ -5,7 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/net-agent/flex/packet"
+	"github.com/net-agent/flex/v2/packet"
 )
 
 var ctxindex int32

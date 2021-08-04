@@ -1,7 +1,7 @@
 package stream
 
 import (
-	"github.com/net-agent/flex/packet"
+	"github.com/net-agent/flex/v2/packet"
 )
 
 func Pipe() (*Conn, *Conn) {

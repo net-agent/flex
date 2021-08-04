@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net"
 
-	"github.com/net-agent/flex/stream"
+	"github.com/net-agent/flex/v2/stream"
 )
 
 type Listener struct {

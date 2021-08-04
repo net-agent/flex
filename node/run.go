@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/net-agent/flex/packet"
-	"github.com/net-agent/flex/stream"
+	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v2/stream"
 )
 
 const (
