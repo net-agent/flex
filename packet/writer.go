@@ -2,8 +2,13 @@ package packet
 
 import (
 	"net"
+	"time"
 
 	"github.com/gorilla/websocket"
+)
+
+const (
+	DefaultWriteTimeout = time.Second * 10 // 如果写入10秒钟都没有成功，网络状况不好，可以报错
 )
 
 type Writer interface {
@@ -22,7 +27,11 @@ func NewConnWriter(conn net.Conn) Writer {
 }
 
 func (writer *connWriter) WriteBuffer(buf *Buffer) error {
-	_, err := writer.conn.Write(buf.Head[:])
+	err := writer.conn.SetWriteDeadline(time.Now().Add(DefaultWriteTimeout))
+	if err != nil {
+		return err
+	}
+	_, err = writer.conn.Write(buf.Head[:])
 	if err != nil {
 		return err
 	}
@@ -32,6 +41,7 @@ func (writer *connWriter) WriteBuffer(buf *Buffer) error {
 			return err
 		}
 	}
+	writer.conn.SetWriteDeadline(time.Time{})
 	return nil
 }
 

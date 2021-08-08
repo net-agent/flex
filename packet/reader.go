@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -28,9 +29,15 @@ func NewConnReader(conn net.Conn) Reader {
 }
 
 func (reader *connReader) ReadBuffer() (*Buffer, error) {
+	// 如果30秒读不到任何数据，则会报错关闭
+	// 所以心跳包的时间间隔不应该超过这个数值
+	err := reader.conn.SetReadDeadline(time.Now().Add(time.Second * 30))
+	if err != nil {
+		return nil, err
+	}
 	pb := NewBuffer(nil)
 
-	_, err := io.ReadFull(reader.conn, pb.Head[:])
+	_, err = io.ReadFull(reader.conn, pb.Head[:])
 	if err != nil {
 		return nil, err
 	}
@@ -44,6 +51,7 @@ func (reader *connReader) ReadBuffer() (*Buffer, error) {
 		}
 	}
 
+	reader.conn.SetReadDeadline(time.Time{})
 	return pb, nil
 }
 
