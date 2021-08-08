@@ -3,7 +3,9 @@ package node
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net"
+	"os"
 	"strconv"
 
 	"github.com/net-agent/flex/v2/packet"
@@ -30,7 +32,7 @@ func (node *Node) Dial(addr string) (*stream.Conn, error) {
 }
 
 func (node *Node) DialDomain(domain string, port uint16) (*stream.Conn, error) {
-	return node.dial(domain, 0, port)
+	return node.dial(domain, 0xFFFF, port)
 }
 
 func (node *Node) DialIP(ip, port uint16) (*stream.Conn, error) {
@@ -60,6 +62,9 @@ func (node *Node) dial(distDomain string, distIP, distPort uint16) (*stream.Conn
 	buf.SetPayload([]byte(distDomain))
 	err = node.WriteBuffer(buf)
 	if err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			log.Printf("dial failed, probably write data into an offline node: %v\n", err)
+		}
 		return nil, err
 	}
 

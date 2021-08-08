@@ -112,3 +112,62 @@ func TestDialConcurrency(t *testing.T) {
 
 	HelpTest2Node(t, node1, node2, 0)
 }
+
+func TestNodeLocalLoop(t *testing.T) {
+	pc, _ := packet.Pipe()
+	node := New(pc)
+	go node.Run()
+
+	l, err := node.Listen(80)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	payload := []byte("hello world")
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func(l net.Listener) {
+		defer wg.Done()
+		defer l.Close()
+
+		c, err := l.Accept()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		buf := make([]byte, len(payload))
+		_, err = io.ReadFull(c, buf)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		if !bytes.Equal(buf, payload) {
+			t.Error("not equal")
+			return
+		}
+	}(l)
+
+	// _, err = node.DialIP(0, 80)
+	// if err != nil {
+	// 	log.Printf("expected error: %v\n", err)
+	// } else {
+	// 	t.Error("unexpected nil err")
+	// 	return
+	// }
+
+	node.EnableLocalLoop(true)
+	c, err := node.DialIP(0, 80)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	_, err = c.Write(payload)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	wg.Wait()
+	c.Close()
+}

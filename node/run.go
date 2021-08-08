@@ -1,6 +1,7 @@
 package node
 
 import (
+	"errors"
 	"log"
 	"sync"
 	"time"
@@ -11,12 +12,14 @@ import (
 
 const (
 	DefaultHeartbeatInterval = time.Second * 15
+	DefaultWriteLocalTimeout = time.Second * 15
 )
 
 type Node struct {
 	ip uint16
 	packet.Conn
-	pushChan chan *packet.Buffer
+	pushChan        chan *packet.Buffer
+	enableLocalLoop bool
 
 	freePorts   chan uint16
 	listenPorts sync.Map
@@ -47,11 +50,33 @@ func (node *Node) SetIP(ip uint16) {
 
 // WriteBuffer goroutine safe writer
 func (node *Node) WriteBuffer(pbuf *packet.Buffer) error {
+	if node.enableLocalLoop && (pbuf.DistIP() == node.ip) {
+		return node.routeBuffer(pbuf)
+	}
+
 	node.writeMut.Lock()
 	defer node.writeMut.Unlock()
 
 	node.lastWriteTime = time.Now()
 	return node.Conn.WriteBuffer(pbuf)
+}
+
+func (node *Node) EnableLocalLoop(enable bool) {
+	node.enableLocalLoop = enable
+}
+
+//
+func (node *Node) routeBuffer(pbuf *packet.Buffer) error {
+	if pbuf.Cmd() == packet.CmdOpenStream {
+		go node.OnOpen(pbuf)
+		return nil
+	}
+	select {
+	case node.pushChan <- pbuf:
+		return nil
+	case <-time.After(DefaultWriteLocalTimeout):
+		return errors.New("write localLoop timeout")
+	}
 }
 
 func (node *Node) Run() {
@@ -67,11 +92,9 @@ func (node *Node) Run() {
 			return
 		}
 
-		switch pbuf.Cmd() {
-		case packet.CmdOpenStream:
-			go node.OnOpen(pbuf)
-		default:
-			node.pushChan <- pbuf
+		err = node.routeBuffer(pbuf)
+		if err != nil {
+			return
 		}
 	}
 }
@@ -218,6 +241,7 @@ func (node *Node) heartbeatLoop(ticker *time.Ticker) {
 		if time.Since(node.lastWriteTime) > (DefaultHeartbeatInterval - time.Second) {
 			err := node.WriteBuffer(pbuf)
 			if err != nil {
+				log.Printf("write heartbeat-data failed: %v\n", err)
 				node.Close()
 				ticker.Stop()
 				return
