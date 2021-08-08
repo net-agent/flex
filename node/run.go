@@ -20,6 +20,7 @@ type Node struct {
 	packet.Conn
 	pushChan        chan *packet.Buffer
 	enableLocalLoop bool
+	localPushChan   chan *packet.Buffer
 
 	freePorts   chan uint16
 	listenPorts sync.Map
@@ -39,6 +40,7 @@ func New(conn packet.Conn) *Node {
 	return &Node{
 		Conn:          conn,
 		pushChan:      make(chan *packet.Buffer, 1024),
+		localPushChan: make(chan *packet.Buffer, 1024*4),
 		freePorts:     freePorts,
 		lastWriteTime: time.Now(),
 	}
@@ -51,7 +53,7 @@ func (node *Node) SetIP(ip uint16) {
 // WriteBuffer goroutine safe writer
 func (node *Node) WriteBuffer(pbuf *packet.Buffer) error {
 	if node.enableLocalLoop && (pbuf.DistIP() == node.ip) {
-		return node.routeBuffer(pbuf)
+		return node.routeLocalBuffer(pbuf)
 	}
 
 	node.writeMut.Lock()
@@ -79,10 +81,21 @@ func (node *Node) routeBuffer(pbuf *packet.Buffer) error {
 	}
 }
 
+// todo: bucket的逻辑导致此处效率不高（读写变成串行）
+func (node *Node) routeLocalBuffer(pbuf *packet.Buffer) error {
+	if pbuf.Cmd() == packet.CmdOpenStream {
+		go node.OnOpen(pbuf)
+		return nil
+	}
+	node.localPushChan <- pbuf
+	return nil
+}
+
 func (node *Node) Run() {
 	ticker := time.NewTicker(DefaultHeartbeatInterval)
 	go node.heartbeatLoop(ticker)
-	go node.pushBufLoop()
+	go node.pushBufLoop(node.pushChan)
+	go node.pushBufLoop(node.localPushChan)
 
 	// quick read loop
 	// 不在此循环中做太多逻辑，确保读取效率
@@ -160,8 +173,8 @@ func (node *Node) OnOpenACK(pbuf *packet.Buffer) {
 }
 
 // pushBufLoop 处理流数据传输的逻辑（open-ack -> push -> push-ack -> close -> close-ack）
-func (node *Node) pushBufLoop() {
-	for pbuf := range node.pushChan {
+func (node *Node) pushBufLoop(ch chan *packet.Buffer) {
+	for pbuf := range ch {
 
 		switch pbuf.Cmd() & 0xFE {
 
