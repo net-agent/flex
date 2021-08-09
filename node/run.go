@@ -18,9 +18,7 @@ const (
 type Node struct {
 	ip uint16
 	packet.Conn
-	pushChan        chan *packet.Buffer
-	enableLocalLoop bool
-	localPushChan   chan *packet.Buffer
+	readBufChan chan *packet.Buffer
 
 	freePorts   chan uint16
 	listenPorts sync.Map
@@ -29,6 +27,10 @@ type Node struct {
 
 	writeMut      sync.Mutex
 	lastWriteTime time.Time
+
+	enableLocalLoop bool
+	localWriter     packet.Conn
+	localReader     packet.Conn
 }
 
 func New(conn packet.Conn) *Node {
@@ -37,12 +39,15 @@ func New(conn packet.Conn) *Node {
 		freePorts <- uint16(i)
 	}
 
+	r, w := packet.Pipe()
+
 	return &Node{
 		Conn:          conn,
-		pushChan:      make(chan *packet.Buffer, 1024),
-		localPushChan: make(chan *packet.Buffer, 1024*4),
+		readBufChan:   make(chan *packet.Buffer, 1024),
 		freePorts:     freePorts,
 		lastWriteTime: time.Now(),
+		localReader:   r,
+		localWriter:   w,
 	}
 }
 
@@ -52,55 +57,54 @@ func (node *Node) SetIP(ip uint16) {
 
 // WriteBuffer goroutine safe writer
 func (node *Node) WriteBuffer(pbuf *packet.Buffer) error {
-	if node.enableLocalLoop && (pbuf.DistIP() == node.ip) {
-		return node.routeLocalBuffer(pbuf)
-	}
+	dist := pbuf.DistIP()
 
 	node.writeMut.Lock()
 	defer node.writeMut.Unlock()
+
+	if node.enableLocalLoop && (dist == node.ip || dist == 0) {
+		return node.localWriter.WriteBuffer(pbuf)
+	}
 
 	node.lastWriteTime = time.Now()
 	return node.Conn.WriteBuffer(pbuf)
 }
 
-func (node *Node) EnableLocalLoop(enable bool) {
-	node.enableLocalLoop = enable
+func (node *Node) EnableLocalLoop() {
+	node.enableLocalLoop = true
 }
 
-//
 func (node *Node) routeBuffer(pbuf *packet.Buffer) error {
 	if pbuf.Cmd() == packet.CmdOpenStream {
 		go node.OnOpen(pbuf)
 		return nil
 	}
 	select {
-	case node.pushChan <- pbuf:
+	case node.readBufChan <- pbuf:
 		return nil
 	case <-time.After(DefaultWriteLocalTimeout):
 		return errors.New("write localLoop timeout")
 	}
 }
 
-// todo: bucket的逻辑导致此处效率不高（读写变成串行）
-func (node *Node) routeLocalBuffer(pbuf *packet.Buffer) error {
-	if pbuf.Cmd() == packet.CmdOpenStream {
-		go node.OnOpen(pbuf)
-		return nil
-	}
-	node.localPushChan <- pbuf
-	return nil
-}
-
 func (node *Node) Run() {
 	ticker := time.NewTicker(DefaultHeartbeatInterval)
 	go node.heartbeatLoop(ticker)
-	go node.pushBufLoop(node.pushChan)
-	go node.pushBufLoop(node.localPushChan)
+	go node.pushBufLoop(node.readBufChan)
 
-	// quick read loop
-	// 不在此循环中做太多逻辑，确保读取效率
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go node.readLoop(node.Conn, &wg)
+	// wg.Add(1)
+	// go node.readLoop(node.localReader, &wg)
+
+	wg.Wait()
+}
+
+func (node *Node) readLoop(r packet.Conn, wg *sync.WaitGroup) {
+	defer wg.Done()
 	for {
-		pbuf, err := node.ReadBuffer()
+		pbuf, err := r.ReadBuffer()
 		if err != nil {
 			return
 		}
