@@ -53,12 +53,11 @@ func (node *Node) Run() {
 	ticker := time.NewTicker(DefaultHeartbeatInterval)
 	go node.heartbeatLoop(ticker)
 	go node.pbufRouteLoop(node.readBufChan)
+	go node.pbufRouteLoop(node.localBufPipe)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go node.readLoop(&wg)
-	wg.Add(1)
-	go node.readLocalLoop(&wg)
 
 	wg.Wait()
 }

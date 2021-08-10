@@ -23,16 +23,6 @@ func (node *Node) readLoop(wg *sync.WaitGroup) {
 	}
 }
 
-func (node *Node) readLocalLoop(wg *sync.WaitGroup) {
-	defer wg.Done()
-	for pbuf := range node.localBufPipe {
-		err := node.routeBuffer(pbuf)
-		if err != nil {
-			return
-		}
-	}
-}
-
 func (node *Node) routeBuffer(pbuf *packet.Buffer) error {
 	select {
 	case node.readBufChan <- pbuf:
