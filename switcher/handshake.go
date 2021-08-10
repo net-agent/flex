@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -63,6 +64,11 @@ func (s *Server) ServeConn(pc packet.Conn) (retErr error) {
 	}
 	if req.Sum != req.CalcSum(s.password) {
 		return errors.New("invalid checksum detected")
+	}
+
+	req.Domain = strings.ToLower(req.Domain)
+	if req.Domain == "" || strings.HasPrefix(req.Domain, "local") {
+		return errors.New("invalid domain")
 	}
 
 	ip, err := s.GetIP(req.Domain)

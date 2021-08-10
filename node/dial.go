@@ -39,6 +39,9 @@ func (node *Node) Dial(addr string) (*stream.Conn, error) {
 }
 
 func (node *Node) DialDomain(domain string, port uint16) (*stream.Conn, error) {
+	if domain == node.domain || domain == "local" || domain == "localhost" {
+		return node.dial("", LocalIP, port)
+	}
 	return node.dial(domain, DNSIP, port)
 }
 

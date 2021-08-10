@@ -14,7 +14,8 @@ const (
 )
 
 type Node struct {
-	ip uint16
+	domain string
+	ip     uint16
 	packet.Conn
 	readBufChan  chan *packet.Buffer // 从Conn中读到的数据包队列
 	localBufPipe chan *packet.Buffer // 本机回环请求产生的数据包队列
@@ -45,6 +46,9 @@ func New(conn packet.Conn) *Node {
 	}
 }
 
+func (node *Node) SetDomain(domain string) {
+	node.domain = domain
+}
 func (node *Node) SetIP(ip uint16) {
 	node.ip = ip
 }

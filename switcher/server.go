@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"net"
+	"strings"
 	"sync"
 
 	"github.com/net-agent/flex/v2/packet"
@@ -62,7 +63,7 @@ func (s *Server) DetachCtx(ctx *Context) {
 
 // ResolveOpenCmd 解析open命令
 func (s *Server) ResolveOpenCmd(caller *Context, pbuf *packet.Buffer) {
-	distDomain := string(pbuf.Payload)
+	distDomain := strings.ToLower(string(pbuf.Payload))
 	if distDomain == "" {
 		pbuf.SetPayload([]byte(caller.Domain))
 		s.RouteBuffer(pbuf)

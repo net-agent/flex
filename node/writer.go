@@ -11,6 +11,10 @@ import (
 func (node *Node) WriteBuffer(pbuf *packet.Buffer) error {
 	dist := pbuf.DistIP()
 	if dist == node.ip || dist == LocalIP {
+		if pbuf.Cmd() == packet.CmdOpenStream {
+			// 此处模拟switcher中ResolveOpenCmd的逻辑，为请求包附带dialer信息
+			pbuf.SetPayload([]byte("local"))
+		}
 		select {
 		case node.localBufPipe <- pbuf:
 			return nil
