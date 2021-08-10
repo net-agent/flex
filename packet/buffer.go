@@ -2,6 +2,7 @@ package packet
 
 import (
 	"encoding/binary"
+	"fmt"
 )
 
 const (
@@ -48,6 +49,9 @@ func (buf *Buffer) IsACK() bool     { return buf.Head[0]&CmdACKFlag > 0 }
 //
 func (buf *Buffer) SID() uint64 {
 	return binary.BigEndian.Uint64(buf.Head[1:9])
+}
+func (buf *Buffer) SIDStr() string {
+	return fmt.Sprintf("%v:%v-%v:%v", buf.SrcIP(), buf.SrcPort(), buf.DistIP(), buf.DistPort())
 }
 
 //

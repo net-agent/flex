@@ -47,7 +47,7 @@ func (node *Node) OnOpen(pbuf *packet.Buffer) {
 func (node *Node) OnOpenACK(pbuf *packet.Buffer) {
 	it, loaded := node.usedPorts.LoadAndDelete(pbuf.DistPort())
 	if !loaded {
-		log.Printf("local not found\n")
+		log.Printf("local not found (open-ack). distport=%v\n", pbuf.DistPort())
 		return
 	}
 
@@ -87,7 +87,7 @@ func (node *Node) pbufRouteLoop(ch chan *packet.Buffer) {
 
 			it, found := node.streams.Load(pbuf.SID())
 			if !found {
-				log.Printf("sid not found (push)\n")
+				log.Printf("sid not found (push) sid=%v\n", pbuf.SIDStr())
 				continue
 			}
 

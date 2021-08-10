@@ -14,7 +14,7 @@ func (s *Conn) AppendData(buf []byte) {
 		case s.bytesChan <- buf:
 			atomic.AddInt64(&s.counter.AppendData, int64(len(buf)))
 		case <-time.After(DefaultAppendDataTimeout):
-			log.Printf("append data timeout")
+			log.Printf("append data timeout. %v\n", s.String())
 		}
 
 	} else {

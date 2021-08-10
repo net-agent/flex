@@ -9,6 +9,7 @@ import (
 )
 
 const (
+	EnableLocalLoop          = false // TODO: 当前版本LocalLoop有严重性能问题，待解决
 	DefaultHeartbeatInterval = time.Second * 15
 	DefaultWriteLocalTimeout = time.Second * 15
 )
@@ -17,8 +18,9 @@ type Node struct {
 	domain string
 	ip     uint16
 	packet.Conn
-	readBufChan  chan *packet.Buffer // 从Conn中读到的数据包队列
-	localBufPipe chan *packet.Buffer // 本机回环请求产生的数据包队列
+	readBufChan     chan *packet.Buffer // 从Conn中读到的数据包队列
+	localBufPipe    chan *packet.Buffer // 本机回环请求产生的数据包队列
+	localAckBufPipe chan *packet.Buffer
 
 	freePorts   chan uint16
 	listenPorts sync.Map
@@ -37,13 +39,19 @@ func New(conn packet.Conn) *Node {
 		freePorts <- uint16(i)
 	}
 
-	return &Node{
+	node := &Node{
 		Conn:          conn,
 		readBufChan:   make(chan *packet.Buffer, 1024),
-		localBufPipe:  make(chan *packet.Buffer, 1024),
 		freePorts:     freePorts,
 		lastWriteTime: time.Now(),
 	}
+
+	if EnableLocalLoop {
+		node.localBufPipe = make(chan *packet.Buffer, 1024)
+		node.localAckBufPipe = make(chan *packet.Buffer, 1024)
+	}
+
+	return node
 }
 
 func (node *Node) SetDomain(domain string) {
@@ -57,7 +65,10 @@ func (node *Node) Run() {
 	ticker := time.NewTicker(DefaultHeartbeatInterval)
 	go node.heartbeatLoop(ticker)
 	go node.pbufRouteLoop(node.readBufChan)
-	go node.pbufRouteLoop(node.localBufPipe)
+	if EnableLocalLoop {
+		go node.pbufRouteLoop(node.localBufPipe)
+		go node.pbufRouteLoop(node.localAckBufPipe)
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -69,7 +80,10 @@ func (node *Node) Run() {
 func (node *Node) Close() error {
 	node.onceClose.Do(func() {
 		node.Conn.Close()
-		close(node.localBufPipe)
+		if EnableLocalLoop {
+			close(node.localBufPipe)
+			close(node.localAckBufPipe)
+		}
 	})
 	return nil
 }

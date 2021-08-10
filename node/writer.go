@@ -9,17 +9,10 @@ import (
 
 // WriteBuffer goroutine safe writer
 func (node *Node) WriteBuffer(pbuf *packet.Buffer) error {
-	dist := pbuf.DistIP()
-	if dist == node.ip || dist == LocalIP {
-		if pbuf.Cmd() == packet.CmdOpenStream {
-			// 此处模拟switcher中ResolveOpenCmd的逻辑，为请求包附带dialer信息
-			pbuf.SetPayload([]byte("local"))
-		}
-		select {
-		case node.localBufPipe <- pbuf:
-			return nil
-		case <-time.After(DefaultWriteLocalTimeout):
-			return errors.New("write local timeout")
+	if EnableLocalLoop {
+		dist := pbuf.DistIP()
+		if dist == node.ip || dist == LocalIP {
+			return node.writeLocal(pbuf)
 		}
 	}
 
@@ -28,4 +21,21 @@ func (node *Node) WriteBuffer(pbuf *packet.Buffer) error {
 
 	node.lastWriteTime = time.Now()
 	return node.Conn.WriteBuffer(pbuf)
+}
+
+func (node *Node) writeLocal(pbuf *packet.Buffer) error {
+	if pbuf.Cmd() == packet.CmdOpenStream {
+		// 此处模拟switcher中ResolveOpenCmd的逻辑，为请求包附带dialer信息
+		pbuf.SetPayload([]byte("local"))
+	}
+	ch := node.localBufPipe
+	if pbuf.Cmd() == (packet.CmdACKFlag | packet.CmdPushStreamData) {
+		ch = node.localAckBufPipe
+	}
+	select {
+	case ch <- pbuf:
+		return nil
+	case <-time.After(DefaultWriteLocalTimeout):
+		return errors.New("write local timeout")
+	}
 }

@@ -116,6 +116,9 @@ func TestDialConcurrency(t *testing.T) {
 }
 
 func TestNodeLocalLoop(t *testing.T) {
+	if !EnableLocalLoop {
+		return
+	}
 	pc, _ := packet.Pipe()
 	node := New(pc)
 	go node.Run()
