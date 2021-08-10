@@ -15,7 +15,7 @@ func TestClient(t *testing.T) {
 		t.Error(err)
 		return
 	}
-	node.HelpTest2Node(t, client1, client2, 0)
+	node.ExampleOf2NodeTest(t, client1, client2, 0)
 }
 
 func TestDialDomain(t *testing.T) {

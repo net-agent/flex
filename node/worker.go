@@ -1,120 +1,11 @@
 package node
 
 import (
-	"errors"
 	"log"
-	"sync"
-	"time"
 
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/stream"
 )
-
-const (
-	DefaultHeartbeatInterval = time.Second * 15
-	DefaultWriteLocalTimeout = time.Second * 15
-)
-
-type Node struct {
-	ip uint16
-	packet.Conn
-	readBufChan chan *packet.Buffer
-
-	freePorts   chan uint16
-	listenPorts sync.Map
-	usedPorts   sync.Map
-	streams     sync.Map
-
-	writeMut      sync.Mutex
-	lastWriteTime time.Time
-
-	enableLocalLoop bool
-	localWriter     packet.Conn
-	localReader     packet.Conn
-}
-
-func New(conn packet.Conn) *Node {
-	freePorts := make(chan uint16, 65536)
-	for i := 1024; i < 65536; i++ {
-		freePorts <- uint16(i)
-	}
-
-	r, w := packet.Pipe()
-
-	return &Node{
-		Conn:          conn,
-		readBufChan:   make(chan *packet.Buffer, 1024),
-		freePorts:     freePorts,
-		lastWriteTime: time.Now(),
-		localReader:   r,
-		localWriter:   w,
-	}
-}
-
-func (node *Node) SetIP(ip uint16) {
-	node.ip = ip
-}
-
-// WriteBuffer goroutine safe writer
-func (node *Node) WriteBuffer(pbuf *packet.Buffer) error {
-	dist := pbuf.DistIP()
-
-	node.writeMut.Lock()
-	defer node.writeMut.Unlock()
-
-	if node.enableLocalLoop && (dist == node.ip || dist == 0) {
-		return node.localWriter.WriteBuffer(pbuf)
-	}
-
-	node.lastWriteTime = time.Now()
-	return node.Conn.WriteBuffer(pbuf)
-}
-
-func (node *Node) EnableLocalLoop() {
-	node.enableLocalLoop = true
-}
-
-func (node *Node) routeBuffer(pbuf *packet.Buffer) error {
-	if pbuf.Cmd() == packet.CmdOpenStream {
-		go node.OnOpen(pbuf)
-		return nil
-	}
-	select {
-	case node.readBufChan <- pbuf:
-		return nil
-	case <-time.After(DefaultWriteLocalTimeout):
-		return errors.New("write localLoop timeout")
-	}
-}
-
-func (node *Node) Run() {
-	ticker := time.NewTicker(DefaultHeartbeatInterval)
-	go node.heartbeatLoop(ticker)
-	go node.pushBufLoop(node.readBufChan)
-
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go node.readLoop(node.Conn, &wg)
-	// wg.Add(1)
-	// go node.readLoop(node.localReader, &wg)
-
-	wg.Wait()
-}
-
-func (node *Node) readLoop(r packet.Conn, wg *sync.WaitGroup) {
-	defer wg.Done()
-	for {
-		pbuf, err := r.ReadBuffer()
-		if err != nil {
-			return
-		}
-
-		err = node.routeBuffer(pbuf)
-		if err != nil {
-			return
-		}
-	}
-}
 
 // OnOpen 响应创建链接的需求
 func (node *Node) OnOpen(pbuf *packet.Buffer) {
@@ -176,9 +67,14 @@ func (node *Node) OnOpenACK(pbuf *packet.Buffer) {
 	s.Opened(pbuf)
 }
 
-// pushBufLoop 处理流数据传输的逻辑（open-ack -> push -> push-ack -> close -> close-ack）
-func (node *Node) pushBufLoop(ch chan *packet.Buffer) {
+// pbufRouteLoop 处理流数据传输的逻辑（open-ack -> push -> push-ack -> close -> close-ack）
+func (node *Node) pbufRouteLoop(ch chan *packet.Buffer) {
 	for pbuf := range ch {
+
+		if pbuf.Cmd() == packet.CmdOpenStream {
+			go node.OnOpen(pbuf)
+			continue
+		}
 
 		switch pbuf.Cmd() & 0xFE {
 
@@ -244,25 +140,5 @@ func (node *Node) pushBufLoop(ch chan *packet.Buffer) {
 			}(c, pbuf.IsACK())
 		}
 
-	}
-}
-
-func (node *Node) heartbeatLoop(ticker *time.Ticker) {
-	pbuf := packet.NewBuffer(nil)
-	pbuf.SetCmd(packet.CmdAlive)
-	pbuf.SetSrc(node.ip, 0)
-	pbuf.SetDist(0xffff, 0)
-	pbuf.SetPayload(nil)
-
-	for range ticker.C {
-		if time.Since(node.lastWriteTime) > (DefaultHeartbeatInterval - time.Second) {
-			err := node.WriteBuffer(pbuf)
-			if err != nil {
-				log.Printf("write heartbeat-data failed: %v\n", err)
-				node.Close()
-				ticker.Stop()
-				return
-			}
-		}
 	}
 }

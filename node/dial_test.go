@@ -29,6 +29,8 @@ func TestDial(t *testing.T) {
 
 	node1 := New(pc1)
 	node2 := New(pc2)
+	node1.SetIP(1)
+	node2.SetIP(2)
 	go node1.Run()
 	go node2.Run()
 
@@ -68,7 +70,7 @@ func TestDial(t *testing.T) {
 		}
 	}(l)
 
-	conn, err := node2.DialIP(0, 80)
+	conn, err := node2.DialIP(node1.GetIP(), 80)
 	if err != nil {
 		t.Error(err)
 		return
@@ -110,10 +112,10 @@ func TestDialConcurrency(t *testing.T) {
 	node1 := New(pc1)
 	node2 := New(pc2)
 
-	HelpTest2Node(t, node1, node2, 0)
+	ExampleOf2NodeTest(t, node1, node2, 0)
 }
 
-func xTestNodeLocalLoop(t *testing.T) {
+func TestNodeLocalLoop(t *testing.T) {
 	pc, _ := packet.Pipe()
 	node := New(pc)
 	go node.Run()
@@ -147,7 +149,7 @@ func xTestNodeLocalLoop(t *testing.T) {
 		}
 	}(l)
 
-	// _, err = node.DialIP(0, 80)
+	// _, err = node.DialIP(localIP, 80)
 	// if err != nil {
 	// 	log.Printf("expected error: %v\n", err)
 	// } else {
@@ -155,8 +157,7 @@ func xTestNodeLocalLoop(t *testing.T) {
 	// 	return
 	// }
 
-	node.EnableLocalLoop()
-	c, err := node.DialIP(0, 80)
+	c, err := node.DialIP(LocalIP, 80)
 	if err != nil {
 		t.Error(err)
 		return

@@ -14,7 +14,15 @@ import (
 	"github.com/net-agent/flex/v2/stream"
 )
 
-func HelpTest2Node(t *testing.T, node1, node2 *Node, concurrent int) {
+func ExampleOf2NodeTest(t *testing.T, node1, node2 *Node, concurrent int) {
+
+	if node1.GetIP() == 0 {
+		node1.SetIP(1)
+	}
+	if node2.GetIP() == 0 {
+		node2.SetIP(node1.GetIP() + 1)
+	}
+
 	var wg sync.WaitGroup
 	var wg2 sync.WaitGroup
 	wg2.Add(1)
