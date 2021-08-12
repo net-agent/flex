@@ -81,7 +81,7 @@ func (s *Conn) SetDialer(dialer string) error {
 	if s.isDialer {
 		return errors.New("conn is dialer, can't set new dialer info")
 	}
-	s.dialer = fmt.Sprintf("%v:%v", dialer, s.remotePort)
+	s.dialer = dialer
 	return nil
 }
 
