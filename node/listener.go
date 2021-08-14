@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sync"
 
 	"github.com/net-agent/flex/v2/stream"
 )
@@ -13,6 +14,7 @@ type Listener struct {
 	node         *Node
 	openedStream chan *stream.Conn
 	closed       bool
+	closeMut     sync.Mutex
 	str          string
 }
 
@@ -45,9 +47,13 @@ func (l *Listener) Accept() (net.Conn, error) {
 }
 
 func (l *Listener) Close() error {
+	l.closeMut.Lock()
+	defer l.closeMut.Unlock()
+
 	if l.closed {
 		return errors.New("close on closed listener")
 	}
+	l.closed = true
 	l.node.listenPorts.Delete(l.port)
 	close(l.openedStream)
 	l.node.freePorts <- l.port
@@ -59,6 +65,9 @@ func (l *Listener) Network() string { return "flex" }
 func (l *Listener) String() string  { return l.str }
 
 func (l *Listener) AppendConn(s *stream.Conn) {
+	l.closeMut.Lock()
+	defer l.closeMut.Unlock()
+
 	if l.closed {
 		go s.Close()
 	} else {

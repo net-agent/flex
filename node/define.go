@@ -18,9 +18,9 @@ type Node struct {
 	domain string
 	ip     uint16
 	packet.Conn
-	readBufChan     chan *packet.Buffer // 从Conn中读到的数据包队列
-	localBufPipe    chan *packet.Buffer // 本机回环请求产生的数据包队列
-	localAckBufPipe chan *packet.Buffer
+	readBufChan chan *packet.Buffer // 从Conn中读到的数据包队列
+	// localBufPipe    chan *packet.Buffer // 本机回环请求产生的数据包队列
+	// localAckBufPipe chan *packet.Buffer
 
 	freePorts   chan uint16
 	listenPorts sync.Map
@@ -46,10 +46,10 @@ func New(conn packet.Conn) *Node {
 		lastWriteTime: time.Now(),
 	}
 
-	if EnableLocalLoop {
-		node.localBufPipe = make(chan *packet.Buffer, 1024)
-		node.localAckBufPipe = make(chan *packet.Buffer, 1024)
-	}
+	// if EnableLocalLoop {
+	// 	node.localBufPipe = make(chan *packet.Buffer, 1024)
+	// 	node.localAckBufPipe = make(chan *packet.Buffer, 1024)
+	// }
 
 	return node
 }
@@ -65,10 +65,10 @@ func (node *Node) Run() {
 	ticker := time.NewTicker(DefaultHeartbeatInterval)
 	go node.heartbeatLoop(ticker)
 	go node.pbufRouteLoop(node.readBufChan)
-	if EnableLocalLoop {
-		go node.pbufRouteLoop(node.localBufPipe)
-		go node.pbufRouteLoop(node.localAckBufPipe)
-	}
+	// if EnableLocalLoop {
+	// 	go node.pbufRouteLoop(node.localBufPipe)
+	// 	go node.pbufRouteLoop(node.localAckBufPipe)
+	// }
 
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -80,10 +80,10 @@ func (node *Node) Run() {
 func (node *Node) Close() error {
 	node.onceClose.Do(func() {
 		node.Conn.Close()
-		if EnableLocalLoop {
-			close(node.localBufPipe)
-			close(node.localAckBufPipe)
-		}
+		// if EnableLocalLoop {
+		// 	close(node.localBufPipe)
+		// 	close(node.localAckBufPipe)
+		// }
 	})
 	return nil
 }
