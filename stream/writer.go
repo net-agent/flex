@@ -36,6 +36,10 @@ func (s *Conn) CloseWrite(isACK bool) error {
 
 	s.wclosed = true
 
+	if s.pushBuf == nil {
+		return errors.New("writer not init")
+	}
+
 	// send close cmd to peer
 	pbuf := packet.NewBuffer(nil)
 	copy(pbuf.Head[:], s.pushBuf.Head[:])

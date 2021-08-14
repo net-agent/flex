@@ -39,18 +39,21 @@ type Conn struct {
 	openAck chan *packet.Buffer
 
 	// for reader
-	rclosed   bool
-	bytesChan chan []byte
-	currBuf   []byte
+	rmut           sync.Mutex
+	rclosed        bool
+	bytesChan      chan []byte
+	currBuf        []byte
+	rDeadlineGuard *DeadlineGuard
 
 	// for writer
-	wmut       sync.Mutex
-	wclosed    bool
-	pwriter    packet.Writer
-	pushBuf    *packet.Buffer
-	pushAckBuf *packet.Buffer
-	bucketSz   int32
-	bucketEv   chan struct{}
+	wmut           sync.Mutex
+	wclosed        bool
+	pwriter        packet.Writer
+	pushBuf        *packet.Buffer
+	pushAckBuf     *packet.Buffer
+	bucketSz       int32
+	bucketEv       chan struct{}
+	wDeadlineGuard *DeadlineGuard
 
 	// counter
 	counter Counter
@@ -61,12 +64,14 @@ func (s *Conn) State() string  { return fmt.Sprintf("%v %v", s.String(), s.count
 
 func New(isDialer bool) *Conn {
 	return &Conn{
-		isDialer:  isDialer,
-		dialer:    "self",
-		openAck:   make(chan *packet.Buffer, 1),
-		bytesChan: make(chan []byte, DefaultBytesChanCap),
-		bucketSz:  DefaultBucketSize,
-		bucketEv:  make(chan struct{}, 16),
+		isDialer:       isDialer,
+		dialer:         "self",
+		openAck:        make(chan *packet.Buffer, 1),
+		bytesChan:      make(chan []byte, DefaultBytesChanCap),
+		bucketSz:       DefaultBucketSize,
+		bucketEv:       make(chan struct{}, 16),
+		rDeadlineGuard: &DeadlineGuard{},
+		wDeadlineGuard: &DeadlineGuard{},
 	}
 }
 

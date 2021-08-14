@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -37,6 +38,13 @@ func TestDial(t *testing.T) {
 	l, err := node1.Listen(80)
 	if err != nil {
 		t.Error(err)
+		return
+	}
+
+	// 重复监听端口
+	_, err = node1.Listen(80)
+	if err.Error() != "port busy now" {
+		t.Error("unexpected err")
 		return
 	}
 
@@ -128,6 +136,7 @@ func TestNodeLocalLoop(t *testing.T) {
 		t.Error(err)
 		return
 	}
+
 	payload := []byte("hello world")
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -174,4 +183,48 @@ func TestNodeLocalLoop(t *testing.T) {
 
 	wg.Wait()
 	c.Close()
+}
+
+func TestDialAddr(t *testing.T) {
+	c1, c2 := packet.Pipe()
+	node1 := New(c1)
+	node2 := New(c2)
+
+	node1.SetDomain("test1")
+	node1.SetIP(1)
+	node2.SetDomain("test2")
+	node2.SetIP(2)
+	go node1.Run()
+	go node2.Run()
+
+	_, err := node1.Dial("invalidhostport")
+	if !strings.HasPrefix(err.Error(), "split address") {
+		t.Error("unexpected err")
+		return
+	}
+
+	_, err = node1.Dial("local:655s6") // invalid port number
+	if !strings.HasPrefix(err.Error(), "parse port") {
+		t.Error("unexpected err")
+		return
+	}
+
+	// for coverage test: node.DialDomain
+	_, err = node1.Dial("local:1234")
+	if err == nil {
+		t.Error("unexpected nil err")
+		return
+	}
+	_, err = node1.Dial("test2:1234")
+	if err == nil {
+		t.Error("unexpected nil err")
+		return
+	}
+
+	// for coverage test: node.DialIP
+	_, err = node1.Dial("123:456")
+	if err == nil {
+		t.Error("unexpected nil err")
+		return
+	}
 }
