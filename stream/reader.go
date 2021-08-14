@@ -23,6 +23,9 @@ func (s *Conn) AppendData(buf []byte) {
 }
 
 func (s *Conn) AppendEOF() {
+	s.rmut.Lock()
+	defer s.rmut.Unlock()
+
 	if s.rclosed {
 		return
 	}
