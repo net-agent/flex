@@ -145,6 +145,20 @@ func (s *Server) routeLoop(ctx *Context, pbufChan <-chan *packet.Buffer) {
 			go ctx.WriteBuffer(beatBuf)
 			continue
 		}
+		if pbuf.Cmd() == (packet.CmdAlive | packet.CmdACKFlag) {
+			go func() {
+				it, found := ctx.pingBack.Load(pbuf.DistPort())
+				if !found {
+					return
+				}
+				ch, ok := it.(chan error)
+				if !ok {
+					return
+				}
+				ch <- nil
+			}()
+			continue
+		}
 		if pbuf.Cmd() == packet.CmdOpenStream {
 			go s.ResolveOpenCmd(ctx, pbuf)
 			continue

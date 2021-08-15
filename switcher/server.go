@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/net-agent/flex/v2/packet"
 )
@@ -41,24 +42,60 @@ func (s *Server) Close() error {
 
 // AttachCtx 附加上下文
 func (s *Server) AttachCtx(ctx *Context) error {
-	_, loaded := s.nodeDomains.LoadOrStore(ctx.Domain, ctx)
-	if loaded {
-		return errors.New("domain exist")
+	oldCtx, replaced := s.replaceDomain(ctx)
+	if !replaced {
+		ctx.Conn.Close()
+		return errors.New("replace domain context failed")
 	}
 
-	_, loaded = s.nodeIps.LoadOrStore(ctx.IP, ctx)
-	if loaded {
-		s.nodeDomains.Delete(ctx.Domain)
-		return errors.New("ip exist")
+	if oldCtx != nil {
+		oldCtx.attached = false
+		oldCtx.Conn.Close()
+		s.nodeIps.Delete(oldCtx.IP)
 	}
 
-	return nil
+	_, loaded := s.nodeIps.LoadOrStore(ctx.IP, ctx)
+	if !loaded {
+		return nil
+	}
+
+	ctx.attached = false
+	ctx.Conn.Close()
+	s.nodeDomains.Delete(ctx.Domain)
+
+	return errors.New("ip exist")
+}
+
+func (s *Server) replaceDomain(newCtx *Context) (oldCtx *Context, replaced bool) {
+	it, loaded := s.nodeDomains.LoadOrStore(newCtx.Domain, newCtx)
+	if !loaded {
+		newCtx.attached = true
+		return nil, true
+	}
+	oldCtx, ok := it.(*Context)
+	if !ok {
+		s.nodeDomains.Store(newCtx.Domain, newCtx)
+		newCtx.attached = true
+		return nil, true
+	}
+
+	// 增加会话探活机制，要求domain当前绑定的ctx在3秒内进行回应
+	err := oldCtx.Ping(time.Second * 3)
+	if err != nil {
+		s.nodeDomains.Store(newCtx.Domain, newCtx)
+		newCtx.attached = true
+		return oldCtx, true
+	}
+
+	return oldCtx, false
 }
 
 // DetachCtx 分离上下文
 func (s *Server) DetachCtx(ctx *Context) {
-	s.nodeDomains.Delete(ctx.Domain)
-	s.nodeIps.Delete(ctx.IP)
+	if ctx.attached {
+		s.nodeDomains.Delete(ctx.Domain)
+		s.nodeIps.Delete(ctx.IP)
+	}
 }
 
 // ResolveOpenCmd 解析open命令

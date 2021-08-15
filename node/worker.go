@@ -71,6 +71,15 @@ func (node *Node) OnOpenACK(pbuf *packet.Buffer) {
 func (node *Node) pbufRouteLoop(ch chan *packet.Buffer) {
 	for pbuf := range ch {
 
+		if pbuf.Cmd() == packet.CmdAlive {
+			go func(pbuf *packet.Buffer) {
+				pbuf.SwapSrcDist()
+				pbuf.SetCmd(pbuf.Cmd() | packet.CmdACKFlag)
+				node.WriteBuffer(pbuf)
+			}(pbuf)
+			continue
+		}
+
 		if pbuf.Cmd() == packet.CmdOpenStream {
 			go node.OnOpen(pbuf)
 			continue
