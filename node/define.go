@@ -73,8 +73,9 @@ func (node *Node) Run() {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go node.readLoop(&wg)
-
 	wg.Wait()
+
+	ticker.Stop()
 }
 
 func (node *Node) Close() error {
