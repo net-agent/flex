@@ -2,6 +2,7 @@ package node
 
 import (
 	"errors"
+	"log"
 	"sync"
 	"time"
 
@@ -13,12 +14,16 @@ func (node *Node) readLoop(wg *sync.WaitGroup) {
 	for {
 		pbuf, err := node.ReadBuffer()
 		if err != nil {
-			return
+			if node.WaitRecover() != nil {
+				return
+			}
+			continue
 		}
 
 		err = node.routeBuffer(pbuf)
 		if err != nil {
-			return
+			// 该错误不致命，直接丢包处理即可
+			log.Printf("route buffer err: %v\n", err)
 		}
 	}
 }
