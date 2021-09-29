@@ -24,7 +24,7 @@ type Request struct {
 // GenSum sha256(domain + mac + timestamp + password)
 func (req *Request) CalcSum(password string) string {
 	h := sha256.New()
-	h.Write([]byte(fmt.Sprintf("CalcSumStart,%v,%v,%v,CalcSumEnd", req.Domain, req.Mac, req.Timestamp)))
+	h.Write([]byte(fmt.Sprintf("CalcSumStart,%v,%v,%v,%v,CalcSumEnd", req.Domain, req.Mac, password, req.Timestamp)))
 	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }
 
