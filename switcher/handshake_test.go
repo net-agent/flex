@@ -35,3 +35,26 @@ func TestMarshal(t *testing.T) {
 		return
 	}
 }
+
+func TestCalcSum(t *testing.T) {
+	cases := []struct {
+		req    Request
+		pswd   string
+		output string
+	}{
+		{Request{"test.com", "mac", 0, ""}, "", "Pf1OHs4vBuZ0RiCJvIdFpB99c0Gra64rH6vYi0fXZDk="},
+	}
+
+	for _, c := range cases {
+		sum := c.req.CalcSum(c.pswd)
+		sum2 := c.req.CalcSum(c.pswd + "**")
+		if sum == sum2 {
+			t.Error("unexpected sum")
+			return
+		}
+		if sum != c.output {
+			t.Errorf("not equal, sum='%v' expect='%v'", sum, c.output)
+			return
+		}
+	}
+}
