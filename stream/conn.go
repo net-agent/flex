@@ -104,7 +104,7 @@ func (s *Conn) WaitOpenResp() (*packet.Buffer, error) {
 		return pbuf, nil
 
 	case <-time.After(DefaultDialTimeout):
-		return nil, errors.New("dial timeout")
+		return nil, errors.New("timeout waitting for switcher response")
 	}
 }
 

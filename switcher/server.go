@@ -2,6 +2,7 @@ package switcher
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"strings"
@@ -12,10 +13,12 @@ import (
 )
 
 type Server struct {
-	password    string
-	freeIps     chan uint16
-	nodeDomains sync.Map // map[string]*Context
-	nodeIps     sync.Map // map[uint16]*Context
+	password      string
+	freeIps       chan uint16
+	nodeDomains   sync.Map   // map[string]*Context
+	nodeIps       sync.Map   // map[uint16]*Context
+	ctxRecords    []*Context // 不断自增（todo：fix memory leak）
+	ctxRecordsMut sync.Mutex
 }
 
 func NewServer(password string) *Server {
@@ -66,23 +69,29 @@ func (s *Server) AttachCtx(ctx *Context) error {
 	return errors.New("ip exist")
 }
 
+// replaceDomain 如果存在同名的context，进行检测
 func (s *Server) replaceDomain(newCtx *Context) (oldCtx *Context, replaced bool) {
 	it, loaded := s.nodeDomains.LoadOrStore(newCtx.Domain, newCtx)
 	if !loaded {
+		s.pushCtxRecord(newCtx)
 		newCtx.attached = true
 		return nil, true
 	}
 	oldCtx, ok := it.(*Context)
 	if !ok {
 		s.nodeDomains.Store(newCtx.Domain, newCtx)
+		s.pushCtxRecord(newCtx)
 		newCtx.attached = true
 		return nil, true
 	}
 
 	// 增加会话探活机制，要求domain当前绑定的ctx在3秒内进行回应
-	err := oldCtx.Ping(time.Second * 3)
+	// 如果3秒内未进行回应可以判定是“僵尸”连接
+	// 3秒内收到回应，则拒绝新连接绑定
+	_, err := oldCtx.Ping(time.Second * 3)
 	if err != nil {
 		s.nodeDomains.Store(newCtx.Domain, newCtx)
+		s.pushCtxRecord(newCtx)
 		newCtx.attached = true
 		return oldCtx, true
 	}
@@ -90,11 +99,51 @@ func (s *Server) replaceDomain(newCtx *Context) (oldCtx *Context, replaced bool)
 	return oldCtx, false
 }
 
+func (s *Server) pushCtxRecord(ctx *Context) {
+	s.ctxRecordsMut.Lock()
+	defer s.ctxRecordsMut.Unlock()
+	s.ctxRecords = append(s.ctxRecords, ctx)
+}
+
+func (s *Server) PrintCtxRecords() [][]interface{} {
+	now := time.Now()
+	titles := []interface{}{
+		"id", "domain", "mac", "vip", "conn",
+		"state", "workTime",
+		"attachTime", "detachTime"}
+
+	ret := [][]interface{}{titles}
+
+	s.ctxRecordsMut.Lock()
+	defer s.ctxRecordsMut.Unlock()
+
+	for _, ctx := range s.ctxRecords {
+		state := "working"
+		workTime := now.Sub(ctx.AttachTime)
+
+		if ctx.DetachTime.After(ctx.AttachTime) {
+			state = "done"
+			workTime = ctx.DetachTime.Sub(ctx.AttachTime)
+		}
+		vals := []interface{}{
+			ctx.id, ctx.Domain, ctx.Mac, ctx.IP, "",
+			state, fmt.Sprint(workTime),
+			ctx.AttachTime, ctx.DetachTime,
+		}
+		ret = append(ret, vals)
+	}
+
+	return ret
+}
+
 // DetachCtx 分离上下文
 func (s *Server) DetachCtx(ctx *Context) {
 	if ctx.attached {
 		s.nodeDomains.Delete(ctx.Domain)
 		s.nodeIps.Delete(ctx.IP)
+		ctx.Conn = nil
+		ctx.attached = false
+		ctx.DetachTime = time.Now()
 	}
 }
 
@@ -112,7 +161,11 @@ func (s *Server) ResolveOpenCmd(caller *Context, pbuf *packet.Buffer) {
 	//
 	it, found := s.nodeDomains.Load(distDomain)
 	if !found {
-		log.Printf("resolve domain failed, '%v' not found\n", distDomain)
+		errInfo := fmt.Sprintf("resolve failed, domain='%v'", distDomain)
+		log.Println(errInfo)
+		pbuf.SetOpenACK(errInfo)
+		pbuf.SetSrcIP(0)
+		caller.WriteBuffer(pbuf)
 		return
 	}
 	distCtx := it.(*Context)

@@ -5,13 +5,14 @@ import (
 	"time"
 
 	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v2/vars"
 )
 
 func (node *Node) heartbeatLoop(ticker *time.Ticker) {
 	pbuf := packet.NewBuffer(nil)
 	pbuf.SetCmd(packet.CmdAlive)
 	pbuf.SetSrc(node.ip, 0)
-	pbuf.SetDist(SwitcherIP, 0)
+	pbuf.SetDist(vars.SwitcherIP, 0)
 	pbuf.SetPayload(nil)
 
 	for range ticker.C {

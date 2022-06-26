@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v2/vars"
 )
 
 func TestChanNil(t *testing.T) {
@@ -169,7 +170,7 @@ func TestNodeLocalLoop(t *testing.T) {
 	// 	return
 	// }
 
-	c, err := node.DialIP(LocalIP, 80)
+	c, err := node.DialIP(vars.LocalIP, 80)
 	if err != nil {
 		t.Error(err)
 		return

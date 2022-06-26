@@ -1,7 +1,10 @@
 package switcher
 
 import (
+	"encoding/json"
+	"fmt"
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/net-agent/flex/v2/node"
@@ -47,10 +50,21 @@ func TestDialDomain(t *testing.T) {
 		return
 	}
 	c.Close()
+
+	// dial error test
+	_, err = client1.DialDomain("notexist", 80)
+	if err == nil {
+		t.Error("unexpected nil err")
+		return
+	}
+	if !strings.HasPrefix(err.Error(), "resolve failed") {
+		t.Error("unexpected err", err)
+		return
+	}
 }
 
 func makeTwoNodes(addr string) (*node.Node, *node.Node, error) {
-	_, err := startTestServer(addr)
+	s, err := startTestServer(addr)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -63,6 +77,12 @@ func makeTwoNodes(addr string) (*node.Node, *node.Node, error) {
 	client2, err := ConnectServer(addr, "test2", "mac2", testPassword)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	info := s.PrintCtxRecords()
+	buf, err := json.Marshal(info)
+	if err == nil {
+		fmt.Printf("server context: %v\n", string(buf))
 	}
 
 	return client1, client2, nil

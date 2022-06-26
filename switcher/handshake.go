@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v2/vars"
 )
 
 type Request struct {
@@ -137,26 +138,10 @@ func (s *Server) serve(ctx *Context) {
 }
 
 func (s *Server) routeLoop(ctx *Context, pbufChan <-chan *packet.Buffer) {
-	beatBuf := packet.NewBuffer(nil)
-	beatBuf.SetCmd(packet.CmdAlive | packet.CmdACKFlag)
 
 	for pbuf := range pbufChan {
-		if pbuf.Cmd() == packet.CmdAlive {
-			go ctx.WriteBuffer(beatBuf)
-			continue
-		}
-		if pbuf.Cmd() == (packet.CmdAlive | packet.CmdACKFlag) {
-			go func() {
-				it, found := ctx.pingBack.Load(pbuf.DistPort())
-				if !found {
-					return
-				}
-				ch, ok := it.(chan error)
-				if !ok {
-					return
-				}
-				ch <- nil
-			}()
+		if pbuf.SrcIP() == vars.SwitcherIP {
+			go s.handlePacket(ctx, pbuf)
 			continue
 		}
 		if pbuf.Cmd() == packet.CmdOpenStream {
@@ -167,4 +152,27 @@ func (s *Server) routeLoop(ctx *Context, pbufChan <-chan *packet.Buffer) {
 		s.RouteBuffer(pbuf)
 	}
 	ctx.Conn.Close()
+}
+
+func (s *Server) handlePacket(ctx *Context, pbuf *packet.Buffer) {
+	beatBuf := packet.NewBuffer(nil)
+	beatBuf.SetCmd(packet.CmdAlive | packet.CmdACKFlag)
+
+	if pbuf.Cmd() == packet.CmdAlive {
+		ctx.WriteBuffer(beatBuf)
+		return
+	}
+
+	if pbuf.Cmd() == (packet.CmdAlive | packet.CmdACKFlag) {
+		it, found := ctx.pingBack.Load(pbuf.DistPort())
+		if !found {
+			return
+		}
+		ch, ok := it.(chan error)
+		if !ok {
+			return
+		}
+		ch <- nil
+		return
+	}
 }

@@ -10,13 +10,7 @@ import (
 
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/stream"
-)
-
-const (
-	MaxIP      = uint16(0xffff)
-	DNSIP      = uint16(0xffff)
-	SwitcherIP = uint16(0xffff)
-	LocalIP    = uint16(0)
+	"github.com/net-agent/flex/v2/vars"
 )
 
 func (node *Node) Dial(addr string) (*stream.Conn, error) {
@@ -31,7 +25,7 @@ func (node *Node) Dial(addr string) (*stream.Conn, error) {
 	}
 	// try to parse host as ip
 	ip, err := strconv.Atoi(hostStr)
-	if err != nil || ip > int(MaxIP) {
+	if err != nil || ip > int(vars.MaxIP) {
 		return node.DialDomain(hostStr, uint16(port))
 	}
 
@@ -40,9 +34,9 @@ func (node *Node) Dial(addr string) (*stream.Conn, error) {
 
 func (node *Node) DialDomain(domain string, port uint16) (*stream.Conn, error) {
 	if domain == node.domain || domain == "local" || domain == "localhost" {
-		return node.dial("", LocalIP, port)
+		return node.dial("", vars.LocalIP, port)
 	}
-	return node.dial(domain, DNSIP, port)
+	return node.dial(domain, vars.DNSIP, port)
 }
 
 func (node *Node) DialIP(ip, port uint16) (*stream.Conn, error) {
