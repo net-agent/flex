@@ -3,6 +3,8 @@ package packet
 import (
 	"encoding/binary"
 	"fmt"
+
+	"github.com/net-agent/flex/v2/vars"
 )
 
 const (
@@ -97,7 +99,7 @@ func (buf *Buffer) SetHeader(cmd byte, distIP, distPort, srcIP, srcPort uint16) 
 
 // Payload
 func (buf *Buffer) SetPayload(payload []byte) {
-	if len(payload) > 0xFFFF {
+	if len(payload) > vars.MaxPayloadSize {
 		panic("payload overflow")
 	}
 	binary.BigEndian.PutUint16(buf.Head[9:11], uint16(len(payload)))

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v2/vars"
 )
 
 type Server struct {
@@ -24,7 +25,7 @@ type Server struct {
 func NewServer(password string) *Server {
 	return &Server{
 		password: password,
-		freeIps:  getFreeIpCh(1, 0xFFFF),
+		freeIps:  getFreeIpCh(1, vars.MaxIP),
 	}
 }
 

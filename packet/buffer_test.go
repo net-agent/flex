@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"sync"
 	"testing"
+
+	"github.com/net-agent/flex/v2/vars"
 )
 
 type testCase struct {
@@ -142,7 +144,7 @@ func TestPayload(t *testing.T) {
 			}
 		}()
 
-		pbuf.SetPayload(make([]byte, 0xfffff))
+		pbuf.SetPayload(make([]byte, vars.MaxPayloadSize+1))
 	}()
 
 	wg.Wait()
