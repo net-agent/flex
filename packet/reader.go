@@ -78,7 +78,6 @@ func (reader *wsReader) ReadBuffer() (*Buffer, error) {
 		return nil, ErrBadDataType
 	}
 
-	// pb := NewPacketBufs()
 	copy(buf.Head[:], data[:HeaderSz])
 	buf.Payload = data[HeaderSz:]
 
