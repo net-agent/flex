@@ -140,39 +140,45 @@ func (s *Server) serve(ctx *Context) {
 func (s *Server) routeLoop(ctx *Context, pbufChan <-chan *packet.Buffer) {
 
 	for pbuf := range pbufChan {
+		// packet类型一：目标IP是SwitchIP时，直接触发handlePacket方法
 		if pbuf.SrcIP() == vars.SwitcherIP {
-			go s.handlePacket(ctx, pbuf)
+			go s.handleSwitcherPacket(ctx, pbuf)
 			continue
 		}
+
+		// packet类型二：是OpenStream命令时，通过协程处理。多个CmdOpenStream之间无需顺序处理
 		if pbuf.Cmd() == packet.CmdOpenStream {
 			go s.ResolveOpenCmd(ctx, pbuf)
 			continue
 		}
 
+		// packet类型三：需要顺序处理的packet
 		s.RouteBuffer(pbuf)
 	}
 	ctx.Conn.Close()
 }
 
-func (s *Server) handlePacket(ctx *Context, pbuf *packet.Buffer) {
-	beatBuf := packet.NewBuffer(nil)
-	beatBuf.SetCmd(packet.CmdAlive | packet.CmdACKFlag)
+// handleSwitcherPacket 处理发送给switcher的数据包
+func (s *Server) handleSwitcherPacket(ctx *Context, pbuf *packet.Buffer) {
 
-	if pbuf.Cmd() == packet.CmdAlive {
+	switch pbuf.Cmd() {
+	case packet.CmdAlive:
+		// 类型一：处理客户端发送过来的探活包
+		beatBuf := packet.NewBuffer(nil)
+		beatBuf.SetCmd(packet.CmdAlive | packet.CmdACKFlag)
 		ctx.WriteBuffer(beatBuf)
-		return
-	}
 
-	if pbuf.Cmd() == (packet.CmdAlive | packet.CmdACKFlag) {
+	case packet.CmdAlive | packet.CmdACKFlag:
+		// 类型二：处理服务端探活请求的应答
 		it, found := ctx.pingBack.Load(pbuf.DistPort())
 		if !found {
-			return
+			break
 		}
 		ch, ok := it.(chan error)
 		if !ok {
-			return
+			break
 		}
 		ch <- nil
-		return
 	}
+
 }

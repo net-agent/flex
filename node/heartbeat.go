@@ -27,3 +27,7 @@ func (node *Node) heartbeatLoop(ticker *time.Ticker) {
 		}
 	}
 }
+
+func (node *Node) PingDomain(domain string) (time.Duration, error) {
+	return time.Second, nil
+}
