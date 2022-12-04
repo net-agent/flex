@@ -74,7 +74,8 @@ func TestWaitOpenResp(t *testing.T) {
 		t.Error("unexpected nil err")
 		return
 	}
-	if err.Error() != "dial timeout" {
+
+	if !strings.Contains(err.Error(), "timeout") {
 		t.Error("unexpected err")
 		return
 	}

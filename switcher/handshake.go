@@ -8,14 +8,12 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/net-agent/flex/v2/packet"
-	"github.com/net-agent/flex/v2/vars"
 )
 
 type Request struct {
+	Version   int
 	Domain    string
 	Mac       string
 	Timestamp int64
@@ -63,6 +61,9 @@ func (s *Server) ServeConn(pc packet.Conn) (retErr error) {
 	if err != nil {
 		return err
 	}
+	if req.Version != packet.VERSION {
+		return fmt.Errorf("invalid client version='%v', expected='%v'", req.Version, packet.VERSION)
+	}
 	if req.Sum != req.CalcSum(s.password) {
 		return errors.New("invalid checksum detected")
 	}
@@ -101,78 +102,5 @@ func (s *Server) ServeConn(pc packet.Conn) (retErr error) {
 		return nil
 	}
 
-	s.serve(ctx)
-	return nil
-}
-
-func (s *Server) serve(ctx *Context) {
-	start := time.Now()
-	pbufChan := make(chan *packet.Buffer, 128)
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func() {
-		s.routeLoop(ctx, pbufChan) // close(pbufChan) to stop this loop
-		log.Printf("node route loop stopped. domain='%v' id='%v'\n", ctx.Domain, ctx.id)
-		wg.Done()
-	}()
-
-	// read loop
-	log.Printf("node connected. domain='%v' id='%v'\n", ctx.Domain, ctx.id)
-	for {
-		pbuf, err := ctx.Conn.ReadBuffer()
-		if err != nil {
-			log.Printf("node read loop stopped. domain='%v' id='%v'\n", ctx.Domain, ctx.id)
-			break
-		}
-
-		ctx.LastReadTime = time.Now()
-		pbufChan <- pbuf
-	}
-	close(pbufChan)
-	ctx.Conn.Close()
-
-	wg.Wait()
-	log.Printf("node disconnected. domain='%v' id='%v' dur='%v'\n", ctx.Domain, ctx.id,
-		time.Since(start).Round(time.Second))
-}
-
-func (s *Server) routeLoop(ctx *Context, pbufChan <-chan *packet.Buffer) {
-
-	for pbuf := range pbufChan {
-		if pbuf.SrcIP() == vars.SwitcherIP {
-			go s.handlePacket(ctx, pbuf)
-			continue
-		}
-		if pbuf.Cmd() == packet.CmdOpenStream {
-			go s.ResolveOpenCmd(ctx, pbuf)
-			continue
-		}
-
-		s.RouteBuffer(pbuf)
-	}
-	ctx.Conn.Close()
-}
-
-func (s *Server) handlePacket(ctx *Context, pbuf *packet.Buffer) {
-	beatBuf := packet.NewBuffer(nil)
-	beatBuf.SetCmd(packet.CmdAlive | packet.CmdACKFlag)
-
-	if pbuf.Cmd() == packet.CmdAlive {
-		ctx.WriteBuffer(beatBuf)
-		return
-	}
-
-	if pbuf.Cmd() == (packet.CmdAlive | packet.CmdACKFlag) {
-		it, found := ctx.pingBack.Load(pbuf.DistPort())
-		if !found {
-			return
-		}
-		ch, ok := it.(chan error)
-		if !ok {
-			return
-		}
-		ch <- nil
-		return
-	}
+	return RunPbufLoopService(s, ctx)
 }

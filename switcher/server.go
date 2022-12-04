@@ -3,9 +3,7 @@ package switcher
 import (
 	"errors"
 	"fmt"
-	"log"
 	"net"
-	"strings"
 	"sync"
 	"time"
 
@@ -145,51 +143,5 @@ func (s *Server) DetachCtx(ctx *Context) {
 		ctx.Conn = nil
 		ctx.attached = false
 		ctx.DetachTime = time.Now()
-	}
-}
-
-// ResolveOpenCmd 解析open命令
-func (s *Server) ResolveOpenCmd(caller *Context, pbuf *packet.Buffer) {
-	distDomain := strings.ToLower(string(pbuf.Payload))
-	if distDomain == "" {
-		pbuf.SetPayload([]byte(caller.Domain))
-		s.RouteBuffer(pbuf)
-		return
-	}
-
-	//
-	// 进行域名解析，确定目标节点
-	//
-	it, found := s.nodeDomains.Load(distDomain)
-	if !found {
-		errInfo := fmt.Sprintf("resolve failed, domain='%v'", distDomain)
-		log.Println(errInfo)
-		pbuf.SetOpenACK(errInfo)
-		pbuf.SetSrcIP(0)
-		caller.WriteBuffer(pbuf)
-		return
-	}
-	distCtx := it.(*Context)
-
-	pbuf.SetDistIP(distCtx.IP)
-	pbuf.SetPayload([]byte(caller.Domain))
-	distCtx.WriteBuffer(pbuf)
-}
-
-// RouteBuffer 根据DistIP路由数据包，这些包可以无序
-func (s *Server) RouteBuffer(pbuf *packet.Buffer) {
-	distIP := pbuf.DistIP()
-	it, found := s.nodeIps.Load(distIP)
-	if !found {
-		// 此处记录找不到ctx的错误，但不退出循环
-		log.Printf("node not found ip=%v\n", distIP)
-		return
-	}
-	ctx := it.(*Context)
-	err := ctx.WriteBuffer(pbuf)
-	if err != nil {
-		// 此处记录写入失败的日志，但不退出循环
-		log.Printf("node.write failed ip=%v\n", distIP)
-		return
 	}
 }

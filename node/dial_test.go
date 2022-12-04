@@ -229,3 +229,30 @@ func TestDialAddr(t *testing.T) {
 		return
 	}
 }
+
+func TestPing(t *testing.T) {
+	c1, c2 := packet.Pipe()
+	node1 := New(c1)
+	node2 := New(c2)
+
+	node1.SetDomain("test1")
+	node1.SetIP(1)
+	node2.SetDomain("test2")
+	node2.SetIP(2)
+	go node1.Run()
+	go node2.Run()
+
+	_, err := node1.PingDomain("invaliddomain", time.Second)
+	if err == nil {
+		t.Error("unexpected nil error")
+		return
+	}
+
+	d, err := node1.PingDomain("test2", time.Second)
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	fmt.Printf("ping domain duration=%v\n", d)
+}

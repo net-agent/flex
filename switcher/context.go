@@ -2,7 +2,7 @@ package switcher
 
 import (
 	"errors"
-	"log"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -49,33 +49,36 @@ func (ctx *Context) WriteBuffer(buf *packet.Buffer) error {
 }
 
 func (ctx *Context) Ping(timeout time.Duration) (dur time.Duration, retErr error) {
-	ch := make(chan error)
-	defer close(ch)
-	index := uint16(0xffff & atomic.AddInt32(&ctx.pingIndex, 1))
-	ctx.pingBack.Store(index, ch)
-	defer ctx.pingBack.Delete(index)
+	port := uint16(0xffff & atomic.AddInt32(&ctx.pingIndex, 1))
+
+	pbuf := packet.NewBuffer(nil)
+	pbuf.SetCmd(packet.CmdPingDomain)
+	pbuf.SetSrc(vars.SwitcherIP, port)
+	pbuf.SetDist(ctx.IP, 0)
+	pbuf.SetPayload([]byte(ctx.Domain))
+
+	ch := make(chan *packet.Buffer)
+	ctx.pingBack.Store(port, ch)
+	defer func() {
+		ctx.pingBack.Delete(port)
+		close(ch)
+	}()
 
 	pingStart := time.Now()
-	log.Printf("[SEND-PING] domain='%v' ip='%v' index='%v'\n", ctx.Domain, ctx.IP, index)
-	defer func() {
-		log.Printf("[RECV-PING] domain='%v' ip='%v' index='%v' err='%v' dur=%v\n", ctx.Domain, ctx.IP, index, retErr, dur)
-	}()
-
-	go func() {
-		pbuf := packet.NewBuffer(nil)
-		pbuf.SetCmd(packet.CmdAlive)
-		pbuf.SetSrc(vars.SwitcherIP, index)
-		pbuf.SetDist(ctx.IP, 0)
-		err := ctx.WriteBuffer(pbuf)
-		if err != nil {
-			ch <- err
-		}
-	}()
+	err := ctx.WriteBuffer(pbuf)
+	if err != nil {
+		return 0, err
+	}
 
 	select {
-	case err := <-ch:
-		return time.Since(pingStart), err
+	case pbuf := <-ch:
+		info := string(pbuf.Payload)
+		if info != "" {
+			return 0, fmt.Errorf("ping response: %v", info)
+		}
 	case <-time.After(timeout):
-		return time.Since(pingStart), errors.New("ping timeout")
+		return 0, errors.New("ping timeout")
 	}
+
+	return time.Since(pingStart), nil
 }

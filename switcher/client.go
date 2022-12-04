@@ -29,6 +29,7 @@ func UpgradeToNode(pc packet.Conn, domain, mac, password string) (*node.Node, er
 	pbuf := packet.NewBuffer(nil)
 
 	var req Request
+	req.Version = packet.VERSION
 	req.Domain = domain
 	req.Mac = mac
 	req.Timestamp = time.Now().UnixNano()
@@ -59,6 +60,7 @@ func UpgradeToNode(pc packet.Conn, domain, mac, password string) (*node.Node, er
 
 	node := node.New(pc)
 	node.SetIP(resp.IP)
+	node.SetDomain(domain)
 
 	return node, nil
 }
