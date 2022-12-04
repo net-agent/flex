@@ -15,7 +15,6 @@ const (
 	CmdOpenStream = byte(iota << 1)
 	CmdCloseStream
 	CmdPushStreamData
-	CmdAlive
 	CmdPushMessage
 	CmdPingDomain
 )

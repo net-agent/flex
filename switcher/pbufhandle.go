@@ -68,27 +68,9 @@ func (s *Server) HandleSwitcherPbuf(ctx *Context, pbuf *packet.Buffer) {
 			s.HandleCmdOpenStream(ctx, pbuf)
 		}
 
-	case packet.CmdAlive:
-		if pbuf.IsACK() {
-			// 类型二：处理服务端探活请求的应答
-			it, found := ctx.pingBack.Load(pbuf.DistPort())
-			if !found {
-				break
-			}
-			ch, ok := it.(chan error)
-			if !ok {
-				break
-			}
-			ch <- nil
-		} else {
-			// 类型一：处理客户端发送过来的探活包
-			beatBuf := packet.NewBuffer(nil)
-			beatBuf.SetCmd(packet.CmdAlive | packet.CmdACKFlag)
-			ctx.WriteBuffer(beatBuf)
-		}
-
 	case packet.CmdPingDomain:
 		if pbuf.IsACK() {
+			s.HandleCmdPingDomainAck(ctx, pbuf)
 		} else {
 			s.HandleCmdPingDomain(ctx, pbuf)
 		}
@@ -117,6 +99,21 @@ func (s *Server) HandleCmdPingDomain(caller *Context, pbuf *packet.Buffer) {
 
 	pbuf.SetDistIP(dist.IP)
 	dist.WriteBuffer(pbuf)
+}
+
+// HandleCmdPingDomainAck
+func (s *Server) HandleCmdPingDomainAck(caller *Context, pbuf *packet.Buffer) {
+	port := pbuf.DistPort()
+	it, found := caller.pingBack.Load(port)
+	if !found {
+		return
+	}
+	ch, ok := it.(chan *packet.Buffer)
+	if !ok {
+		return
+	}
+
+	ch <- pbuf
 }
 
 // HandleCmdOpenStream 处理OpenStream命令，需要根据domain信息进行转发

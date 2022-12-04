@@ -11,15 +11,9 @@ import (
 )
 
 func (node *Node) heartbeatLoop(ticker *time.Ticker) {
-	pbuf := packet.NewBuffer(nil)
-	pbuf.SetCmd(packet.CmdAlive)
-	pbuf.SetSrc(node.ip, 0)
-	pbuf.SetDist(vars.SwitcherIP, 0)
-	pbuf.SetPayload(nil)
-
 	for range ticker.C {
 		if time.Since(node.lastWriteTime) > (DefaultHeartbeatInterval - time.Second) {
-			err := node.WriteBuffer(pbuf)
+			_, err := node.PingDomain("", time.Second*3)
 			if err != nil {
 				log.Printf("write heartbeat-data failed: %v\n", err)
 				node.Close()
@@ -34,10 +28,10 @@ func (node *Node) heartbeatLoop(ticker *time.Ticker) {
 func (node *Node) PingDomain(domain string, timeout time.Duration) (time.Duration, error) {
 	port, err := node.GetFreePort()
 	defer node.ReleaseUsedPort(port)
-
 	if err != nil {
 		return 0, err
 	}
+
 	pbuf := packet.NewBuffer(nil)
 	pbuf.SetCmd(packet.CmdPingDomain)
 	pbuf.SetSrc(node.ip, port)
