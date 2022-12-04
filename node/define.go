@@ -22,10 +22,11 @@ type Node struct {
 	// localBufPipe    chan *packet.Buffer // 本机回环请求产生的数据包队列
 	// localAckBufPipe chan *packet.Buffer
 
-	freePorts   chan uint16
-	listenPorts sync.Map
-	usedPorts   sync.Map
-	streams     sync.Map
+	freePorts    chan uint16
+	listenPorts  sync.Map
+	usedPorts    sync.Map
+	streams      sync.Map
+	pingRequests sync.Map
 
 	writeMut      sync.Mutex
 	lastWriteTime time.Time
@@ -111,4 +112,8 @@ func (node *Node) GetFreePort() (uint16, error) {
 			return 0, errors.New("free port dry")
 		}
 	}
+}
+
+func (node *Node) ReleaseUsedPort(port uint16) {
+	node.freePorts <- port
 }

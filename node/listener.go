@@ -56,7 +56,7 @@ func (l *Listener) Close() error {
 	l.closed = true
 	l.node.listenPorts.Delete(l.port)
 	close(l.openedStream)
-	l.node.freePorts <- l.port
+	l.node.ReleaseUsedPort(l.port)
 	return nil
 }
 

@@ -28,6 +28,30 @@ func (node *Node) heartbeatLoop(ticker *time.Ticker) {
 	}
 }
 
+// PingDomain 对指定的节点进行连通性测试并返回RTT。domain为空时，返回到中转节点的RTT
 func (node *Node) PingDomain(domain string) (time.Duration, error) {
-	return time.Second, nil
+	port, err := node.GetFreePort()
+	defer node.ReleaseUsedPort(port)
+
+	if err != nil {
+		return 0, err
+	}
+	pbuf := packet.NewBuffer(nil)
+	pbuf.SetCmd(packet.CmdPingDomain)
+	pbuf.SetSrc(node.ip, port)
+	pbuf.SetDist(0, 0) // 忽略
+	pbuf.SetPayload([]byte(domain))
+
+	ch := make(chan *packet.Buffer) // for response
+	node.pingRequests.Store(port, ch)
+	defer func() {
+		node.pingRequests.Delete(port)
+		close(ch)
+	}()
+
+	pingStart := time.Now()
+	node.WriteBuffer(pbuf)
+	<-ch
+
+	return time.Since(pingStart), nil
 }

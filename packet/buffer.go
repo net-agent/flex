@@ -8,15 +8,15 @@ import (
 )
 
 const (
-	CmdACKFlag = byte(1 << iota)
-	CmdOpenStream
+	CmdACKFlag    = byte(1)
+	CmdOpenStream = byte(iota << 1)
 	CmdCloseStream
 	CmdPushStreamData
 	CmdAlive
 	CmdPushMessage
+	CmdPingDomain
 )
 
-//
 // Header
 // +-------+------+--------+----------+--------+---------+-------------+
 // | Field | Cmd  | DistIP | DistPort | SrcIP  | SrcPort | PayloadSize |
@@ -25,7 +25,6 @@ const (
 // | Pos   | 0    | 1      | 3        | 5      | 7       | 9           |
 // | Size  | 1    | 2      | 2        | 2      | 2       | 2           |
 // +-------+------+--------+----------+--------+---------+-------------+
-//
 const HeaderSz = 1 + 2 + 2 + 2 + 2 + 2
 
 type Header [HeaderSz]byte
@@ -49,6 +48,10 @@ func (buf *Buffer) SetCmd(cmd byte) {
 // Cmd 获取命令字段
 func (buf *Buffer) Cmd() byte {
 	return buf.Head[0]
+}
+
+func (buf *Buffer) CmdType() byte {
+	return buf.Head[0] & 0xFE
 }
 
 // IsACK 判断命令是否为ACK类型
