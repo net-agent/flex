@@ -13,6 +13,7 @@ import (
 )
 
 type Request struct {
+	Version   int
 	Domain    string
 	Mac       string
 	Timestamp int64
@@ -59,6 +60,9 @@ func (s *Server) ServeConn(pc packet.Conn) (retErr error) {
 	err = json.Unmarshal(pbuf.Payload, &req)
 	if err != nil {
 		return err
+	}
+	if req.Version != packet.VERSION {
+		return fmt.Errorf("invalid client version='%v', expected='%v'", req.Version, packet.VERSION)
 	}
 	if req.Sum != req.CalcSum(s.password) {
 		return errors.New("invalid checksum detected")

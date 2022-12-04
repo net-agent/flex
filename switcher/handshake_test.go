@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+
+	"github.com/net-agent/flex/v2/packet"
 )
 
 func TestMarshal(t *testing.T) {
@@ -42,7 +44,7 @@ func TestCalcSum(t *testing.T) {
 		pswd   string
 		output string
 	}{
-		{Request{"test.com", "mac", 0, ""}, "", "Pf1OHs4vBuZ0RiCJvIdFpB99c0Gra64rH6vYi0fXZDk="},
+		{Request{packet.VERSION, "test.com", "mac", 0, ""}, "", "Pf1OHs4vBuZ0RiCJvIdFpB99c0Gra64rH6vYi0fXZDk="},
 	}
 
 	for _, c := range cases {

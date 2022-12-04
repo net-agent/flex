@@ -7,6 +7,9 @@ import (
 	"github.com/net-agent/flex/v2/vars"
 )
 
+// 当数据包结构出现不兼容改动时，此处需要更新
+const VERSION = int(20221204)
+
 const (
 	CmdACKFlag    = byte(1)
 	CmdOpenStream = byte(iota << 1)
