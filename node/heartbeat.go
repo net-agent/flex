@@ -1,6 +1,7 @@
 package node
 
 import (
+	"errors"
 	"log"
 	"time"
 
@@ -29,7 +30,7 @@ func (node *Node) heartbeatLoop(ticker *time.Ticker) {
 }
 
 // PingDomain 对指定的节点进行连通性测试并返回RTT。domain为空时，返回到中转节点的RTT
-func (node *Node) PingDomain(domain string) (time.Duration, error) {
+func (node *Node) PingDomain(domain string, timeout time.Duration) (time.Duration, error) {
 	port, err := node.GetFreePort()
 	defer node.ReleaseUsedPort(port)
 
@@ -51,7 +52,12 @@ func (node *Node) PingDomain(domain string) (time.Duration, error) {
 
 	pingStart := time.Now()
 	node.WriteBuffer(pbuf)
-	<-ch
+
+	select {
+	case <-ch:
+	case <-time.After(timeout):
+		return 0, errors.New("ping domain timeout")
+	}
 
 	return time.Since(pingStart), nil
 }

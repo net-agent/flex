@@ -8,12 +8,20 @@ import (
 	"github.com/net-agent/flex/v2/stream"
 )
 
-func (node *Node) GetStreamBySID(sid uint64) (*stream.Conn, error) {
+func (node *Node) GetStreamBySID(sid uint64, getAndDelete bool) (*stream.Conn, error) {
 	// 收到close，代表对端不会再发送数据，可以解除streams绑定
-	it, found := node.streams.LoadAndDelete(sid)
+	var it interface{}
+	var found bool
+
+	if getAndDelete {
+		it, found = node.streams.LoadAndDelete(sid)
+	} else {
+		it, found = node.streams.Load(sid)
+	}
 	if !found {
 		return nil, errors.New("stream not found")
 	}
+
 	c, ok := it.(*stream.Conn)
 	if !ok {
 		log.Printf("internal error (close)\n")
@@ -84,6 +92,10 @@ func (node *Node) HandleCmdOpenStreamAck(pbuf *packet.Buffer) {
 
 // 处理远端的Ping请求
 func (node *Node) HandleCmdPingDomain(pbuf *packet.Buffer) {
+	if string(pbuf.Payload) != node.domain {
+		return
+	}
+
 	pbuf.SetCmd(pbuf.Cmd() | packet.CmdACKFlag)
 	pbuf.SwapSrcDist()
 	pbuf.SetSrc(node.GetIP(), 0)
@@ -105,7 +117,7 @@ func (node *Node) HandleCmdPingDomainAck(pbuf *packet.Buffer) {
 
 // 处理数据包
 func (node *Node) HandleCmdPushStreamData(pbuf *packet.Buffer) {
-	c, err := node.GetStreamBySID(pbuf.SID())
+	c, err := node.GetStreamBySID(pbuf.SID(), false)
 	if err != nil {
 		return
 	}
@@ -115,7 +127,7 @@ func (node *Node) HandleCmdPushStreamData(pbuf *packet.Buffer) {
 
 // 处理数据包已送达的消息
 func (node *Node) HandleCmdPushStreamDataAck(pbuf *packet.Buffer) {
-	c, err := node.GetStreamBySID(pbuf.SID())
+	c, err := node.GetStreamBySID(pbuf.SID(), false)
 	if err != nil {
 		return
 	}
@@ -124,7 +136,7 @@ func (node *Node) HandleCmdPushStreamDataAck(pbuf *packet.Buffer) {
 }
 
 func (node *Node) HandleCmdCloseStream(pbuf *packet.Buffer) {
-	conn, err := node.GetStreamBySID(pbuf.SID())
+	conn, err := node.GetStreamBySID(pbuf.SID(), true)
 	if err != nil {
 		return
 	}
@@ -140,7 +152,7 @@ func (node *Node) HandleCmdCloseStream(pbuf *packet.Buffer) {
 }
 
 func (node *Node) HandleCmdCloseStreamAck(pbuf *packet.Buffer) {
-	conn, err := node.GetStreamBySID(pbuf.SID())
+	conn, err := node.GetStreamBySID(pbuf.SID(), true)
 	if err != nil {
 		return
 	}
