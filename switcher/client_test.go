@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/net-agent/flex/v2/node"
 )
@@ -21,7 +22,7 @@ func TestClient(t *testing.T) {
 	node.ExampleOf2NodeTest(t, client1, client2, 0)
 }
 
-func TestDialDomain(t *testing.T) {
+func TestDialDomainAndPingDomain(t *testing.T) {
 	client1, client2, err := makeTwoNodes("localhost:12346")
 	if err != nil {
 		t.Error(err)
@@ -61,6 +62,25 @@ func TestDialDomain(t *testing.T) {
 		t.Error("unexpected err", err)
 		return
 	}
+
+	//
+	// test ping domain
+	//
+	_, err = client1.PingDomain("notexist", time.Second)
+	if err == nil {
+		t.Error("unexpected nil err")
+		return
+	}
+	fmt.Printf("expected err='%v'\n", err)
+
+	dur, err := client1.PingDomain("test2", time.Second)
+	if err != nil {
+		t.Errorf("ping domain with err: %v", err)
+		return
+	}
+
+	fmt.Printf("ping domain dur=%v", dur)
+
 }
 
 func makeTwoNodes(addr string) (*node.Node, *node.Node, error) {

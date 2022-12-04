@@ -99,6 +99,7 @@ func (node *Node) HandleCmdPingDomain(pbuf *packet.Buffer) {
 	pbuf.SetCmd(pbuf.Cmd() | packet.CmdACKFlag)
 	pbuf.SwapSrcDist()
 	pbuf.SetSrc(node.GetIP(), 0)
+	pbuf.SetPayload(nil) // 应答时payload为空表示成功，非空则记录错误原因
 	node.WriteBuffer(pbuf)
 }
 

@@ -2,6 +2,7 @@ package node
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"time"
 
@@ -40,7 +41,7 @@ func (node *Node) PingDomain(domain string, timeout time.Duration) (time.Duratio
 	pbuf := packet.NewBuffer(nil)
 	pbuf.SetCmd(packet.CmdPingDomain)
 	pbuf.SetSrc(node.ip, port)
-	pbuf.SetDist(0, 0) // 忽略
+	pbuf.SetDist(vars.SwitcherIP, 0) // 忽略
 	pbuf.SetPayload([]byte(domain))
 
 	ch := make(chan *packet.Buffer) // for response
@@ -54,7 +55,11 @@ func (node *Node) PingDomain(domain string, timeout time.Duration) (time.Duratio
 	node.WriteBuffer(pbuf)
 
 	select {
-	case <-ch:
+	case pbuf := <-ch:
+		info := string(pbuf.Payload)
+		if info != "" {
+			return 0, fmt.Errorf("ping response: %v", info)
+		}
 	case <-time.After(timeout):
 		return 0, errors.New("ping domain timeout")
 	}

@@ -59,6 +59,7 @@ func UpgradeToNode(pc packet.Conn, domain, mac, password string) (*node.Node, er
 
 	node := node.New(pc)
 	node.SetIP(resp.IP)
+	node.SetDomain(domain)
 
 	return node, nil
 }
