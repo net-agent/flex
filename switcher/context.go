@@ -30,12 +30,12 @@ type Context struct {
 	attached  bool
 }
 
-func NewContext(domain, mac string, ip uint16, conn packet.Conn) *Context {
+func NewContext(conn packet.Conn, domain, mac string) *Context {
 	return &Context{
 		id:           int(atomic.AddInt32(&ctxindex, 1)),
 		Domain:       domain,
 		Mac:          mac,
-		IP:           ip,
+		IP:           0,
 		Conn:         conn,
 		LastReadTime: time.Now(),
 		AttachTime:   time.Now(),

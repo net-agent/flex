@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/net-agent/flex/v2/node"
+	"github.com/net-agent/flex/v2/packet"
 )
 
 var testPassword = "abc"
@@ -35,7 +36,7 @@ func TestDialDomainAndPingDomain(t *testing.T) {
 	defer client2.Close()
 
 	// dump name client
-	_, err = ConnectServer(addr, "test2", "mac3", testPassword)
+	_, err = connect(addr, "test2", "mac3", testPassword)
 	if err == nil {
 		t.Error("unexpected nil error")
 		return
@@ -98,12 +99,12 @@ func makeTwoNodes(addr string) (*Server, *node.Node, *node.Node, error) {
 		return nil, nil, nil, err
 	}
 
-	client1, err := ConnectServer(addr, "test1", "mac1", testPassword)
+	client1, err := connect(addr, "test1", "mac1", testPassword)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
-	client2, err := ConnectServer(addr, "test2", "mac2", testPassword)
+	client2, err := connect(addr, "test2", "mac2", testPassword)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -128,4 +129,19 @@ func startTestServer(addr string) (*Server, error) {
 	go app.Serve(l)
 
 	return app, nil
+}
+
+func connect(addr, domain, mac, password string) (retNode *node.Node, retErr error) {
+	conn, err := net.Dial("tcp4", addr)
+	if err != nil {
+		return nil, err
+	}
+	pc := packet.NewWithConn(conn)
+
+	node, err := UpgradeRequest(pc, domain, mac, password)
+	if err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return node, nil
 }

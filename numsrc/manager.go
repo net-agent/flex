@@ -1,4 +1,4 @@
-package port
+package numsrc
 
 import (
 	"errors"
@@ -7,12 +7,12 @@ import (
 )
 
 var (
-	ErrInvalidPortRange    = errors.New("invalid port range")
-	ErrFreePortChClosed    = errors.New("free ports chan closed")
-	ErrGetFreePortTimeout  = errors.New("get free port timeout")
-	ErrPortStateNotFound   = errors.New("port state not found")
-	ErrInvalidPortState    = errors.New("invalid port state")
-	ErrFreePortsChOverflow = errors.New("free ports chan overflow")
+	ErrInvalidNumberRange   = errors.New("invalid number range")
+	ErrFreeNumberChClosed   = errors.New("free number chan closed")
+	ErrGetFreeNumberTimeout = errors.New("get free number timeout")
+	ErrNumberStateNotFound  = errors.New("number state not found")
+	ErrInvalidNumberState   = errors.New("invalid number state")
+	ErrFreeNumberChOverflow = errors.New("free number chan overflow")
 )
 
 type Manager struct {
@@ -27,7 +27,7 @@ type Manager struct {
 // 端口取值范围[min, max]
 func NewManager(min, freeStart, max uint16) (*Manager, error) {
 	if !(min <= freeStart && freeStart < max) {
-		return nil, ErrInvalidPortRange
+		return nil, ErrInvalidNumberRange
 	}
 
 	m := &Manager{
@@ -44,27 +44,27 @@ func NewManager(min, freeStart, max uint16) (*Manager, error) {
 	return m, nil
 }
 
-// GetPort 申请制定编号的端口，返回：是否成功
-func (pm *Manager) GetPort(port uint16) error {
+// GetNumberSrc 申请制定编号的端口，返回：是否成功
+func (pm *Manager) GetNumberSrc(num uint16) error {
 	pm.locker.Lock()
 	defer pm.locker.Unlock()
-	return pm.requestPortByNumber(port)
+	return pm.requestNumber(num)
 }
 
-func (pm *Manager) requestPortByNumber(port uint16) error {
+func (pm *Manager) requestNumber(port uint16) error {
 	if port < pm.min || port > pm.max {
-		return ErrInvalidPortRange
+		return ErrInvalidNumberRange
 	}
 	used, found := pm.states[port]
 	if found && used {
-		return ErrPortStateNotFound
+		return ErrNumberStateNotFound
 	}
 
 	pm.states[port] = true
 	return nil
 }
 
-func (pm *Manager) GetFreePort() (uint16, error) {
+func (pm *Manager) GetFreeNumberSrc() (uint16, error) {
 	pm.locker.Lock()
 	defer pm.locker.Unlock()
 
@@ -72,33 +72,33 @@ func (pm *Manager) GetFreePort() (uint16, error) {
 		select {
 		case port, ok := <-pm.freeChan:
 			if !ok {
-				return 0, ErrFreePortChClosed
+				return 0, ErrFreeNumberChClosed
 			}
 
 			// 尝试调用requestPortByNumber验证port的可用性，返回true则代表申请成功
-			if nil == pm.requestPortByNumber(port) {
+			if nil == pm.requestNumber(port) {
 				return port, nil
 			}
 
 		case <-time.After(time.Second):
-			return 0, ErrGetFreePortTimeout
+			return 0, ErrGetFreeNumberTimeout
 		}
 	}
 }
 
-func (pm *Manager) ReleasePort(port uint16) error {
+func (pm *Manager) ReleaseNumberSrc(port uint16) error {
 	if port < pm.min || port > pm.max {
-		return ErrInvalidPortRange
+		return ErrInvalidNumberRange
 	}
 	pm.locker.Lock()
 	defer pm.locker.Unlock()
 
 	used, found := pm.states[port]
 	if !found {
-		return ErrPortStateNotFound
+		return ErrNumberStateNotFound
 	}
 	if !used {
-		return ErrInvalidPortState
+		return ErrInvalidNumberState
 	}
 
 	pm.states[port] = false
@@ -109,7 +109,7 @@ func (pm *Manager) ReleasePort(port uint16) error {
 		case pm.freeChan <- port:
 			return nil
 		default:
-			return ErrFreePortsChOverflow
+			return ErrFreeNumberChOverflow
 		}
 	}
 

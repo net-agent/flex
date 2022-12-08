@@ -7,13 +7,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/net-agent/flex/v2/numsrc"
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/vars"
 )
 
 type Server struct {
 	password      string
-	freeIps       chan uint16
+	ipm           *numsrc.Manager
 	nodeDomains   sync.Map   // map[string]*Context
 	nodeIps       sync.Map   // map[uint16]*Context
 	ctxRecords    []*Context // 不断自增（todo：fix memory leak）
@@ -21,9 +22,11 @@ type Server struct {
 }
 
 func NewServer(password string) *Server {
+	ipm, _ := numsrc.NewManager(1, 1, vars.MaxIP-1)
+
 	return &Server{
 		password: password,
-		freeIps:  getFreeIpCh(1, vars.MaxIP),
+		ipm:      ipm,
 	}
 }
 
@@ -46,7 +49,6 @@ func (s *Server) Close() error {
 func (s *Server) AttachCtx(ctx *Context) error {
 	oldCtx, replaced := s.replaceDomain(ctx)
 	if !replaced {
-		ctx.Conn.Close()
 		return errors.New("replace domain context failed")
 	}
 
@@ -56,16 +58,22 @@ func (s *Server) AttachCtx(ctx *Context) error {
 		s.nodeIps.Delete(oldCtx.IP)
 	}
 
+	ip, err := s.ipm.GetFreeNumberSrc()
+	if err != nil {
+		return errors.New("get unused ip failed")
+	}
+	ctx.IP = ip
+
 	_, loaded := s.nodeIps.LoadOrStore(ctx.IP, ctx)
 	if !loaded {
 		return nil
 	}
 
+	s.ipm.ReleaseNumberSrc(ctx.IP)
 	ctx.attached = false
-	ctx.Conn.Close()
 	s.nodeDomains.Delete(ctx.Domain)
 
-	return errors.New("ip exist")
+	return errors.New("ip address exist")
 }
 
 // replaceDomain 如果存在同名的context，进行检测
@@ -143,5 +151,7 @@ func (s *Server) DetachCtx(ctx *Context) {
 		ctx.Conn = nil
 		ctx.attached = false
 		ctx.DetachTime = time.Now()
+
+		s.ipm.ReleaseNumberSrc(ctx.IP)
 	}
 }
