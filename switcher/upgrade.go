@@ -12,6 +12,9 @@ import (
 )
 
 var (
+	errUpgradeWriteFailed    = errors.New("upgrade write buffer failed")
+	errUpgradeReadFailed     = errors.New("upgrade read buffer failed")
+	errUnmarshalFailed       = errors.New("unmarshal payload failed")
 	errPacketVersionNotMatch = errors.New("packet version not match")
 	errInvalidPassword       = errors.New("invalid password")
 	errInvalidDomain         = errors.New("invalid domain")
@@ -29,18 +32,18 @@ func UpgradeRequest(pc packet.Conn, domain, mac, password string) (*node.Node, e
 	pbuf.SetPayload(req.Marshal())
 	err := pc.WriteBuffer(pbuf)
 	if err != nil {
-		return nil, err
+		return nil, errUpgradeWriteFailed
 	}
 
 	pbuf, err = pc.ReadBuffer()
 	if err != nil {
-		return nil, err
+		return nil, errUpgradeReadFailed
 	}
 
 	var resp Response
 	err = json.Unmarshal(pbuf.Payload, &resp)
 	if err != nil {
-		return nil, err
+		return nil, errUnmarshalFailed
 	}
 	if resp.ErrCode != 0 {
 		return nil, fmt.Errorf("server side response: %v", resp.ErrMsg)
@@ -58,16 +61,17 @@ func UpgradeRequest(pc packet.Conn, domain, mac, password string) (*node.Node, e
 	return node, nil
 }
 
-func UpgradeHandler(pc packet.Conn, s *Server) (*Context, error) {
+// HandleUpgradeRequest 在服务端处理Upgrade请求
+func HandleUpgradeRequest(pc packet.Conn, s *Server) (*Context, error) {
 	pbuf, err := pc.ReadBuffer()
 	if err != nil {
-		return nil, err
+		return nil, errUpgradeReadFailed
 	}
 
 	var req Request
 	err = json.Unmarshal(pbuf.Payload, &req)
 	if err != nil {
-		return nil, err
+		return nil, errUnmarshalFailed
 	}
 
 	// 检查请求的合法性

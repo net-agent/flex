@@ -1,147 +1,226 @@
 package switcher
 
 import (
-	"encoding/json"
 	"fmt"
-	"net"
-	"strings"
 	"testing"
-	"time"
 
-	"github.com/net-agent/flex/v2/node"
 	"github.com/net-agent/flex/v2/packet"
 )
 
-var testPassword = "abc"
+// TestUpgradeRequest 说明
+// 构建客户端node到server端的模拟环境，通过在不同的阶段强制关闭连接来模拟异常行为
+func TestUpgrade(t *testing.T) {
+	pswd := "testpswd"
+	s := NewServer(pswd)
+	pc1, pc2 := packet.Pipe()
 
-func TestClient(t *testing.T) {
-	_, client1, client2, err := makeTwoNodes("localhost:12345")
+	// server process thread
+	go s.HandlePacketConn(pc2)
+
+	_, err := UpgradeRequest(pc1, "test", "", pswd)
 	if err != nil {
-		t.Error(err)
-		return
+		t.Errorf("unexpected err=%v\n", err)
 	}
-	node.ExampleOf2NodeTest(t, client1, client2, 0)
 }
 
-func TestDialDomainAndPingDomain(t *testing.T) {
-	addr := "localhost:12346"
-	_, client1, client2, err := makeTwoNodes(addr)
-	if err != nil {
-		t.Error(err)
+func TestUpgradeRequestErr_WriteBuffer(t *testing.T) {
+	pswd := "testpswd"
+	pc1, pc2 := packet.Pipe()
+
+	pc2.Close()
+
+	_, err := UpgradeRequest(pc1, "test", "", pswd)
+	if err != errUpgradeWriteFailed {
+		t.Errorf("unexpected err=%v\n", err)
 		return
 	}
-	go client1.Run()
-	go client2.Run()
-	defer client1.Close()
-	defer client2.Close()
+}
 
-	// dump name client
-	_, err = connect(addr, "test2", "mac3", testPassword)
-	if err == nil {
-		t.Error("unexpected nil error")
+func TestUpgradeRequestErr_ReadBuffer(t *testing.T) {
+	pswd := "testpswd"
+	pc1, pc2 := packet.Pipe()
+
+	go func() {
+		// 读取一个packet后就关闭连接，导致客户端出现ReadBufferErr
+		pc2.ReadBuffer()
+		pc2.Close()
+	}()
+
+	_, err := UpgradeRequest(pc1, "test", "", pswd)
+	if err != errUpgradeReadFailed {
+		t.Errorf("unexpected err=%v\n", err)
 		return
 	}
-	fmt.Printf("expected error: %v\n", err)
+}
 
-	_, err = client1.DialDomain("test2", 80)
+func TestUpgradeRequestErr_UnmarshalUpgradeResp(t *testing.T) {
+	pswd := "testpswd"
+	pc1, pc2 := packet.Pipe()
+
+	go func() {
+		// 读取一个packet后就关闭连接，模拟发送一个无法Unmarshal的结构体
+		pc2.ReadBuffer()
+
+		pbuf := packet.NewBuffer(nil)
+		pbuf.SetPayload([]byte("a/2"))
+		pc2.WriteBuffer(pbuf)
+	}()
+
+	_, err := UpgradeRequest(pc1, "test", "", pswd)
+	if err != errUnmarshalFailed {
+		t.Errorf("unexpected err=%v\n", err)
+		return
+	}
+}
+
+func TestUpgradeRequestErr_ServerSideErr(t *testing.T) {
+	pswd := "testpswd"
+	badPswd := pswd + "_bad"
+	s := NewServer(pswd)
+	pc1, pc2 := packet.Pipe()
+
+	go s.HandlePacketConn(pc2)
+
+	_, err := UpgradeRequest(pc1, "test", "", badPswd)
 	if err == nil {
 		t.Error("unexpected nil err")
 		return
 	}
-
-	_, err = client2.Listen(80)
-	if err != nil {
-		t.Error(err)
-		return
-	}
-
-	c, err := client1.DialDomain("test2", 80)
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	c.Close()
-
-	// dial error test
-	_, err = client1.DialDomain("notexist", 80)
-	if err == nil {
-		t.Error("unexpected nil err")
-		return
-	}
-	if !strings.HasPrefix(err.Error(), "resolve failed") {
-		t.Error("unexpected err", err)
-		return
-	}
-
-	//
-	// test ping domain
-	//
-	_, err = client1.PingDomain("notexist", time.Second)
-	if err == nil {
-		t.Error("unexpected nil err")
-		return
-	}
-	fmt.Printf("expected err='%v'\n", err)
-
-	dur, err := client1.PingDomain("test2", time.Second)
-	if err != nil {
-		t.Errorf("ping domain with err: %v", err)
-		return
-	}
-
-	fmt.Printf("ping domain dur=%v", dur)
-
+	fmt.Printf("expected server side err=%v\n", err)
 }
 
-func makeTwoNodes(addr string) (*Server, *node.Node, *node.Node, error) {
-	s, err := startTestServer(addr)
-	if err != nil {
-		return nil, nil, nil, err
-	}
+func TestUpgradeRequestErr_VersionNotMatch(t *testing.T) {
+	pswd := "testpswd"
+	pc1, pc2 := packet.Pipe()
 
-	client1, err := connect(addr, "test1", "mac1", testPassword)
-	if err != nil {
-		return nil, nil, nil, err
-	}
+	go func() {
+		// 读取第一个packet，然后构建错误的Response
+		pc2.ReadBuffer()
 
-	client2, err := connect(addr, "test2", "mac2", testPassword)
-	if err != nil {
-		return nil, nil, nil, err
-	}
+		var resp Response
+		resp.ErrCode = 0
+		resp.ErrMsg = ""
+		resp.Version = packet.VERSION + 1
+		resp.WriteToPacketConn(pc2)
+	}()
 
-	info := s.PrintCtxRecords()
-	buf, err := json.Marshal(info)
-	if err == nil {
-		fmt.Printf("server context: %v\n", string(buf))
+	_, err := UpgradeRequest(pc1, "test", "", pswd)
+	if err != errPacketVersionNotMatch {
+		t.Errorf("unexpected err=%v\n", err)
+		return
 	}
-
-	return s, client1, client2, nil
 }
 
-func startTestServer(addr string) (*Server, error) {
-	app := NewServer(testPassword)
+func TestHandleUpgradeErr_ReadErr(t *testing.T) {
+	pswd := "testpswd"
+	s := NewServer(pswd)
+	pc1, pc2 := packet.Pipe()
 
-	l, err := net.Listen("tcp4", addr)
-	if err != nil {
-		return nil, err
+	pc1.Close()
+
+	_, err := HandleUpgradeRequest(pc2, s)
+	if err != errUpgradeReadFailed {
+		t.Errorf("unexpected err=%v\n", err)
+		return
 	}
-
-	go app.Serve(l)
-
-	return app, nil
 }
 
-func connect(addr, domain, mac, password string) (retNode *node.Node, retErr error) {
-	conn, err := net.Dial("tcp4", addr)
-	if err != nil {
-		return nil, err
-	}
-	pc := packet.NewWithConn(conn)
+func TestHandleUpgradeErr_Unmarshal(t *testing.T) {
+	pswd := "testpswd"
+	s := NewServer(pswd)
+	pc1, pc2 := packet.Pipe()
 
-	node, err := UpgradeRequest(pc, domain, mac, password)
-	if err != nil {
-		conn.Close()
-		return nil, err
+	go func() {
+		pbuf := packet.NewBuffer(nil)
+		pbuf.SetPayload([]byte("a/2"))
+		pc1.WriteBuffer(pbuf)
+	}()
+
+	_, err := HandleUpgradeRequest(pc2, s)
+	if err != errUnmarshalFailed {
+		t.Errorf("unexpected err=%v\n", err)
+		return
 	}
-	return node, nil
+}
+
+func TestHandleUpgradeErr_Version(t *testing.T) {
+	pswd := "testpswd"
+	s := NewServer(pswd)
+	pc1, pc2 := packet.Pipe()
+
+	go func() {
+		var req Request
+		req.Version = packet.VERSION + 1
+		req.Sum = req.CalcSum(pswd)
+
+		pbuf := packet.NewBuffer(nil)
+		pbuf.SetPayload(req.Marshal())
+		pc1.WriteBuffer(pbuf)
+	}()
+
+	_, err := HandleUpgradeRequest(pc2, s)
+	if err != errPacketVersionNotMatch {
+		t.Errorf("unexpected err=%v\n", err)
+		return
+	}
+}
+
+func TestHandleUpgradeErr_Password(t *testing.T) {
+	pswd := "testpswd"
+	badPswd := pswd + "_bad"
+	s := NewServer(pswd)
+	pc1, pc2 := packet.Pipe()
+
+	go func() {
+		var req Request
+		req.Version = packet.VERSION
+		req.Sum = req.CalcSum(badPswd)
+
+		pbuf := packet.NewBuffer(nil)
+		pbuf.SetPayload(req.Marshal())
+		pc1.WriteBuffer(pbuf)
+	}()
+
+	_, err := HandleUpgradeRequest(pc2, s)
+	if err != errInvalidPassword {
+		t.Errorf("unexpected err=%v\n", err)
+		return
+	}
+}
+
+func TestHandleUpgradeErr_Domain(t *testing.T) {
+	badDomainCases := []string{
+		"", "local", "localhost", "local.des",
+	}
+	testWithDomain := func(domain string) bool {
+		pswd := "testpswd"
+		s := NewServer(pswd)
+		pc1, pc2 := packet.Pipe()
+
+		go func() {
+			var req Request
+			req.Version = packet.VERSION
+			req.Domain = domain
+			req.Sum = req.CalcSum(pswd)
+
+			pbuf := packet.NewBuffer(nil)
+			pbuf.SetPayload(req.Marshal())
+			pc1.WriteBuffer(pbuf)
+		}()
+
+		_, err := HandleUpgradeRequest(pc2, s)
+		if err != errInvalidDomain {
+			t.Errorf("unexpected err=%v\n", err)
+			return false
+		}
+		return true
+	}
+
+	for _, domain := range badDomainCases {
+		expected := testWithDomain(domain)
+		if !expected {
+			t.Errorf("test failed with domain='%v'\n", domain)
+			return
+		}
+	}
 }

@@ -8,7 +8,8 @@ import (
 	"github.com/net-agent/flex/v2/packet"
 )
 
-func TestMarshal(t *testing.T) {
+// TestRequestMarshal 如果本用例失败，则说明Request.Marshal方法会出现问题，需要修复其实现
+func TestRequestMarshal(t *testing.T) {
 	var req Request
 	req.Domain = "hello world"
 	req.Mac = "xixisisittj"
@@ -34,6 +35,16 @@ func TestMarshal(t *testing.T) {
 	}
 	if req2.Mac != req.Mac {
 		t.Error("mac not equal")
+		return
+	}
+}
+
+// TestResponseMarshal 如果此用例失败，需要修改Response.WriteToPacketConn的实现
+func TestResponseMarshal(t *testing.T) {
+	var resp Response
+	_, err := json.Marshal(&resp)
+	if err != nil {
+		t.Error("response marshal failed")
 		return
 	}
 }

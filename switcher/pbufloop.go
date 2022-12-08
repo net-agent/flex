@@ -1,7 +1,6 @@
 package switcher
 
 import (
-	"log"
 	"time"
 
 	"github.com/net-agent/flex/v2/vars"
@@ -9,15 +8,6 @@ import (
 
 // RunPbufLoopService
 func RunPbufLoopService(s *Server, ctx *Context) error {
-	// 记录服务时长
-	start := time.Now()
-	log.Printf("context loop start. domain='%v' id='%v'\n", ctx.Domain, ctx.id)
-	defer func() {
-		dur := time.Since(start).Round(time.Second)
-		log.Printf("context loop stop. domain='%v' id='%v' dur='%v'\n", ctx.Domain, ctx.id, dur)
-	}()
-
-	// 服务循环
 	for {
 		pbuf, err := ctx.Conn.ReadBuffer()
 		ctx.LastReadTime = time.Now()

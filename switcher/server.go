@@ -37,7 +37,7 @@ func (s *Server) Serve(l net.Listener) {
 			return
 		}
 
-		go s.ServeConn(packet.NewWithConn(conn))
+		go s.HandlePacketConn(packet.NewWithConn(conn))
 	}
 }
 
