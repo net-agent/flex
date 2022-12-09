@@ -167,3 +167,16 @@ func TestHandleCmdOpenStream(t *testing.T) {
 	}
 	fmt.Printf("dial err=%v\n", err)
 }
+
+func TestHandlePingDomainAck(t *testing.T) {
+	s := NewServer("")
+	caller := NewContext(nil, "test", "")
+	pbuf := packet.NewBuffer(nil)
+
+	// 分支覆盖：找不到port
+	s.HandleCmdPingDomainAck(caller, pbuf)
+
+	// 分支覆盖：错误的类型
+	caller.pingBack.Store(uint16(0), 100)
+	s.HandleCmdPingDomainAck(caller, pbuf)
+}

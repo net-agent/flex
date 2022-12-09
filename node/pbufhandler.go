@@ -93,13 +93,14 @@ func (node *Node) HandleCmdOpenStreamAck(pbuf *packet.Buffer) {
 // 处理远端的Ping请求
 func (node *Node) HandleCmdPingDomain(pbuf *packet.Buffer) {
 	if string(pbuf.Payload) != node.domain {
-		return
+		pbuf.SetPayload([]byte("domain not match")) // 应答时payload为空表示成功，非空则记录错误原因
+	} else {
+		pbuf.SetPayload(nil)
 	}
 
 	pbuf.SetCmd(pbuf.Cmd() | packet.CmdACKFlag)
 	pbuf.SwapSrcDist()
 	pbuf.SetSrc(node.GetIP(), 0)
-	pbuf.SetPayload(nil) // 应答时payload为空表示成功，非空则记录错误原因
 	node.WriteBuffer(pbuf)
 }
 

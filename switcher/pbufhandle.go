@@ -71,11 +71,10 @@ func (s *Server) HandleSwitcherPbuf(ctx *Context, pbuf *packet.Buffer) {
 	// 主要处理的类型有：CmdAlive、CmdOpenStream、CmdPingDomain
 	switch pbuf.CmdType() {
 	case packet.CmdOpenStream:
-		if pbuf.IsACK() {
-			// 不可能出现目标是switcher的Open ACK
-		} else {
+		if !pbuf.IsACK() {
 			s.HandleCmdOpenStream(ctx, pbuf)
 		}
+		// 当前情况下不应该出现应答给switcher的open ack
 
 	case packet.CmdPingDomain:
 		if pbuf.IsACK() {

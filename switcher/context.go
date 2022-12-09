@@ -16,6 +16,7 @@ var ctxindex int32
 var (
 	errPingWriteFailed = errors.New("ping write buffer failed")
 	errPingTimeout     = errors.New("ping timeout")
+	errNilContextConn  = errors.New("context conn is nil")
 )
 
 type Context struct {
@@ -48,6 +49,9 @@ func NewContext(conn packet.Conn, domain, mac string) *Context {
 }
 
 func (ctx *Context) WriteBuffer(buf *packet.Buffer) error {
+	if ctx.Conn == nil {
+		return errNilContextConn
+	}
 	ctx.writeMut.Lock()
 	defer ctx.writeMut.Unlock()
 	return ctx.Conn.WriteBuffer(buf)
