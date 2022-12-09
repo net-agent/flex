@@ -8,7 +8,8 @@ import (
 	"github.com/net-agent/flex/v2/packet"
 )
 
-func TestMarshal(t *testing.T) {
+// TestRequestMarshal 如果本用例失败，则说明Request.Marshal方法会出现问题，需要修复其实现
+func TestRequestMarshal(t *testing.T) {
 	var req Request
 	req.Domain = "hello world"
 	req.Mac = "xixisisittj"

@@ -13,6 +13,12 @@ import (
 
 var ctxindex int32
 
+var (
+	errPingWriteFailed = errors.New("ping write buffer failed")
+	errPingTimeout     = errors.New("ping timeout")
+	errNilContextConn  = errors.New("context conn is nil")
+)
+
 type Context struct {
 	id           int
 	Domain       string
@@ -30,12 +36,12 @@ type Context struct {
 	attached  bool
 }
 
-func NewContext(domain, mac string, ip uint16, conn packet.Conn) *Context {
+func NewContext(conn packet.Conn, domain, mac string) *Context {
 	return &Context{
 		id:           int(atomic.AddInt32(&ctxindex, 1)),
 		Domain:       domain,
 		Mac:          mac,
-		IP:           ip,
+		IP:           0,
 		Conn:         conn,
 		LastReadTime: time.Now(),
 		AttachTime:   time.Now(),
@@ -43,6 +49,9 @@ func NewContext(domain, mac string, ip uint16, conn packet.Conn) *Context {
 }
 
 func (ctx *Context) WriteBuffer(buf *packet.Buffer) error {
+	if ctx.Conn == nil {
+		return errNilContextConn
+	}
 	ctx.writeMut.Lock()
 	defer ctx.writeMut.Unlock()
 	return ctx.Conn.WriteBuffer(buf)
@@ -67,7 +76,7 @@ func (ctx *Context) Ping(timeout time.Duration) (dur time.Duration, retErr error
 	pingStart := time.Now()
 	err := ctx.WriteBuffer(pbuf)
 	if err != nil {
-		return 0, err
+		return 0, errPingWriteFailed
 	}
 
 	select {
@@ -77,7 +86,7 @@ func (ctx *Context) Ping(timeout time.Duration) (dur time.Duration, retErr error
 			return 0, fmt.Errorf("ping response: %v", info)
 		}
 	case <-time.After(timeout):
-		return 0, errors.New("ping timeout")
+		return 0, errPingTimeout
 	}
 
 	return time.Since(pingStart), nil
