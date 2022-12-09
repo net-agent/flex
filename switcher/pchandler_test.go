@@ -1,73 +1,74 @@
 package switcher
 
 import (
-	"encoding/json"
 	"fmt"
 	"testing"
 
 	"github.com/net-agent/flex/v2/packet"
 )
 
-// TestRequestMarshal 如果本用例失败，则说明Request.Marshal方法会出现问题，需要修复其实现
-func TestRequestMarshal(t *testing.T) {
-	var req Request
-	req.Domain = "hello world"
-	req.Mac = "xixisisittj"
+func TestHandlePacketConn(t *testing.T) {
+	pswd := "testpswd"
+	s := NewServer(pswd)
+	pc1, pc2 := packet.Pipe()
 
-	buf, err := json.Marshal(&req)
-	if err != nil {
-		t.Error(err)
-		return
-	}
+	// 模拟客户端请求
+	go func() {
+		UpgradeRequest(pc1, "test", "", pswd)
+		pc1.Close()
+	}()
 
-	fmt.Println(buf)
-
-	var req2 Request
-	err = json.Unmarshal(buf, &req2)
-	if err != nil {
-		t.Error(err)
-		return
-	}
-
-	if req2.Domain != req.Domain {
-		t.Error("domain not equal")
-		return
-	}
-	if req2.Mac != req.Mac {
-		t.Error("mac not equal")
-		return
-	}
+	s.HandlePacketConn(pc2)
 }
 
-// TestResponseMarshal 如果此用例失败，需要修改Response.WriteToPacketConn的实现
-func TestResponseMarshal(t *testing.T) {
-	var resp Response
-	_, err := json.Marshal(&resp)
+// 模拟domain重复的场景
+func TestHandlePCErr_DomainExist(t *testing.T) {
+	pswd := "testpswd"
+	s := NewServer(pswd)
+	pc1, pc2 := packet.Pipe()
+	pc3, pc4 := packet.Pipe()
+
+	go s.HandlePacketConn(pc2)
+	go s.HandlePacketConn(pc4)
+
+	node1, err := UpgradeRequest(pc1, "test", "", pswd)
 	if err != nil {
-		t.Error("response marshal failed")
+		t.Errorf("unexpected err=%v\n", err)
 		return
 	}
+	go node1.Run()
+
+	_, err = UpgradeRequest(pc3, "test", "", pswd)
+	if err == nil {
+		t.Error("unexpected nil err")
+		return
+	}
+	fmt.Printf("expected err=%v\n", err)
 }
 
-func TestCalcSum(t *testing.T) {
-	cases := []struct {
-		req    Request
-		pswd   string
-		output string
-	}{
-		{Request{packet.VERSION, "test.com", "mac", 0, ""}, "", "Pf1OHs4vBuZ0RiCJvIdFpB99c0Gra64rH6vYi0fXZDk="},
-	}
+// 模拟服务端在应答UpgradeRequest之前连接断开的情况
+func TestHandlePCErr_WriteResponse(t *testing.T) {
+	pswd := "testpswd"
+	s := NewServer(pswd)
+	pc1, pc2 := packet.Pipe()
 
-	for _, c := range cases {
-		sum := c.req.CalcSum(c.pswd)
-		sum2 := c.req.CalcSum(c.pswd + "**")
-		if sum == sum2 {
-			t.Error("unexpected sum")
-			return
-		}
-		if sum != c.output {
-			t.Errorf("not equal, sum='%v' expect='%v'", sum, c.output)
-			return
-		}
+	go func() {
+		// 第一步：发送UpgradeRequest
+		// 第二步：发完后关闭连接
+		var req Request
+		req.Domain = "test"
+		req.Version = packet.VERSION
+		req.Sum = req.CalcSum(pswd)
+		pbuf := packet.NewBuffer(nil)
+		pbuf.SetPayload(req.Marshal())
+		pc1.WriteBuffer(pbuf)
+		pc1.Close()
+	}()
+
+	err := s.HandlePacketConn(pc2)
+	if err != errHandlePCWriteFailed {
+		t.Errorf("unexpected err=%v\n", err)
+		return
 	}
+	fmt.Printf("expected err=%v\n", err)
 }

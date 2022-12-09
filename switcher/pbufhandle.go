@@ -2,7 +2,6 @@ package switcher
 
 import (
 	"errors"
-	"fmt"
 	"log"
 	"strings"
 
@@ -10,20 +9,28 @@ import (
 	"github.com/net-agent/flex/v2/vars"
 )
 
+var (
+	errDomainNotFound       = errors.New("domain not found")
+	errConvertContextFailed = errors.New("convert domain context failed")
+	errInvalidContextIP     = errors.New("invalid context ip")
+	errContextIPNotFound    = errors.New("context ip not found")
+	errResolveDomainFailed  = errors.New("resolve domain failed")
+)
+
 // GetContextByDomain 根据domain获取已经连接的上下文
 func (s *Server) GetContextByDomain(domain string) (*Context, error) {
 	domain = strings.ToLower(domain)
-	if domain == "" {
-		return nil, errors.New("empty domain string")
+	if IsInvalidDomain(domain) {
+		return nil, errInvalidDomain
 	}
 
 	it, found := s.nodeDomains.Load(domain)
 	if !found {
-		return nil, fmt.Errorf("resolve domain='%v' failed", domain)
+		return nil, errDomainNotFound
 	}
 	ctx, ok := it.(*Context)
 	if !ok {
-		return nil, errors.New("convert domain context failed")
+		return nil, errConvertContextFailed
 	}
 
 	return ctx, nil
@@ -32,16 +39,16 @@ func (s *Server) GetContextByDomain(domain string) (*Context, error) {
 // GetContextByIP 根据IP获取已经连接的上下文
 func (s *Server) GetContextByIP(ip uint16) (*Context, error) {
 	if ip == vars.LocalIP || ip == vars.SwitcherIP {
-		return nil, fmt.Errorf("invalid context ip='%v'", ip)
+		return nil, errInvalidContextIP
 	}
 
 	it, found := s.nodeIps.Load(ip)
 	if !found {
-		return nil, fmt.Errorf("context not found with ip='%v'", ip)
+		return nil, errContextIPNotFound
 	}
 	ctx, ok := it.(*Context)
 	if !ok {
-		return nil, errors.New("convert as context failed")
+		return nil, errConvertContextFailed
 	}
 	return ctx, nil
 }
@@ -50,10 +57,11 @@ func (s *Server) GetContextByIP(ip uint16) (*Context, error) {
 func (s *Server) HandleDefaultPbuf(pbuf *packet.Buffer) {
 	dist, err := s.GetContextByIP(pbuf.DistIP())
 	if err != nil {
-		log.Printf("handle default pbuf failed: %v\n", err)
+		log.Printf("route pbuf failed: %v\n", err)
 		return
 	}
 
+	// 有一定的失败可能，但对于服务端的状态来说不关键
 	dist.WriteBuffer(pbuf)
 }
 
@@ -64,6 +72,7 @@ func (s *Server) HandleSwitcherPbuf(ctx *Context, pbuf *packet.Buffer) {
 	switch pbuf.CmdType() {
 	case packet.CmdOpenStream:
 		if pbuf.IsACK() {
+			// 不可能出现目标是switcher的Open ACK
 		} else {
 			s.HandleCmdOpenStream(ctx, pbuf)
 		}
@@ -92,7 +101,7 @@ func (s *Server) HandleCmdPingDomain(caller *Context, pbuf *packet.Buffer) {
 	if err != nil {
 		pbuf.SwapSrcDist()
 		pbuf.SetCmd(pbuf.Cmd() | packet.CmdACKFlag)
-		pbuf.SetPayload([]byte("domain not found"))
+		pbuf.SetPayload([]byte(err.Error()))
 		caller.WriteBuffer(pbuf)
 		return
 	}
@@ -122,9 +131,8 @@ func (s *Server) HandleCmdOpenStream(caller *Context, pbuf *packet.Buffer) {
 
 	distCtx, err := s.GetContextByDomain(distDomain)
 	if err != nil {
-		errInfo := fmt.Sprintf("resolve failed, domain='%v'", distDomain)
-		log.Println(errInfo)
-		pbuf.SetOpenACK(errInfo)
+		log.Printf("%v. domain='%v'\n", errResolveDomainFailed, distDomain)
+		pbuf.SetOpenACK(errResolveDomainFailed.Error())
 		pbuf.SetSrcIP(0)
 		caller.WriteBuffer(pbuf)
 		return

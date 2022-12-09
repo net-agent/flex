@@ -1,14 +1,19 @@
 package switcher
 
 import (
+	"errors"
 	"log"
 	"time"
 
 	"github.com/net-agent/flex/v2/packet"
 )
 
+var (
+	errHandlePCWriteFailed = errors.New("write to packet.Conn failed")
+)
+
 // HandlePacketConn
-func (s *Server) HandlePacketConn(pc packet.Conn) {
+func (s *Server) HandlePacketConn(pc packet.Conn) error {
 	defer pc.Close()
 
 	var resp Response
@@ -19,7 +24,7 @@ func (s *Server) HandlePacketConn(pc packet.Conn) {
 		resp.ErrCode = -1
 		resp.ErrMsg = err.Error()
 		resp.WriteToPacketConn(pc)
-		return
+		return err
 	}
 
 	// 第二步：将ctx映射到map中
@@ -28,7 +33,7 @@ func (s *Server) HandlePacketConn(pc packet.Conn) {
 		resp.ErrCode = -2
 		resp.ErrMsg = err.Error()
 		resp.WriteToPacketConn(pc)
-		return
+		return err
 	}
 	defer s.DetachCtx(ctx)
 
@@ -39,16 +44,18 @@ func (s *Server) HandlePacketConn(pc packet.Conn) {
 	err = resp.WriteToPacketConn(pc)
 	if err != nil {
 		log.Printf("resp.WriteToPacketConn failed: %v\n", err)
-		return
+		return errHandlePCWriteFailed
 	}
 
 	// 记录服务时长
 	start := time.Now()
 	log.Printf("context loop start. domain='%v' id='%v'\n", ctx.Domain, ctx.id)
 
-	RunPbufLoopService(s, ctx)
+	err = RunPbufLoopService(s, ctx)
 
 	// 计算并打印时长
 	dur := time.Since(start).Round(time.Second)
 	log.Printf("context loop stop. domain='%v' id='%v' dur='%v'\n", ctx.Domain, ctx.id, dur)
+
+	return err
 }

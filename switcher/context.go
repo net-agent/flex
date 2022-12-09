@@ -13,6 +13,11 @@ import (
 
 var ctxindex int32
 
+var (
+	errPingWriteFailed = errors.New("ping write buffer failed")
+	errPingTimeout     = errors.New("ping timeout")
+)
+
 type Context struct {
 	id           int
 	Domain       string
@@ -67,7 +72,7 @@ func (ctx *Context) Ping(timeout time.Duration) (dur time.Duration, retErr error
 	pingStart := time.Now()
 	err := ctx.WriteBuffer(pbuf)
 	if err != nil {
-		return 0, err
+		return 0, errPingWriteFailed
 	}
 
 	select {
@@ -77,7 +82,7 @@ func (ctx *Context) Ping(timeout time.Duration) (dur time.Duration, retErr error
 			return 0, fmt.Errorf("ping response: %v", info)
 		}
 	case <-time.After(timeout):
-		return 0, errors.New("ping timeout")
+		return 0, errPingTimeout
 	}
 
 	return time.Since(pingStart), nil

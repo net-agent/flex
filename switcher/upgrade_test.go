@@ -15,7 +15,18 @@ func TestUpgrade(t *testing.T) {
 	pc1, pc2 := packet.Pipe()
 
 	// server process thread
-	go s.HandlePacketConn(pc2)
+	go func() {
+		_, err := HandleUpgradeRequest(pc2, s)
+		if err != nil {
+			pc2.Close()
+			return
+		}
+		var resp Response
+		resp.ErrCode = 0
+		resp.ErrMsg = ""
+		resp.Version = packet.VERSION
+		resp.WriteToPacketConn(pc2)
+	}()
 
 	_, err := UpgradeRequest(pc1, "test", "", pswd)
 	if err != nil {
