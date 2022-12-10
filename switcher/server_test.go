@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/net-agent/flex/v2/handshake"
 	"github.com/net-agent/flex/v2/numsrc"
 	"github.com/net-agent/flex/v2/packet"
 )
@@ -92,7 +93,7 @@ func TestServerRun(t *testing.T) {
 		return
 	}
 	pc := packet.NewWithConn(c)
-	UpgradeRequest(pc, "test", "", pswd)
+	handshake.UpgradeRequest(pc, "test", "", pswd)
 
 	s.Close()
 }
