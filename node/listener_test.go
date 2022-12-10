@@ -5,8 +5,12 @@ import (
 	"testing"
 )
 
-func TestListen(t *testing.T) {
-	node1, node2 := Pipe()
+func TestListener(t *testing.T) {
+
+}
+
+func TestNodeListen(t *testing.T) {
+	node1, node2 := Pipe("test1", "test2")
 
 	l, err := node1.Listen(80)
 	if err != nil {

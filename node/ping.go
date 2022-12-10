@@ -10,12 +10,12 @@ import (
 	"github.com/net-agent/flex/v2/vars"
 )
 
-func (node *Node) heartbeatLoop(ticker *time.Ticker) {
+func (node *Node) keepaliveWithPeer(ticker *time.Ticker) {
 	for range ticker.C {
 		if time.Since(node.lastWriteTime) > (DefaultHeartbeatInterval - time.Second) {
 			_, err := node.PingDomain("", time.Second*3)
 			if err != nil {
-				log.Printf("write heartbeat-data failed: %v\n", err)
+				log.Printf("keepaliveWithPeer failed: %v\n", err)
 				node.Close()
 				ticker.Stop()
 				return
@@ -26,8 +26,8 @@ func (node *Node) heartbeatLoop(ticker *time.Ticker) {
 
 // PingDomain 对指定的节点进行连通性测试并返回RTT。domain为空时，返回到中转节点的RTT
 func (node *Node) PingDomain(domain string, timeout time.Duration) (time.Duration, error) {
-	port, err := node.GetFreePort()
-	defer node.ReleaseUsedPort(port)
+	port, err := node.portm.GetFreeNumberSrc()
+	defer node.portm.ReleaseNumberSrc(port)
 	if err != nil {
 		return 0, err
 	}

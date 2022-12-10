@@ -5,14 +5,12 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
-	"net"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/net-agent/flex/v2/packet"
-	"github.com/net-agent/flex/v2/vars"
 )
 
 func TestChanNil(t *testing.T) {
@@ -27,164 +25,72 @@ func TestChanNil(t *testing.T) {
 }
 
 func TestDial(t *testing.T) {
-	pc1, pc2 := packet.Pipe()
+	port := uint16(80)
+	payloadSize := 1024 * 1024 * 64
+	node1, node2 := Pipe("test1", "test2")
 
-	node1 := New(pc1)
-	node2 := New(pc2)
-	node1.SetIP(1)
-	node2.SetIP(2)
-	go node1.Run()
-	go node2.Run()
-
-	l, err := node1.Listen(80)
+	// 第一步：监听端口
+	l, err := node1.Listen(port)
 	if err != nil {
 		t.Error(err)
 		return
 	}
 
-	// 重复监听端口
-	_, err = node1.Listen(80)
-	if err.Error() != "port busy now" {
-		t.Error("unexpected err")
-		return
-	}
-
-	payload := make([]byte, 1024*1024*64)
-	rand.Read(payload)
-	var wg sync.WaitGroup
-
-	wg.Add(1)
-	go func(listener net.Listener) {
-		defer wg.Done()
-
-		conn, err := listener.Accept()
-		if err != nil {
-			t.Error(err)
-			return
+	// 第二步：创建简单echo服务
+	go func() {
+		for {
+			c, _ := l.Accept()
+			go io.Copy(c, c)
 		}
-		defer listener.Close()
-		defer conn.Close()
+	}()
 
-		// conn read and write
-		buf := make([]byte, len(payload))
-
-		_, err = io.ReadFull(conn, buf)
-		if err != nil {
-			t.Error()
-			return
-		}
-		if !bytes.Equal(buf, payload) {
-			t.Error("not equal")
-			return
-		}
-	}(l)
-
-	conn, err := node2.DialIP(node1.GetIP(), 80)
+	// 第三步：从客户端创建连接
+	conn, err := node2.DialIP(node1.GetIP(), port)
 	if err != nil {
 		t.Error(err)
 		return
 	}
 	defer conn.Close()
 
-	_, err = conn.Write(payload)
-	if err != nil {
-		t.Error(err)
-		return
-	}
+	// 第四步：准备客户端数据
+	payload := make([]byte, payloadSize)
+	rand.Read(payload)
 
-	wg.Wait()
-
-	<-time.After(time.Millisecond * 100)
-	hasStream := false
-	node1.streams.Range(func(key, val interface{}) bool {
-		hasStream = true
-		return false
-	})
-	if hasStream {
-		t.Error("node1 stream leak")
-		return
-	}
-	hasStream = false
-	node2.streams.Range(func(key, val interface{}) bool {
-		hasStream = true
-		return false
-	})
-	if hasStream {
-		t.Error("node2 stream leak")
-		return
-	}
-}
-
-func TestDialConcurrency(t *testing.T) {
-	pc1, pc2 := packet.Pipe()
-
-	node1 := New(pc1)
-	node2 := New(pc2)
-
-	ExampleOf2NodeTest(t, node1, node2, 0)
-}
-
-func TestNodeLocalLoop(t *testing.T) {
-	if !EnableLocalLoop {
-		return
-	}
-	pc, _ := packet.Pipe()
-	node := New(pc)
-	go node.Run()
-
-	l, err := node.Listen(80)
-	if err != nil {
-		t.Error(err)
-		return
-	}
-
-	payload := []byte("hello world")
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func(l net.Listener) {
-		defer wg.Done()
-		defer l.Close()
-
-		c, err := l.Accept()
+	// 第五步：将数据发送至服务端
+	var writerGroup sync.WaitGroup
+	writerGroup.Add(1)
+	go func() {
+		defer writerGroup.Done()
+		_, err = conn.Write(payload)
 		if err != nil {
 			t.Error(err)
 			return
 		}
-		buf := make([]byte, len(payload))
-		_, err = io.ReadFull(c, buf)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		if !bytes.Equal(buf, payload) {
-			t.Error("not equal")
-			return
-		}
-	}(l)
+	}()
 
-	// _, err = node.DialIP(localIP, 80)
-	// if err != nil {
-	// 	log.Printf("expected error: %v\n", err)
-	// } else {
-	// 	t.Error("unexpected nil err")
-	// 	return
-	// }
-
-	c, err := node.DialIP(vars.LocalIP, 80)
+	// 第六步，读取服务端返回的数据，并校验正确性
+	resp := make([]byte, payloadSize)
+	_, err = io.ReadFull(conn, resp)
 	if err != nil {
 		t.Error(err)
 		return
 	}
-
-	_, err = c.Write(payload)
-	if err != nil {
-		t.Error(err)
+	if !bytes.Equal(payload, resp) {
+		t.Error("not equal")
 		return
 	}
 
-	wg.Wait()
-	c.Close()
+	writerGroup.Wait()
 }
+
+// func TestDialConcurrency(t *testing.T) {
+// 	pc1, pc2 := packet.Pipe()
+
+// 	node1 := New(pc1)
+// 	node2 := New(pc2)
+
+// 	ExampleOf2NodeTest(t, node1, node2, 0)
+// }
 
 func TestDialAddr(t *testing.T) {
 	c1, c2 := packet.Pipe()

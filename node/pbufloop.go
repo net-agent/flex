@@ -7,6 +7,7 @@ import (
 // pbufRouteLoop 处理流数据传输的逻辑（open-ack -> push -> push-ack -> close -> close-ack）
 func (node *Node) pbufRouteLoop(ch chan *packet.Buffer) {
 	for pbuf := range ch {
+
 		switch pbuf.CmdType() {
 
 		case packet.CmdOpenStream:

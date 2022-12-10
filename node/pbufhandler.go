@@ -8,6 +8,13 @@ import (
 	"github.com/net-agent/flex/v2/stream"
 )
 
+var (
+	errStreamNotFound      = errors.New("stream not found")
+	errConvertStreamFailed = errors.New("convert stream failed")
+	ErrListenerNotFound    = errors.New("listener not found")
+	ErrInvalidListener     = errors.New("invalid listener")
+)
+
 func (node *Node) GetStreamBySID(sid uint64, getAndDelete bool) (*stream.Conn, error) {
 	// 收到close，代表对端不会再发送数据，可以解除streams绑定
 	var it interface{}
@@ -19,75 +26,92 @@ func (node *Node) GetStreamBySID(sid uint64, getAndDelete bool) (*stream.Conn, e
 		it, found = node.streams.Load(sid)
 	}
 	if !found {
-		return nil, errors.New("stream not found")
+		return nil, errStreamNotFound
 	}
 
 	c, ok := it.(*stream.Conn)
 	if !ok {
-		log.Printf("internal error (close)\n")
-		return nil, errors.New("stream convert failed")
+		return nil, errConvertStreamFailed
 	}
 
 	return c, nil
 }
 
+func (node *Node) GetListenerByPort(port uint16) (*Listener, error) {
+	it, found := node.listenPorts.Load(port)
+	if !found {
+		return nil, ErrListenerNotFound
+	}
+	l, ok := it.(*Listener)
+	if !ok {
+		return nil, ErrInvalidListener
+	}
+	return l, nil
+}
+
 // 处理远端开启OpenStream的请求
 func (node *Node) HandleCmdOpenStream(pbuf *packet.Buffer) {
+	ackMessage := ""
+	defer func() {
+		err := node.WriteBuffer(pbuf.SetOpenACK(ackMessage))
+		if err != nil {
+			log.Printf("HandleCmdOpenStream write ackMessage failed, err=%v\n", err)
+		}
+	}()
 
-	it, found := node.listenPorts.Load(pbuf.DistPort())
-	if !found {
-		node.WriteBuffer(pbuf.SetOpenACK("open on port refused"))
-		return
-	}
-	listener, ok := it.(*Listener)
-	if !ok {
-		node.WriteBuffer(pbuf.SetOpenACK("open internal error"))
-		return
-	}
-
-	// 收到对端发过来的open请求，开始准备创建连接
-	s := stream.New(false)
-	s.SetLocal(pbuf.DistIP(), pbuf.DistPort())
-	s.SetRemote(pbuf.SrcIP(), pbuf.SrcPort())
-	s.SetDialer(string(pbuf.Payload))
-	s.InitWriter(node)
-
-	// 直接进行绑定，做好读数据准备
-	_, loaded := node.streams.LoadOrStore(pbuf.SID(), s)
-	if loaded {
-		log.Printf("stream exist\n")
-		node.WriteBuffer(pbuf.SetOpenACK("stream exist"))
+	l, err := node.GetListenerByPort(pbuf.DistPort())
+	if err != nil {
+		ackMessage = err.Error()
 		return
 	}
 
-	// 告诉对端，连接创建成功了
-	// 因为通道能够保证包是顺序的，所以不需要对端的ACK，即可开始发送数据
-	node.WriteBuffer(pbuf.SetOpenACK(""))
-	listener.AppendConn(s)
+	err = l.HandleCmdOpenStream(pbuf)
+	if err != nil {
+		ackMessage = err.Error()
+		return
+	}
+
+	ackMessage = ""
 }
 
 // 远端已经做好读写准备，可以通知stream，完成open操作
 func (node *Node) HandleCmdOpenStreamAck(pbuf *packet.Buffer) {
-	it, loaded := node.usedPorts.LoadAndDelete(pbuf.DistPort())
+	it, loaded := node.ackstreams.LoadAndDelete(pbuf.DistPort())
 	if !loaded {
 		log.Printf("local not found (open-ack). distport=%v\n", pbuf.DistPort())
 		return
 	}
 
-	s, ok := it.(*stream.Conn)
+	ch, ok := it.(chan *stream.Conn)
 	if !ok {
 		log.Printf("internal error (open-ack)\n")
 		return
 	}
 
-	// bind streams
-	_, loaded = node.streams.LoadOrStore(pbuf.SID(), s)
-	if loaded {
-		log.Printf("stream exists (open-ack)\n")
+	info := string(pbuf.Payload)
+	if info != "" {
+		log.Printf("open stream failed: %v\n", info)
+		ch <- nil
 		return
 	}
 
-	s.Opened(pbuf)
+	//
+	// create and bind stream
+	//
+	s := stream.New(true)
+	s.SetLocal(pbuf.DistIP(), pbuf.DistPort())
+	s.SetRemote(pbuf.SrcIP(), pbuf.SrcPort())
+	s.InitWriter(node)
+
+	_, loaded = node.streams.LoadOrStore(pbuf.SID(), s)
+	if loaded {
+		log.Printf("stream exists (open-ack)\n")
+		s.Close()
+		return
+	}
+
+	ch <- s
+	s = nil
 }
 
 // 处理远端的Ping请求
@@ -107,10 +131,12 @@ func (node *Node) HandleCmdPingDomain(pbuf *packet.Buffer) {
 func (node *Node) HandleCmdPingDomainAck(pbuf *packet.Buffer) {
 	it, found := node.pingRequests.Load(pbuf.DistPort())
 	if !found {
+		log.Printf("HandleCmdPingDomainAck failed, port='%v' not found\n", pbuf.DistPort())
 		return
 	}
 	ch, ok := it.(chan *packet.Buffer)
 	if !ok {
+		log.Printf("HandleCmdPingDomainAck failed, convert pbuf chan failed\n")
 		return
 	}
 
@@ -150,7 +176,7 @@ func (node *Node) HandleCmdCloseStream(pbuf *packet.Buffer) {
 	if err != nil {
 		return
 	}
-	node.ReleaseUsedPort(port)
+	node.portm.ReleaseNumberSrc(port)
 }
 
 func (node *Node) HandleCmdCloseStreamAck(pbuf *packet.Buffer) {
@@ -165,5 +191,5 @@ func (node *Node) HandleCmdCloseStreamAck(pbuf *packet.Buffer) {
 	if err != nil {
 		return
 	}
-	node.ReleaseUsedPort(port)
+	node.portm.ReleaseNumberSrc(port)
 }
