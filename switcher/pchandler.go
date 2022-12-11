@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/net-agent/flex/v2/handshake"
 	"github.com/net-agent/flex/v2/packet"
 )
 
@@ -16,10 +17,10 @@ var (
 func (s *Server) HandlePacketConn(pc packet.Conn) error {
 	defer pc.Close()
 
-	var resp Response
+	var resp handshake.Response
 
 	// 第一步：交换版本和签名信息，保证版本一致与认证安全
-	ctx, err := HandleUpgradeRequest(pc, s)
+	req, err := handshake.HandleUpgradeRequest(pc, s.password)
 	if err != nil {
 		resp.ErrCode = -1
 		resp.ErrMsg = err.Error()
@@ -28,6 +29,7 @@ func (s *Server) HandlePacketConn(pc packet.Conn) error {
 	}
 
 	// 第二步：将ctx映射到map中
+	ctx := NewContext(pc, req.Domain, req.Mac)
 	err = s.AttachCtx(ctx)
 	if err != nil {
 		resp.ErrCode = -2

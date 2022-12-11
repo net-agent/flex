@@ -1,4 +1,4 @@
-package switcher
+package handshake
 
 import (
 	"fmt"
@@ -11,12 +11,11 @@ import (
 // 构建客户端node到server端的模拟环境，通过在不同的阶段强制关闭连接来模拟异常行为
 func TestUpgrade(t *testing.T) {
 	pswd := "testpswd"
-	s := NewServer(pswd)
 	pc1, pc2 := packet.Pipe()
 
 	// server process thread
 	go func() {
-		_, err := HandleUpgradeRequest(pc2, s)
+		_, err := HandleUpgradeRequest(pc2, pswd)
 		if err != nil {
 			pc2.Close()
 			return
@@ -87,10 +86,21 @@ func TestUpgradeRequestErr_UnmarshalUpgradeResp(t *testing.T) {
 func TestUpgradeRequestErr_ServerSideErr(t *testing.T) {
 	pswd := "testpswd"
 	badPswd := pswd + "_bad"
-	s := NewServer(pswd)
 	pc1, pc2 := packet.Pipe()
 
-	go s.HandlePacketConn(pc2)
+	go func() {
+		_, err := HandleUpgradeRequest(pc2, pswd)
+		if err != nil {
+			// 构造错误的应答
+			var resp Response
+			resp.ErrCode = -1
+			resp.ErrMsg = err.Error()
+			resp.Version = packet.VERSION
+			resp.WriteToPacketConn(pc2)
+			return
+		}
+
+	}()
 
 	_, err := UpgradeRequest(pc1, "test", "", badPswd)
 	if err == nil {
@@ -124,12 +134,11 @@ func TestUpgradeRequestErr_VersionNotMatch(t *testing.T) {
 
 func TestHandleUpgradeErr_ReadErr(t *testing.T) {
 	pswd := "testpswd"
-	s := NewServer(pswd)
 	pc1, pc2 := packet.Pipe()
 
 	pc1.Close()
 
-	_, err := HandleUpgradeRequest(pc2, s)
+	_, err := HandleUpgradeRequest(pc2, pswd)
 	if err != errUpgradeReadFailed {
 		t.Errorf("unexpected err=%v\n", err)
 		return
@@ -138,7 +147,6 @@ func TestHandleUpgradeErr_ReadErr(t *testing.T) {
 
 func TestHandleUpgradeErr_Unmarshal(t *testing.T) {
 	pswd := "testpswd"
-	s := NewServer(pswd)
 	pc1, pc2 := packet.Pipe()
 
 	go func() {
@@ -147,7 +155,7 @@ func TestHandleUpgradeErr_Unmarshal(t *testing.T) {
 		pc1.WriteBuffer(pbuf)
 	}()
 
-	_, err := HandleUpgradeRequest(pc2, s)
+	_, err := HandleUpgradeRequest(pc2, pswd)
 	if err != errUnmarshalFailed {
 		t.Errorf("unexpected err=%v\n", err)
 		return
@@ -156,7 +164,6 @@ func TestHandleUpgradeErr_Unmarshal(t *testing.T) {
 
 func TestHandleUpgradeErr_Version(t *testing.T) {
 	pswd := "testpswd"
-	s := NewServer(pswd)
 	pc1, pc2 := packet.Pipe()
 
 	go func() {
@@ -169,7 +176,7 @@ func TestHandleUpgradeErr_Version(t *testing.T) {
 		pc1.WriteBuffer(pbuf)
 	}()
 
-	_, err := HandleUpgradeRequest(pc2, s)
+	_, err := HandleUpgradeRequest(pc2, pswd)
 	if err != errPacketVersionNotMatch {
 		t.Errorf("unexpected err=%v\n", err)
 		return
@@ -179,7 +186,6 @@ func TestHandleUpgradeErr_Version(t *testing.T) {
 func TestHandleUpgradeErr_Password(t *testing.T) {
 	pswd := "testpswd"
 	badPswd := pswd + "_bad"
-	s := NewServer(pswd)
 	pc1, pc2 := packet.Pipe()
 
 	go func() {
@@ -192,8 +198,8 @@ func TestHandleUpgradeErr_Password(t *testing.T) {
 		pc1.WriteBuffer(pbuf)
 	}()
 
-	_, err := HandleUpgradeRequest(pc2, s)
-	if err != errInvalidPassword {
+	_, err := HandleUpgradeRequest(pc2, pswd)
+	if err != ErrInvalidPassword {
 		t.Errorf("unexpected err=%v\n", err)
 		return
 	}
@@ -205,7 +211,6 @@ func TestHandleUpgradeErr_Domain(t *testing.T) {
 	}
 	testWithDomain := func(domain string) bool {
 		pswd := "testpswd"
-		s := NewServer(pswd)
 		pc1, pc2 := packet.Pipe()
 
 		go func() {
@@ -219,8 +224,8 @@ func TestHandleUpgradeErr_Domain(t *testing.T) {
 			pc1.WriteBuffer(pbuf)
 		}()
 
-		_, err := HandleUpgradeRequest(pc2, s)
-		if err != errInvalidDomain {
+		_, err := HandleUpgradeRequest(pc2, pswd)
+		if err != ErrInvalidDomain {
 			t.Errorf("unexpected err=%v\n", err)
 			return false
 		}

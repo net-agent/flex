@@ -1,4 +1,4 @@
-package switcher
+package handshake
 
 import (
 	"encoding/json"
@@ -7,7 +7,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/net-agent/flex/v2/node"
 	"github.com/net-agent/flex/v2/packet"
 )
 
@@ -16,11 +15,11 @@ var (
 	errUpgradeReadFailed     = errors.New("upgrade read buffer failed")
 	errUnmarshalFailed       = errors.New("unmarshal payload failed")
 	errPacketVersionNotMatch = errors.New("packet version not match")
-	errInvalidPassword       = errors.New("invalid password")
-	errInvalidDomain         = errors.New("invalid domain")
+	ErrInvalidPassword       = errors.New("invalid password")
+	ErrInvalidDomain         = errors.New("invalid domain")
 )
 
-func UpgradeRequest(pc packet.Conn, domain, mac, password string) (*node.Node, error) {
+func UpgradeRequest(pc packet.Conn, domain, mac, password string) (uint16, error) {
 	var req Request
 	req.Version = packet.VERSION
 	req.Domain = domain
@@ -32,44 +31,44 @@ func UpgradeRequest(pc packet.Conn, domain, mac, password string) (*node.Node, e
 	pbuf.SetPayload(req.Marshal())
 	err := pc.WriteBuffer(pbuf)
 	if err != nil {
-		return nil, errUpgradeWriteFailed
+		return 0, errUpgradeWriteFailed
 	}
 
 	pbuf, err = pc.ReadBuffer()
 	if err != nil {
-		return nil, errUpgradeReadFailed
+		return 0, errUpgradeReadFailed
 	}
 
 	var resp Response
 	err = json.Unmarshal(pbuf.Payload, &resp)
 	if err != nil {
-		return nil, errUnmarshalFailed
+		return 0, errUnmarshalFailed
 	}
 	if resp.ErrCode != 0 {
-		return nil, fmt.Errorf("server side response: %v", resp.ErrMsg)
+		return 0, fmt.Errorf("server side response: %v", resp.ErrMsg)
 	}
 
 	// 检查版本一致性
 	if resp.Version != packet.VERSION {
-		return nil, errPacketVersionNotMatch
+		return 0, errPacketVersionNotMatch
 	}
 
-	node := node.New(pc)
-	node.SetIP(resp.IP)
-	node.SetDomain(domain)
+	// node := node.New(pc)
+	// node.SetIP(resp.IP)
+	// node.SetDomain(domain)
 
-	return node, nil
+	return resp.IP, nil
 }
 
 // HandleUpgradeRequest 在服务端处理Upgrade请求
-func HandleUpgradeRequest(pc packet.Conn, s *Server) (*Context, error) {
+func HandleUpgradeRequest(pc packet.Conn, pswd string) (*Request, error) {
 	pbuf, err := pc.ReadBuffer()
 	if err != nil {
 		return nil, errUpgradeReadFailed
 	}
 
-	var req Request
-	err = json.Unmarshal(pbuf.Payload, &req)
+	req := &Request{}
+	err = json.Unmarshal(pbuf.Payload, req)
 	if err != nil {
 		return nil, errUnmarshalFailed
 	}
@@ -78,16 +77,16 @@ func HandleUpgradeRequest(pc packet.Conn, s *Server) (*Context, error) {
 	if req.Version != packet.VERSION {
 		return nil, errPacketVersionNotMatch
 	}
-	if req.Sum != req.CalcSum(s.password) {
-		return nil, errInvalidPassword
+	if req.Sum != req.CalcSum(pswd) {
+		return nil, ErrInvalidPassword
 	}
 
 	req.Domain = strings.ToLower(req.Domain)
 	if IsInvalidDomain(req.Domain) {
-		return nil, errInvalidDomain
+		return nil, ErrInvalidDomain
 	}
 
-	return NewContext(pc, req.Domain, req.Mac), nil
+	return req, nil
 }
 
 // IsInvalidDomain 判断名称是否合法

@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/net-agent/flex/v2/handshake"
+	"github.com/net-agent/flex/v2/node"
 	"github.com/net-agent/flex/v2/packet"
 )
 
@@ -59,20 +61,23 @@ func TestPingErr_Timeout(t *testing.T) {
 
 	waitUpgradeReady.Add(1)
 	go func() {
-		node, _ := UpgradeRequest(pc1, "test1", "", pswd)
+		handshake.UpgradeRequest(pc1, "test1", "", pswd)
 		waitUpgradeReady.Done()
 
 		// 只读取buffer，不回复buffer。这样就会出现pingTimeout
 		for {
-			node.ReadBuffer()
+			pc1.ReadBuffer()
 		}
 	}()
 
 	waitUpgradeReady.Add(1)
 	go func() {
-		node, _ := UpgradeRequest(pc3, "test2", "", pswd)
+		ip, _ := handshake.UpgradeRequest(pc3, "test2", "", pswd)
 		waitUpgradeReady.Done()
-		node.Run()
+		n := node.New(pc3)
+		n.SetIP(ip)
+		n.SetDomain("test2")
+		n.Run()
 	}()
 
 	waitUpgradeReady.Wait()

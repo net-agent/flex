@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/net-agent/flex/v2/handshake"
 	"github.com/net-agent/flex/v2/node"
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/vars"
@@ -19,10 +20,19 @@ func initTestEnv(domain1, domain2 string) (*Server, *node.Node, *node.Node) {
 	go s.HandlePacketConn(pc2)
 	go s.HandlePacketConn(pc4)
 
-	node1, _ := UpgradeRequest(pc1, domain1, "", pswd)
-	node2, _ := UpgradeRequest(pc3, domain2, "", pswd)
+	ip1, _ := handshake.UpgradeRequest(pc1, domain1, "", pswd)
+	node1 := node.New(pc1)
+	node1.SetIP(ip1)
+	node1.SetDomain(domain1)
 	go node1.Run()
+
+	ip2, _ := handshake.UpgradeRequest(pc3, domain2, "", pswd)
+	node2 := node.New(pc3)
+	node2.SetIP(ip2)
+	node2.SetDomain(domain2)
 	go node2.Run()
+
+	<-time.After(time.Millisecond * 50)
 
 	return s, node1, node2
 }
@@ -33,7 +43,7 @@ func TestGetContextByDomain(t *testing.T) {
 
 	// 错误分支：domain不正确
 	_, err = s.GetContextByDomain("")
-	if err != errInvalidDomain {
+	if err != handshake.ErrInvalidDomain {
 		t.Errorf("unexpected err=%v\n", err)
 		return
 	}
@@ -117,15 +127,17 @@ func TestGetContextByIP(t *testing.T) {
 func TestHandleDefaultPbufWithPing(t *testing.T) {
 	_, node1, _ := initTestEnv("test1", "test2")
 
-	// 测试用例：a ping b
-	_, err := node1.PingDomain("test2", time.Second)
+	var err error
+
+	// 测试用例：a ping server
+	_, err = node1.PingDomain("", time.Second)
 	if err != nil {
 		t.Errorf("unexpected err=%v\n", err)
 		return
 	}
 
-	// 测试用例：a ping server
-	_, err = node1.PingDomain("", time.Second)
+	// 测试用例：a ping b
+	_, err = node1.PingDomain("test2", time.Second)
 	if err != nil {
 		t.Errorf("unexpected err=%v\n", err)
 		return
@@ -146,6 +158,18 @@ func TestHandleDefaultPbufWithPing(t *testing.T) {
 		t.Error("unexpected ni err")
 		return
 	}
+}
+
+func TestHandleDefaultPbufErr_Write(t *testing.T) {
+	s := NewServer("")
+	ctx := NewContext(nil, "test", "")
+	ctx.IP = 2
+	s.nodeIps.Store(ctx.IP, ctx)
+
+	// 错误用例：因为ctx的pc是空，所以会触发dist.WriteBuffer的错误
+	pbuf := packet.NewBuffer(nil)
+	pbuf.SetDist(2, 100)
+	s.HandleDefaultPbuf(pbuf)
 }
 
 func TestHandleCmdOpenStream(t *testing.T) {

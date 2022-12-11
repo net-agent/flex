@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 
+	"github.com/net-agent/flex/v2/handshake"
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/vars"
 )
@@ -20,8 +21,8 @@ var (
 // GetContextByDomain 根据domain获取已经连接的上下文
 func (s *Server) GetContextByDomain(domain string) (*Context, error) {
 	domain = strings.ToLower(domain)
-	if IsInvalidDomain(domain) {
-		return nil, errInvalidDomain
+	if handshake.IsInvalidDomain(domain) {
+		return nil, handshake.ErrInvalidDomain
 	}
 
 	it, found := s.nodeDomains.Load(domain)
@@ -62,7 +63,10 @@ func (s *Server) HandleDefaultPbuf(pbuf *packet.Buffer) {
 	}
 
 	// 有一定的失败可能，但对于服务端的状态来说不关键
-	dist.WriteBuffer(pbuf)
+	err = dist.WriteBuffer(pbuf)
+	if err != nil {
+		log.Printf("handleDefaultPbuf failed, write to dist err='%v'\n", err)
+	}
 }
 
 // HandleSwitcherPbuf 处理发送给switcher的数据包
@@ -114,6 +118,7 @@ func (s *Server) HandleCmdPingDomainAck(caller *Context, pbuf *packet.Buffer) {
 	port := pbuf.DistPort()
 	it, found := caller.pingBack.Load(port)
 	if !found {
+		log.Printf("HandleCmdPingDomainAck failed, port='%v' not found\n", port)
 		return
 	}
 	ch, ok := it.(chan *packet.Buffer)

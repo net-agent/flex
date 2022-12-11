@@ -1,4 +1,4 @@
-package switcher
+package handshake
 
 import (
 	"crypto/sha256"

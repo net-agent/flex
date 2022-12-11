@@ -42,9 +42,40 @@ func NewBuffer(head *Header) *Buffer {
 	return &Buffer{Head: head}
 }
 
+func (buf *Buffer) HeaderString() string {
+	return fmt.Sprintf("[%v][src=%v:%v][dist=%v:%v][size=%v]",
+		buf.CmdName(),
+		buf.SrcIP(), buf.SrcPort(),
+		buf.DistIP(), buf.DistPort(),
+		buf.PayloadSize(),
+	)
+}
+
 // SetCmd 设置命令字段
 func (buf *Buffer) SetCmd(cmd byte) {
 	buf.Head[0] = cmd
+}
+func (buf *Buffer) CmdName() string {
+	var name string
+	t := buf.CmdType()
+	switch t {
+	case CmdOpenStream:
+		name = "open"
+	case CmdCloseStream:
+		name = "close"
+	case CmdPushStreamData:
+		name = "data"
+	case CmdPushMessage:
+		name = "push"
+	case CmdPingDomain:
+		name = "ping"
+	default:
+		name = fmt.Sprintf("<%v>", t)
+	}
+	if buf.IsACK() {
+		name = name + ".ack"
+	}
+	return name
 }
 
 // Cmd 获取命令字段

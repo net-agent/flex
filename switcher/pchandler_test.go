@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/net-agent/flex/v2/handshake"
+	"github.com/net-agent/flex/v2/node"
 	"github.com/net-agent/flex/v2/packet"
 )
 
@@ -14,7 +16,7 @@ func TestHandlePacketConn(t *testing.T) {
 
 	// 模拟客户端请求
 	go func() {
-		UpgradeRequest(pc1, "test", "", pswd)
+		handshake.UpgradeRequest(pc1, "test", "", pswd)
 		pc1.Close()
 	}()
 
@@ -31,16 +33,46 @@ func TestHandlePCErr_DomainExist(t *testing.T) {
 	go s.HandlePacketConn(pc2)
 	go s.HandlePacketConn(pc4)
 
-	node1, err := UpgradeRequest(pc1, "test", "", pswd)
+	ip, err := handshake.UpgradeRequest(pc1, "test", "", pswd)
 	if err != nil {
 		t.Errorf("unexpected err=%v\n", err)
 		return
 	}
-	go node1.Run()
+	node := node.New(pc1)
+	node.SetIP(ip)
+	node.SetDomain("test")
+	go node.Run()
 
-	_, err = UpgradeRequest(pc3, "test", "", pswd)
+	_, err = handshake.UpgradeRequest(pc3, "test", "", pswd)
 	if err == nil {
 		t.Error("unexpected nil err")
+		return
+	}
+	fmt.Printf("expected err=%v\n", err)
+}
+
+// 模拟domain重复的场景
+func TestHandlePCErr_Password(t *testing.T) {
+	pswd := "testpswd"
+	s := NewServer(pswd)
+	pc1, pc2 := packet.Pipe()
+
+	go func() {
+		// 第一步：发送UpgradeRequest
+		// 第二步：发完后关闭连接
+		var req handshake.Request
+		req.Domain = "test"
+		req.Version = packet.VERSION
+		req.Sum = req.CalcSum(pswd + "_badpswd")
+		pbuf := packet.NewBuffer(nil)
+		pbuf.SetPayload(req.Marshal())
+		pc1.WriteBuffer(pbuf)
+		pc1.ReadBuffer()
+	}()
+
+	err := s.HandlePacketConn(pc2)
+	if err != handshake.ErrInvalidPassword {
+		t.Errorf("unexpected err=%v\n", err)
 		return
 	}
 	fmt.Printf("expected err=%v\n", err)
@@ -55,7 +87,7 @@ func TestHandlePCErr_WriteResponse(t *testing.T) {
 	go func() {
 		// 第一步：发送UpgradeRequest
 		// 第二步：发完后关闭连接
-		var req Request
+		var req handshake.Request
 		req.Domain = "test"
 		req.Version = packet.VERSION
 		req.Sum = req.CalcSum(pswd)
