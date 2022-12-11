@@ -8,6 +8,9 @@ import (
 )
 
 func TestRead(t *testing.T) {
+	LOG_READ_BUFFER_HEADER = true
+	LOG_WRITE_BUFFER_HEADER = true
+
 	makeCase := func(cmd byte, payload []byte) *Buffer {
 		pbuf := NewBuffer(nil)
 		pbuf.SetCmd(cmd)

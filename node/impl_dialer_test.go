@@ -131,6 +131,9 @@ func TestDialAddr(t *testing.T) {
 
 	_, err = n1.Dial("test2:80")
 	assert.Nil(t, err, "dial with domain")
+
+	_, err = n1.Dial("test2:1080")
+	assert.NotNil(t, err, "test dial error")
 }
 
 func TestPing(t *testing.T) {

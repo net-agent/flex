@@ -110,7 +110,7 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Conn, error) {
 			return nil, errors.New("open stream failed")
 		}
 		if resp.err != nil {
-			return nil, err
+			return nil, resp.err
 		}
 		srcPort = 0
 		return resp.stream, nil
@@ -128,6 +128,12 @@ func (d *Dialer) HandleCmdOpenStreamAck(pbuf *packet.Buffer) {
 	ch, ok := it.(chan *dialresp)
 	if !ok {
 		log.Printf("convert response chan failed")
+		return
+	}
+
+	ackMessage := string(pbuf.Payload)
+	if ackMessage != "" {
+		ch <- &dialresp{errors.New(ackMessage), nil}
 		return
 	}
 

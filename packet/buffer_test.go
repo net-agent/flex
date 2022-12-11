@@ -2,6 +2,7 @@ package packet
 
 import (
 	"bytes"
+	"fmt"
 	"sync"
 	"testing"
 
@@ -148,4 +149,63 @@ func TestPayload(t *testing.T) {
 	}()
 
 	wg.Wait()
+}
+
+func TestBuffer_CmdName(t *testing.T) {
+	makebuf := func(cmd uint8) *Buffer {
+		buf := NewBuffer(nil)
+		buf.SetCmd(cmd)
+		return buf
+	}
+	tests := []struct {
+		name string
+		buf  *Buffer
+		want string
+	}{
+		{"open", makebuf(CmdOpenStream), "open"},
+		{"close", makebuf(CmdCloseStream), "close"},
+		{"data", makebuf(CmdPushStreamData), "data"},
+		{"push", makebuf(CmdPushMessage), "push"},
+		{"ping", makebuf(CmdPingDomain), "ping"},
+
+		{"open", makebuf(CmdOpenStream | CmdACKFlag), "open.ack"},
+		{"close", makebuf(CmdCloseStream | CmdACKFlag), "close.ack"},
+		{"data", makebuf(CmdPushStreamData | CmdACKFlag), "data.ack"},
+		{"push", makebuf(CmdPushMessage | CmdACKFlag), "push.ack"},
+		{"ping", makebuf(CmdPingDomain | CmdACKFlag), "ping.ack"},
+
+		{"default", makebuf(0xfe), fmt.Sprintf("<%v>", 0xfe)},
+		{"default", makebuf(0xff), fmt.Sprintf("<%v>.ack", 0xfe)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.buf.CmdName(); got != tt.want {
+				t.Errorf("Buffer.CmdName() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuffer_HeaderString(t *testing.T) {
+	makebuf := func(cmd uint8, srcip, srcport, distip, distport uint16) *Buffer {
+		buf := NewBuffer(nil)
+		buf.SetCmd(cmd)
+		buf.SetSrc(srcip, srcport)
+		buf.SetDist(distip, distport)
+		return buf
+	}
+	tests := []struct {
+		name string
+		buf  *Buffer
+		want string
+	}{
+		{"case1", makebuf(CmdOpenStream, 1, 2, 3, 4), "[open][src=1:2][dist=3:4][size=0]"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.buf.HeaderString(); got != tt.want {
+				t.Errorf("Buffer.HeaderString() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }
