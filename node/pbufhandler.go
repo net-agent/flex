@@ -5,7 +5,6 @@ import (
 	"log"
 
 	"github.com/net-agent/flex/v2/packet"
-	"github.com/net-agent/flex/v2/stream"
 )
 
 var (
@@ -14,28 +13,6 @@ var (
 	ErrListenerNotFound    = errors.New("listener not found")
 	ErrInvalidListener     = errors.New("invalid listener")
 )
-
-func (node *Node) GetStreamBySID(sid uint64, getAndDelete bool) (*stream.Conn, error) {
-	// 收到close，代表对端不会再发送数据，可以解除streams绑定
-	var it interface{}
-	var found bool
-
-	if getAndDelete {
-		it, found = node.streams.LoadAndDelete(sid)
-	} else {
-		it, found = node.streams.Load(sid)
-	}
-	if !found {
-		return nil, errStreamNotFound
-	}
-
-	c, ok := it.(*stream.Conn)
-	if !ok {
-		return nil, errConvertStreamFailed
-	}
-
-	return c, nil
-}
 
 func (node *Node) GetListenerByPort(port uint16) (*Listener, error) {
 	it, found := node.listenPorts.Load(port)
@@ -72,46 +49,6 @@ func (node *Node) HandleCmdOpenStream(pbuf *packet.Buffer) {
 	}
 
 	ackMessage = ""
-}
-
-// 远端已经做好读写准备，可以通知stream，完成open操作
-func (node *Node) HandleCmdOpenStreamAck(pbuf *packet.Buffer) {
-	it, loaded := node.ackstreams.LoadAndDelete(pbuf.DistPort())
-	if !loaded {
-		log.Printf("local not found (open-ack). distport=%v\n", pbuf.DistPort())
-		return
-	}
-
-	ch, ok := it.(chan *stream.Conn)
-	if !ok {
-		log.Printf("internal error (open-ack)\n")
-		return
-	}
-
-	info := string(pbuf.Payload)
-	if info != "" {
-		log.Printf("open stream failed: %v\n", info)
-		ch <- nil
-		return
-	}
-
-	//
-	// create and bind stream
-	//
-	s := stream.New(true)
-	s.SetLocal(pbuf.DistIP(), pbuf.DistPort())
-	s.SetRemote(pbuf.SrcIP(), pbuf.SrcPort())
-	s.InitWriter(node)
-
-	_, loaded = node.streams.LoadOrStore(pbuf.SID(), s)
-	if loaded {
-		log.Printf("stream exists (open-ack)\n")
-		s.Close()
-		return
-	}
-
-	ch <- s
-	s = nil
 }
 
 // 处理远端的Ping请求

@@ -21,13 +21,14 @@ const (
 )
 
 type Node struct {
+	Dialer
+
 	domain string
 	ip     uint16
 	packet.Conn
 	portm *numsrc.Manager // 用于管理和分配端口资源
 
 	listenPorts  sync.Map // map[port]*listener
-	ackstreams   sync.Map // map[port]*stream
 	streams      sync.Map // map[sid]*stream
 	pingRequests sync.Map
 
@@ -47,6 +48,8 @@ func New(conn packet.Conn) *Node {
 		lastWriteTime: time.Now(),
 		running:       false,
 	}
+
+	node.Dialer.host = node
 
 	return node
 }
@@ -119,4 +122,26 @@ func (node *Node) AttachStream(s *stream.Conn, sid uint64) error {
 		return ErrSidIsAttached
 	}
 	return nil
+}
+
+func (node *Node) GetStreamBySID(sid uint64, getAndDelete bool) (*stream.Conn, error) {
+	// 收到close，代表对端不会再发送数据，可以解除streams绑定
+	var it interface{}
+	var found bool
+
+	if getAndDelete {
+		it, found = node.streams.LoadAndDelete(sid)
+	} else {
+		it, found = node.streams.Load(sid)
+	}
+	if !found {
+		return nil, errStreamNotFound
+	}
+
+	c, ok := it.(*stream.Conn)
+	if !ok {
+		return nil, errConvertStreamFailed
+	}
+
+	return c, nil
 }
