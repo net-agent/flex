@@ -3,6 +3,8 @@ package node
 import (
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestListener(t *testing.T) {
@@ -13,21 +15,13 @@ func TestNodeListen(t *testing.T) {
 	node1, node2 := Pipe("test1", "test2")
 
 	l, err := node1.Listen(80)
-	if err != nil {
-		t.Error(err)
-		return
-	}
-
-	if l.Addr().Network() != "flex" || l.Addr().String() != "1:80" {
-		t.Error("not equal")
-		return
-	}
+	assert.Nil(t, err, "listen should be ok")
+	assert.NotNil(t, l, "listener should not be nil")
+	assert.Equal(t, l.Addr().Network(), "flex", "test Addr().Network()")
+	assert.Equal(t, l.Addr().String(), "1:80", "test Addr().String()")
 
 	_, err = node1.Listen(80)
-	if err.Error() != "port busy now" {
-		t.Error("unexpected err")
-		return
-	}
+	assert.Equal(t, err, ErrListenPortIsUsed, "listen on one port twice")
 
 	var wg sync.WaitGroup
 

@@ -21,20 +21,19 @@ const (
 )
 
 type Node struct {
-	Dialer
-
-	domain string
-	ip     uint16
 	packet.Conn
-	portm *numsrc.Manager // 用于管理和分配端口资源
-
-	listenPorts  sync.Map // map[port]*listener
-	streams      sync.Map // map[sid]*stream
-	pingRequests sync.Map
-
 	writeMut      sync.Mutex
 	lastWriteTime time.Time
 
+	ListenerHub          // 提供Listen实现
+	Dialer               // 提供Dial、DialDomain、DialIP实现
+	Pinger               // 提供PingDomain实现
+	streams     sync.Map // map[sid]*stream
+
+	domain string
+	ip     uint16
+
+	portm     *numsrc.Manager // 用于管理和分配端口资源
 	running   bool
 	onceClose sync.Once
 }
@@ -49,7 +48,9 @@ func New(conn packet.Conn) *Node {
 		running:       false,
 	}
 
-	node.Dialer.host = node
+	node.ListenerHub.Init(node)
+	node.Dialer.Init(node)
+	node.Pinger.Init(node)
 
 	return node
 }
@@ -72,7 +73,7 @@ func (node *Node) Run() {
 	// 创建一个计时器，用于定时探活
 	ticker := time.NewTicker(DefaultHeartbeatInterval)
 	defer ticker.Stop()
-	go node.keepaliveWithPeer(ticker)
+	go node.keepalive(ticker)
 
 	// 从pbuf channel中消费数据
 	// 不断路由收到的pbuf
@@ -144,4 +145,18 @@ func (node *Node) GetStreamBySID(sid uint64, getAndDelete bool) (*stream.Conn, e
 	}
 
 	return c, nil
+}
+
+func (node *Node) keepalive(ticker *time.Ticker) {
+	for range ticker.C {
+		if time.Since(node.lastWriteTime) > (DefaultHeartbeatInterval - time.Second) {
+			_, err := node.PingDomain("", time.Second*3)
+			if err != nil {
+				log.Printf("keepaliveWithPeer failed: %v\n", err)
+				node.Close()
+				ticker.Stop()
+				return
+			}
+		}
+	}
 }

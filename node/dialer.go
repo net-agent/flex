@@ -28,6 +28,11 @@ type Dialer struct {
 	responses sync.Map // map[uint16]chan *dialresp
 }
 
+func (d *Dialer) Init(host *Node) {
+	d.host = host
+}
+
+// Dial 通过address信息创建新的连接
 func (d *Dialer) Dial(addr string) (*stream.Conn, error) {
 	isDomain, domain, ip, port, err := parseAddress(addr)
 	if err != nil {
@@ -39,35 +44,6 @@ func (d *Dialer) Dial(addr string) (*stream.Conn, error) {
 	}
 
 	return d.DialIP(ip, port)
-}
-
-// parseAddress 对字符串地址进行解析
-func parseAddress(addr string) (isDomain bool, domain string, ip uint16, port uint16, err error) {
-	h, p, err := net.SplitHostPort(addr)
-	if err != nil {
-		return
-	}
-
-	intPort, err := strconv.Atoi(p)
-	if err != nil {
-		return
-	}
-	if intPort < 0 || intPort > 0xffff {
-		err = errInvalidPortNumber
-		return
-	}
-	port = uint16(intPort)
-
-	intIp, err := strconv.Atoi(h)
-	if err != nil {
-		// treat as domain
-		return true, h, 0, port, nil
-	}
-	if intIp < 0 || intIp > int(vars.MaxIP) {
-		err = errInvalidIPNumber
-		return
-	}
-	return false, "", uint16(intIp), port, nil
 }
 
 // DialDomain 通过domain信息进行dial
@@ -177,4 +153,33 @@ func (d *Dialer) HandleCmdOpenStreamAck(pbuf *packet.Buffer) {
 
 	ch <- &dialresp{nil, s}
 	s = nil
+}
+
+// parseAddress 对字符串地址进行解析
+func parseAddress(addr string) (isDomain bool, domain string, ip uint16, port uint16, err error) {
+	h, p, err := net.SplitHostPort(addr)
+	if err != nil {
+		return
+	}
+
+	intPort, err := strconv.Atoi(p)
+	if err != nil {
+		return
+	}
+	if intPort < 0 || intPort > 0xffff {
+		err = errInvalidPortNumber
+		return
+	}
+	port = uint16(intPort)
+
+	intIp, err := strconv.Atoi(h)
+	if err != nil {
+		// treat as domain
+		return true, h, 0, port, nil
+	}
+	if intIp < 0 || intIp > int(vars.MaxIP) {
+		err = errInvalidIPNumber
+		return
+	}
+	return false, "", uint16(intIp), port, nil
 }
