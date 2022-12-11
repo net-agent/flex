@@ -4,6 +4,8 @@ import (
 	"log"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestPingDomain(t *testing.T) {
@@ -11,15 +13,9 @@ func TestPingDomain(t *testing.T) {
 	var err error
 
 	_, err = node1.PingDomain("test2", time.Second)
-	if err != nil {
-		t.Error(err)
-		return
-	}
+	assert.Nil(t, err, "test PingDomain")
 
 	_, err = node1.PingDomain("notexists", time.Second)
-	if err == nil {
-		t.Error("unexpected nil err")
-		return
-	}
+	assert.NotNil(t, err, "test PingDomain error")
 	log.Println(err)
 }

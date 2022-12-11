@@ -18,16 +18,16 @@ var (
 	ErrConvertListenerFailed = errors.New("convert listener failed")
 )
 
-type ListenerHub struct {
+type ListenHub struct {
 	host      *Node
 	listeners sync.Map // map[port]*Listener
 }
 
-func (hub *ListenerHub) Init(host *Node) {
+func (hub *ListenHub) Init(host *Node) {
 	hub.host = host
 }
 
-func (hub *ListenerHub) Listen(port uint16) (net.Listener, error) {
+func (hub *ListenHub) Listen(port uint16) (net.Listener, error) {
 	listener := &Listener{
 		hub:     hub,
 		port:    port,
@@ -45,7 +45,7 @@ func (hub *ListenerHub) Listen(port uint16) (net.Listener, error) {
 	return listener, nil
 }
 
-func (hub *ListenerHub) GetListenerByPort(port uint16) (*Listener, error) {
+func (hub *ListenHub) GetListenerByPort(port uint16) (*Listener, error) {
 	it, found := hub.listeners.Load(port)
 	if !found {
 		return nil, ErrListenerNotFound
@@ -58,7 +58,7 @@ func (hub *ListenerHub) GetListenerByPort(port uint16) (*Listener, error) {
 }
 
 // 处理对端发送过来的OpenStream请求
-func (hub *ListenerHub) HandleCmdOpenStream(pbuf *packet.Buffer) {
+func (hub *ListenHub) HandleCmdOpenStream(pbuf *packet.Buffer) {
 	ackMessage := ""
 	defer func() {
 		err := hub.host.WriteBuffer(pbuf.SetOpenACK(ackMessage))
@@ -102,7 +102,7 @@ func (hub *ListenerHub) HandleCmdOpenStream(pbuf *packet.Buffer) {
 // 实现net.Listener的协议
 type Listener struct {
 	port    uint16
-	hub     *ListenerHub
+	hub     *ListenHub
 	streams chan *stream.Conn
 
 	closed bool

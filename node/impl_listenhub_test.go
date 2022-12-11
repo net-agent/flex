@@ -33,24 +33,15 @@ func TestNodeListen(t *testing.T) {
 		// 第二个为关闭错误
 
 		_, err := l.Accept()
-		if err != nil {
-			t.Error(err)
-			return
-		}
+		assert.Nil(t, err, "accept should be ok")
 
 		l.Close()
 		_, err = l.Accept()
-		if err == nil {
-			t.Error("unexpected nil err")
-			return
-		}
+		assert.NotNil(t, err, "test: accept close listener")
 	}()
 
 	c, err := node2.Dial("1:80")
-	if err != nil {
-		t.Error(err)
-		return
-	}
+	assert.Nil(t, err, "test dial")
 	c.Close()
 	wg.Wait()
 }

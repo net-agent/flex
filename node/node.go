@@ -8,7 +8,6 @@ import (
 
 	"github.com/net-agent/flex/v2/numsrc"
 	"github.com/net-agent/flex/v2/packet"
-	"github.com/net-agent/flex/v2/stream"
 )
 
 var (
@@ -25,10 +24,10 @@ type Node struct {
 	writeMut      sync.Mutex
 	lastWriteTime time.Time
 
-	ListenerHub          // 提供Listen实现
-	Dialer               // 提供Dial、DialDomain、DialIP实现
-	Pinger               // 提供PingDomain实现
-	streams     sync.Map // map[sid]*stream
+	ListenHub // 提供Listen实现
+	Dialer    // 提供Dial、DialDomain、DialIP实现
+	Pinger    // 提供PingDomain实现
+	DataHub   // 处理Data、DataAck、Close、CloseAck
 
 	domain string
 	ip     uint16
@@ -48,14 +47,16 @@ func New(conn packet.Conn) *Node {
 		running:       false,
 	}
 
-	node.ListenerHub.Init(node)
+	node.ListenHub.Init(node)
 	node.Dialer.Init(node)
 	node.Pinger.Init(node)
+	node.DataHub.Init(node)
 
 	return node
 }
 
 func (node *Node) SetDomain(domain string) { node.domain = domain }
+func (node *Node) GetDomain() string       { return node.domain }
 func (node *Node) SetIP(ip uint16)         { node.ip = ip }
 func (node *Node) GetIP() uint16           { return node.ip }
 
@@ -116,35 +117,41 @@ func (node *Node) readBufferUntilFailed(ch chan *packet.Buffer) {
 	}
 }
 
-func (node *Node) AttachStream(s *stream.Conn, sid uint64) error {
-	_, loaded := node.streams.LoadOrStore(sid, s)
-	if loaded {
-		// 已经存在还未释放的stream
-		return ErrSidIsAttached
-	}
-	return nil
-}
+// pbufRouteLoop 处理流数据传输的逻辑（open-ack -> push -> push-ack -> close -> close-ack）
+func (node *Node) pbufRouteLoop(ch chan *packet.Buffer) {
+	for pbuf := range ch {
 
-func (node *Node) GetStreamBySID(sid uint64, getAndDelete bool) (*stream.Conn, error) {
-	// 收到close，代表对端不会再发送数据，可以解除streams绑定
-	var it interface{}
-	var found bool
+		switch pbuf.CmdType() {
 
-	if getAndDelete {
-		it, found = node.streams.LoadAndDelete(sid)
-	} else {
-		it, found = node.streams.Load(sid)
-	}
-	if !found {
-		return nil, errStreamNotFound
-	}
+		case packet.CmdOpenStream:
+			if pbuf.IsACK() {
+				node.HandleCmdOpenStreamAck(pbuf)
+			} else {
+				go node.HandleCmdOpenStream(pbuf)
+			}
 
-	c, ok := it.(*stream.Conn)
-	if !ok {
-		return nil, errConvertStreamFailed
-	}
+		case packet.CmdPushStreamData:
+			if pbuf.IsACK() {
+				go node.HandleCmdPushStreamDataAck(pbuf)
+			} else {
+				node.HandleCmdPushStreamData(pbuf)
+			}
 
-	return c, nil
+		case packet.CmdCloseStream:
+			if pbuf.IsACK() {
+				node.HandleCmdCloseStreamAck(pbuf)
+			} else {
+				node.HandleCmdCloseStream(pbuf)
+			}
+
+		case packet.CmdPingDomain:
+			if pbuf.IsACK() {
+				node.HandleCmdPingDomainAck(pbuf)
+			} else {
+				node.HandleCmdPingDomain(pbuf)
+			}
+		}
+	}
 }
 
 func (node *Node) keepalive(ticker *time.Ticker) {
