@@ -80,7 +80,7 @@ func (pm *Manager) GetFreeNumberSrc() (uint16, error) {
 				return port, nil
 			}
 
-		case <-time.After(time.Second):
+		case <-time.After(time.Millisecond * 100):
 			return 0, ErrGetFreeNumberTimeout
 		}
 	}

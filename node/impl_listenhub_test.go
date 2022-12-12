@@ -7,8 +7,20 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestListener(t *testing.T) {
+func TestGetListenerByPort(t *testing.T) {
+	hub := &ListenHub{}
+	port1 := uint16(100)
+	port2 := uint16(200)
 
+	hub.listeners.Store(port1, 123)
+	_, err := hub.GetListenerByPort(port1)
+	assert.Equal(t, err, ErrConvertListenerFailed, "cover: convert listener failed")
+
+	l := &Listener{}
+	hub.listeners.Store(port2, l)
+	ret, err := hub.GetListenerByPort(port2)
+	assert.Nil(t, err)
+	assert.Equal(t, ret, l)
 }
 
 func TestNodeListen(t *testing.T) {

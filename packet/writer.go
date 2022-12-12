@@ -8,10 +8,6 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const (
-	DefaultWriteTimeout = time.Second * 10 // 如果写入10秒钟都没有成功，网络状况不好，可以报错
-)
-
 type Writer interface {
 	WriteBuffer(buf *Buffer) error
 }
@@ -32,7 +28,7 @@ func (writer *connWriter) WriteBuffer(buf *Buffer) (retErr error) {
 			log.Printf("[W]%v timeuse=%v\n", buf.HeaderString(), time.Since(start))
 		}()
 	}
-	err := writer.conn.SetWriteDeadline(time.Now().Add(DefaultWriteTimeout))
+	err := writer.conn.SetWriteDeadline(time.Now().Add(DefaultWriteDeadline))
 	if err != nil {
 		return err
 	}

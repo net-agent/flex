@@ -134,6 +134,14 @@ func TestDialAddr(t *testing.T) {
 
 	_, err = n1.Dial("test2:1080")
 	assert.NotNil(t, err, "test dial error")
+
+	// cover: 测试Dial/parseAddress err
+	_, err = n1.Dial("invalidaddr")
+	assert.NotNil(t, err, "cover test: Dial/parseAddress")
+
+	// cover: 测试DialDomain/DialIP branch
+	_, err = n2.Dial("local:80")
+	assert.Nil(t, err, "dial local should be ok")
 }
 
 func TestPing(t *testing.T) {

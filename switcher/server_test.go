@@ -1,7 +1,7 @@
 package switcher
 
 import (
-	"fmt"
+	"log"
 	"net"
 	"testing"
 	"time"
@@ -49,7 +49,7 @@ func TestAttachCtx(t *testing.T) {
 	// print
 	table := s.GetCtxRecords()
 	for index, row := range table {
-		fmt.Printf("%v: %v\n", index, row)
+		log.Printf("%v: %v\n", index, row)
 	}
 	<-time.After(time.Millisecond * 100)
 	s.DetachCtx(ctx2)

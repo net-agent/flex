@@ -1,7 +1,7 @@
 package handshake
 
 import (
-	"fmt"
+	"log"
 	"testing"
 
 	"github.com/net-agent/flex/v2/packet"
@@ -107,7 +107,7 @@ func TestUpgradeRequestErr_ServerSideErr(t *testing.T) {
 		t.Error("unexpected nil err")
 		return
 	}
-	fmt.Printf("expected server side err=%v\n", err)
+	log.Printf("expected server side err=%v\n", err)
 }
 
 func TestUpgradeRequestErr_VersionNotMatch(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/net-agent/flex/v2/numsrc"
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/stream"
 )
@@ -15,12 +16,13 @@ var (
 )
 
 type DataHub struct {
-	host    *Node
+	// host    *Node
+	portm   *numsrc.Manager
 	streams sync.Map // map[sid]*stream.Conn
 }
 
-func (hub *DataHub) Init(host *Node) {
-	hub.host = host
+func (hub *DataHub) Init(portm *numsrc.Manager) {
+	hub.portm = portm
 }
 
 func (hub *DataHub) AttachStream(s *stream.Conn, sid uint64) error {
@@ -87,7 +89,7 @@ func (hub *DataHub) HandleCmdCloseStream(pbuf *packet.Buffer) {
 	if err != nil {
 		return
 	}
-	hub.host.portm.ReleaseNumberSrc(port)
+	hub.portm.ReleaseNumberSrc(port)
 }
 
 func (hub *DataHub) HandleCmdCloseStreamAck(pbuf *packet.Buffer) {
@@ -102,5 +104,5 @@ func (hub *DataHub) HandleCmdCloseStreamAck(pbuf *packet.Buffer) {
 	if err != nil {
 		return
 	}
-	hub.host.portm.ReleaseNumberSrc(port)
+	hub.portm.ReleaseNumberSrc(port)
 }

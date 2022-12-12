@@ -1,7 +1,7 @@
 package switcher
 
 import (
-	"fmt"
+	"log"
 	"testing"
 
 	"github.com/net-agent/flex/v2/handshake"
@@ -48,7 +48,7 @@ func TestHandlePCErr_DomainExist(t *testing.T) {
 		t.Error("unexpected nil err")
 		return
 	}
-	fmt.Printf("expected err=%v\n", err)
+	log.Printf("expected err=%v\n", err)
 }
 
 // 模拟domain重复的场景
@@ -75,7 +75,7 @@ func TestHandlePCErr_Password(t *testing.T) {
 		t.Errorf("unexpected err=%v\n", err)
 		return
 	}
-	fmt.Printf("expected err=%v\n", err)
+	log.Printf("expected err=%v\n", err)
 }
 
 // 模拟服务端在应答UpgradeRequest之前连接断开的情况
@@ -102,5 +102,5 @@ func TestHandlePCErr_WriteResponse(t *testing.T) {
 		t.Errorf("unexpected err=%v\n", err)
 		return
 	}
-	fmt.Printf("expected err=%v\n", err)
+	log.Printf("expected err=%v\n", err)
 }

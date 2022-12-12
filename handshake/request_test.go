@@ -2,7 +2,7 @@ package handshake
 
 import (
 	"encoding/json"
-	"fmt"
+	"log"
 	"testing"
 
 	"github.com/net-agent/flex/v2/packet"
@@ -20,7 +20,7 @@ func TestRequestMarshal(t *testing.T) {
 		return
 	}
 
-	fmt.Println(buf)
+	log.Println(buf)
 
 	var req2 Request
 	err = json.Unmarshal(buf, &req2)

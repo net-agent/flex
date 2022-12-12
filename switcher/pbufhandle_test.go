@@ -1,7 +1,7 @@
 package switcher
 
 import (
-	"fmt"
+	"log"
 	"testing"
 	"time"
 
@@ -181,7 +181,7 @@ func TestHandleCmdOpenStream(t *testing.T) {
 		t.Error("unexpected nil err")
 		return
 	}
-	fmt.Printf("dial err=%v\n", err)
+	log.Printf("dial err=%v\n", err)
 
 	// 错误用例：
 	_, err = node1.Dial("notexistdomain:80")
@@ -189,7 +189,7 @@ func TestHandleCmdOpenStream(t *testing.T) {
 		t.Error("unexpected nil err")
 		return
 	}
-	fmt.Printf("dial err=%v\n", err)
+	log.Printf("dial err=%v\n", err)
 }
 
 func TestHandlePingDomainAck(t *testing.T) {

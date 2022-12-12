@@ -7,6 +7,7 @@ import (
 	"net"
 	"sync"
 
+	"github.com/net-agent/flex/v2/numsrc"
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/stream"
 )
@@ -20,11 +21,13 @@ var (
 
 type ListenHub struct {
 	host      *Node
+	portm     *numsrc.Manager
 	listeners sync.Map // map[port]*Listener
 }
 
-func (hub *ListenHub) Init(host *Node) {
+func (hub *ListenHub) Init(host *Node, portm *numsrc.Manager) {
 	hub.host = host
+	hub.portm = portm
 }
 
 func (hub *ListenHub) Listen(port uint16) (net.Listener, error) {
@@ -110,23 +113,6 @@ type Listener struct {
 	str    string
 }
 
-// func (n *Node) Listen(port uint16) (net.Listener, error) {
-// 	listener := &Listener{
-// 		port:    port,
-// 		host:    n,
-// 		streams: make(chan *stream.Conn, 1024),
-// 		closed:  false,
-// 		str:     fmt.Sprintf("%v:%v", n.GetIP(), port),
-// 	}
-
-// 	_, loaded := n.listenPorts.LoadOrStore(port, listener)
-// 	if loaded {
-// 		return nil, errors.New("port busy now")
-// 	}
-
-// 	return listener, nil
-// }
-
 func (l *Listener) Accept() (net.Conn, error) {
 	if l.closed {
 		return nil, errors.New("accept on closed lisntener")
@@ -149,7 +135,7 @@ func (l *Listener) Close() error {
 	l.closed = true
 	l.hub.listeners.Delete(l.port)
 	close(l.streams)
-	l.hub.host.portm.ReleaseNumberSrc(l.port)
+	l.hub.portm.ReleaseNumberSrc(l.port)
 	return nil
 }
 

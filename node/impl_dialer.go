@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/net-agent/flex/v2/numsrc"
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/stream"
 	"github.com/net-agent/flex/v2/vars"
@@ -25,11 +26,13 @@ type dialresp struct {
 
 type Dialer struct {
 	host      *Node
+	portm     *numsrc.Manager
 	responses sync.Map // map[uint16]chan *dialresp
 }
 
-func (d *Dialer) Init(host *Node) {
+func (d *Dialer) Init(host *Node, portm *numsrc.Manager) {
 	d.host = host
+	d.portm = portm
 }
 
 // Dial 通过address信息创建新的连接
@@ -76,13 +79,13 @@ func (d *Dialer) DialIP(ip, port uint16) (*stream.Conn, error) {
 func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Conn, error) {
 	// 第一步：选择可用端口。
 	// 如果此函数退出时srcPort非0，需要回收端口
-	srcPort, err := d.host.portm.GetFreeNumberSrc()
+	srcPort, err := d.portm.GetFreeNumberSrc()
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
 		if srcPort > 0 {
-			d.host.portm.ReleaseNumberSrc(srcPort)
+			d.portm.ReleaseNumberSrc(srcPort)
 		}
 	}()
 

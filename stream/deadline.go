@@ -2,7 +2,7 @@ package stream
 
 import (
 	"errors"
-	"fmt"
+	"log"
 	"time"
 )
 
@@ -42,7 +42,7 @@ func (s *Conn) SetWriteDeadline(t time.Time) error {
 		return errors.New("writer closed")
 	}
 	return s.wDeadlineGuard.Set(t, func() {
-		fmt.Println("write close by timeout")
+		log.Println("write close by timeout")
 		s.CloseWrite(false)
 	})
 }
@@ -52,7 +52,7 @@ func (s *Conn) SetReadDeadline(t time.Time) error {
 		return errors.New("reader closed")
 	}
 	return s.rDeadlineGuard.Set(t, func() {
-		fmt.Println("read close by timeout")
+		log.Println("read close by timeout")
 		s.AppendEOF()
 	})
 }

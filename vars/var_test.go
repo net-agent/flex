@@ -1,10 +1,10 @@
 package vars
 
 import (
-	"fmt"
+	"log"
 	"testing"
 )
 
 func TestNull(t *testing.T) {
-	fmt.Printf("git build test")
+	log.Printf("git build test placeholder")
 }

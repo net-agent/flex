@@ -1,7 +1,7 @@
 package switcher
 
 import (
-	"fmt"
+	"log"
 	"sync"
 	"testing"
 	"time"
@@ -37,7 +37,7 @@ func TestContextPing(t *testing.T) {
 		t.Error("unexpected nil err")
 		return
 	}
-	fmt.Println(err)
+	log.Println(err)
 
 	// 错误分支：WriteBuffer failed
 	node1.Conn.Close()

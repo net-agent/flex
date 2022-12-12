@@ -19,3 +19,35 @@ func TestPingDomain(t *testing.T) {
 	assert.NotNil(t, err, "test PingDomain error")
 	log.Println(err)
 }
+
+func TestPingDomainErr_GetFreeNum(t *testing.T) {
+	n1, _ := Pipe("test1", "test2")
+	var err error
+
+	// 耗尽portm的资源
+	for {
+		_, err = n1.Pinger.portm.GetFreeNumberSrc()
+		if err != nil {
+			break
+		}
+	}
+
+	_, err = n1.PingDomain("test2", time.Second)
+	assert.NotNil(t, err, "test pingDomain error ")
+}
+
+func TestPingDomainErr_Write(t *testing.T) {
+	n1, n2 := Pipe("test1", "test2")
+	n2.Close()
+
+	_, err := n1.PingDomain("test2", time.Second)
+	assert.NotNil(t, err, "test ping writebuffer error")
+}
+
+func TestPingDomainErr_timeout(t *testing.T) {
+	n1, n2 := Pipe("test1", "test2")
+	n2.SetIgnorePing(true)
+
+	_, err := n1.PingDomain("test2", time.Millisecond*20)
+	assert.Equal(t, err, ErrPingDomainTimeout, "test: ping timeout")
+}

@@ -12,7 +12,6 @@ import (
 func TestNew(t *testing.T) {
 	n := New(nil)
 	assert.NotNil(t, n, "new node should return no nil object")
-	assert.NotNil(t, n.portm, "portm should no nil")
 	assert.False(t, n.running, "running state should false")
 	assert.Nil(t, n.Conn, "conn should be nil")
 }
@@ -23,7 +22,7 @@ func TestSet(t *testing.T) {
 	ip := uint16(1234)
 	n.SetDomain(domain)
 	n.SetIP(ip)
-	assert.Equal(t, n.domain, domain, "call SetDomain")
+	assert.Equal(t, n.GetDomain(), domain, "call SetDomain")
 	assert.Equal(t, n.GetIP(), ip, "call SetIP/GetIP")
 }
 

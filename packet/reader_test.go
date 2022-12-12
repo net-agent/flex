@@ -3,8 +3,11 @@ package packet
 import (
 	"bytes"
 	"crypto/rand"
+	"net"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestRead(t *testing.T) {
@@ -69,4 +72,18 @@ func TestRead(t *testing.T) {
 			return
 		}
 	}
+}
+
+func TestReadErr_SetDeadline(t *testing.T) {
+	c1, c2 := net.Pipe()
+
+	w := NewConnWriter(c2)
+	r := NewConnReader(c1)
+	go func() {
+		w.WriteBuffer(NewBuffer(nil))
+	}()
+
+	c1.Close()
+	_, err := r.ReadBuffer()
+	assert.Equal(t, err, ErrSetDeadlineFailed)
 }

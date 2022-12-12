@@ -11,7 +11,8 @@ import (
 )
 
 var (
-	ErrBadDataType = errors.New("err: bad data type")
+	ErrBadDataType       = errors.New("err: bad data type")
+	ErrSetDeadlineFailed = errors.New("set deadline failed")
 )
 
 type Reader interface {
@@ -39,9 +40,9 @@ func (reader *connReader) ReadBuffer() (retBuf *Buffer, retErr error) {
 	}
 	// 如果30秒读不到任何数据，则会报错关闭
 	// 所以心跳包的时间间隔不应该超过这个数值
-	err := reader.conn.SetReadDeadline(time.Now().Add(time.Second * 30))
+	err := reader.conn.SetReadDeadline(time.Now().Add(DefaultReadDeadline))
 	if err != nil {
-		return nil, err
+		return nil, ErrSetDeadlineFailed
 	}
 	pb := NewBuffer(nil)
 
