@@ -1,11 +1,17 @@
 package packet
 
 import (
+	"errors"
 	"log"
 	"net"
 	"time"
 
 	"github.com/gorilla/websocket"
+)
+
+var (
+	ErrWriteHeaderFailed  = errors.New("write header failed")
+	ErrWritePayloadFailed = errors.New("write payload failed")
 )
 
 type Writer interface {
@@ -34,12 +40,12 @@ func (writer *connWriter) WriteBuffer(buf *Buffer) (retErr error) {
 	}
 	_, err = writer.conn.Write(buf.Head[:])
 	if err != nil {
-		return err
+		return ErrWriteHeaderFailed
 	}
 	if len(buf.Payload) > 0 {
 		_, err = writer.conn.Write(buf.Payload)
 		if err != nil {
-			return err
+			return ErrWritePayloadFailed
 		}
 	}
 	writer.conn.SetWriteDeadline(time.Time{})
@@ -63,6 +69,7 @@ func (writer *wsWriter) WriteBuffer(buf *Buffer) (retErr error) {
 		}()
 	}
 
+	writer.wsconn.SetWriteDeadline(time.Now().Add(DefaultWriteDeadline))
 	w, err := writer.wsconn.NextWriter(websocket.BinaryMessage)
 	if err != nil {
 		return err

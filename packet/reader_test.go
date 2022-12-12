@@ -3,9 +3,11 @@ package packet
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/binary"
 	"net"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -86,4 +88,51 @@ func TestReadErr_SetDeadline(t *testing.T) {
 	c1.Close()
 	_, err := r.ReadBuffer()
 	assert.Equal(t, err, ErrSetDeadlineFailed)
+}
+
+func TestReadErr_Header(t *testing.T) {
+	c1, c2 := net.Pipe()
+
+	w := NewConnWriter(c2)
+	r := NewConnReader(c1)
+	go func() {
+		w.WriteBuffer(NewBuffer(nil))
+		c2.Write([]byte{0x01})
+	}()
+
+	var err error
+
+	// 设置超时时间，加快超时
+	DefaultReadDeadline = time.Millisecond * 100
+
+	_, err = r.ReadBuffer()
+	assert.Nil(t, err)
+
+	_, err = r.ReadBuffer()
+	assert.Equal(t, err, ErrReadHeaderFailed)
+}
+
+func TestReadErr_Payload(t *testing.T) {
+	c1, c2 := net.Pipe()
+
+	w := NewConnWriter(c2)
+	r := NewConnReader(c1)
+	go func() {
+		w.WriteBuffer(NewBuffer(nil))
+
+		var h Header
+		binary.BigEndian.PutUint16(h[9:11], 10)
+		c2.Write(h[:])
+	}()
+
+	var err error
+
+	// 设置超时时间，加快超时
+	DefaultReadDeadline = time.Millisecond * 100
+
+	_, err = r.ReadBuffer()
+	assert.Nil(t, err)
+
+	_, err = r.ReadBuffer()
+	assert.Equal(t, err, ErrReadPayloadFailed)
 }

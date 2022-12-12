@@ -13,6 +13,8 @@ import (
 var (
 	ErrBadDataType       = errors.New("err: bad data type")
 	ErrSetDeadlineFailed = errors.New("set deadline failed")
+	ErrReadHeaderFailed  = errors.New("read header failed")
+	ErrReadPayloadFailed = errors.New("read payload failed")
 )
 
 type Reader interface {
@@ -48,7 +50,7 @@ func (reader *connReader) ReadBuffer() (retBuf *Buffer, retErr error) {
 
 	_, err = io.ReadFull(reader.conn, pb.Head[:])
 	if err != nil {
-		return nil, err
+		return nil, ErrReadHeaderFailed
 	}
 
 	sz := pb.PayloadSize()
@@ -56,7 +58,7 @@ func (reader *connReader) ReadBuffer() (retBuf *Buffer, retErr error) {
 		pb.Payload = make([]byte, sz)
 		_, err := io.ReadFull(reader.conn, pb.Payload)
 		if err != nil {
-			return nil, err
+			return nil, ErrReadPayloadFailed
 		}
 	}
 
@@ -88,6 +90,7 @@ func (reader *wsReader) ReadBuffer() (retBuf *Buffer, retErr error) {
 	}
 	buf := NewBuffer(nil)
 
+	reader.wsconn.SetReadDeadline(time.Now().Add(DefaultReadDeadline))
 	mtype, data, err := reader.wsconn.ReadMessage()
 	if err != nil {
 		return nil, err
