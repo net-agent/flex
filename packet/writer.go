@@ -27,6 +27,10 @@ func NewConnWriter(conn net.Conn) Writer {
 	return &connWriter{conn}
 }
 
+func (w *connWriter) WriteBytes(buf []byte) (int, error) {
+	return w.conn.Write(buf)
+}
+
 func (writer *connWriter) WriteBuffer(buf *Buffer) (retErr error) {
 	if LOG_WRITE_BUFFER_HEADER {
 		start := time.Now()
@@ -88,4 +92,25 @@ func (writer *wsWriter) WriteBuffer(buf *Buffer) (retErr error) {
 	}
 
 	return nil
+}
+
+func (writer *wsWriter) WriteBytes(buf []byte) (int, error) {
+	// writer.wsconn.SetWriteDeadline(time.Now().Add(DefaultWriteDeadline))
+	// w, err := writer.wsconn.NextWriter(websocket.BinaryMessage)
+	// if err != nil {
+	// 	return 0, err
+	// }
+	// defer w.Close()
+
+	// _, err = w.Write(buf.Head[:])
+	// if err != nil {
+	// 	return err
+	// }
+	// if len(buf.Payload) > 0 {
+	// 	_, err = w.Write(buf.Payload)
+	// 	if err != nil {
+	// 		return err
+	// 	}
+	// }
+	return 0, errors.New("TODO")
 }

@@ -12,50 +12,35 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func equalBufTest(buf1, buf2 *Buffer, t *testing.T) bool {
-	if !bytes.Equal(buf1.Head[:], buf2.Head[:]) {
-		t.Error("head not equal")
-		return false
-	}
-	if !bytes.Equal(buf1.Payload, buf2.Payload) {
-		t.Error("payload not equal")
-		return false
-	}
-	return true
-}
-
-func dataTransferTest(pc1 Reader, pc2 Writer, t *testing.T) {
+func doTestDataTranasfer(name string, t *testing.T, pc1, pc2 Conn) {
 	msg := []byte("hello world")
 	buf := NewBuffer(nil)
 	buf.SetHeader(CmdCloseStream, 0, 1, 2, 3)
 	buf.SetPayload(msg)
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		recvBuf, err := pc1.ReadBuffer()
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		if !equalBufTest(recvBuf, buf, t) {
-			return
-		}
-	}()
+	t.Run(name, func(t *testing.T) {
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			recvBuf, err := pc1.ReadBuffer()
+			assert.Nil(t, err)
+			assert.EqualValues(t, recvBuf.Head, buf.Head)
+			assert.EqualValues(t, recvBuf.Payload, buf.Payload)
+		}()
 
-	err := pc2.WriteBuffer(buf)
-	if err != nil {
-		t.Error(err)
-		return
-	}
+		err := pc2.WriteBuffer(buf)
+		assert.Nil(t, err)
 
-	wg.Wait()
+		wg.Wait()
+	})
 }
 
 func TestNetConn(t *testing.T) {
 	pc1, pc2 := Pipe()
-	dataTransferTest(pc1, pc2, t)
+	pc3, pc4 := Pipe()
+	doTestDataTranasfer("test Pipe", t, pc1, pc2)
+	doTestDataTranasfer("test wsPipe", t, pc3, pc4)
 }
 
 func TestWebsocket(t *testing.T) {
