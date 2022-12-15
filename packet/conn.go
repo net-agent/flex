@@ -1,7 +1,6 @@
 package packet
 
 import (
-	"errors"
 	"io"
 	"net"
 
@@ -13,7 +12,6 @@ type Conn interface {
 	Reader
 	Writer
 	GetRawConn() net.Conn
-	WriteBytes([]byte) (int, error)
 }
 
 type connImpl struct {
@@ -43,8 +41,4 @@ func NewWithWs(wsconn *websocket.Conn) Conn {
 
 func (impl *connImpl) GetRawConn() net.Conn {
 	return impl.raw
-}
-
-func (impl *connImpl) WriteBytes(buf []byte) (int, error) {
-	return 0, errors.New("TODO")
 }

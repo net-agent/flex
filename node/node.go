@@ -179,14 +179,18 @@ func (node *Node) pbufRouteLoop(ch chan *packet.Buffer) {
 
 func (node *Node) keepalive(ticker *time.Ticker) {
 	for range ticker.C {
-		if time.Since(node.lastWriteTime) > (DefaultHeartbeatInterval - time.Second) {
-			_, err := node.PingDomain("", time.Second*3)
-			if err != nil {
-				log.Printf("keepaliveWithPeer failed: %v\n", err)
-				node.Close()
-				ticker.Stop()
-				return
-			}
+		if time.Since(node.lastWriteTime) < DefaultHeartbeatInterval {
+			continue
 		}
+
+		_, err := node.PingDomain("", time.Second*3)
+		if err == nil {
+			continue
+		}
+
+		log.Printf("keepalive error: %v\n", err)
+		node.Close()
+		ticker.Stop()
+		return
 	}
 }
