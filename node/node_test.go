@@ -90,3 +90,38 @@ func TestPbufRouteLoop(t *testing.T) {
 		ch <- pbuf2
 	}
 }
+
+func TestKeepalive(t *testing.T) {
+	oldValue := DefaultHeartbeatInterval
+	DefaultHeartbeatInterval = time.Millisecond * 100
+	defer func() {
+		DefaultHeartbeatInterval = oldValue
+	}()
+
+	n1, n2 := Pipe("test1", "")
+
+	<-time.After(DefaultHeartbeatInterval * 4)
+
+	_, err := n1.PingDomain("", time.Second)
+	assert.NotNil(t, err)
+	_, err = n2.PingDomain("test1", time.Second)
+	assert.NotNil(t, err)
+}
+
+func TestCoverReadBufUntilFailed(t *testing.T) {
+	n1, n2 := Pipe("test1", "test2")
+	go func() {
+		n2.WriteBuffer(packet.NewBuffer(nil))
+	}()
+
+	ch := make(chan *packet.Buffer)
+	oldValue := DefaultWriteLocalTimeout
+	DefaultWriteLocalTimeout = time.Millisecond * 200
+	defer func() {
+		DefaultWriteLocalTimeout = oldValue
+	}()
+
+	go n1.readBufferUntilFailed(ch)
+
+	<-time.After(DefaultWriteLocalTimeout * 2)
+}
