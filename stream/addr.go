@@ -22,12 +22,16 @@ func (s *Conn) SetLocal(ip, port uint16) {
 	s.localIP = ip
 	s.localPort = port
 	s.local.str = fmt.Sprintf("%v:%v", ip, port)
+
+	s.Sender.SetSrc(ip, port)
 }
 
 func (s *Conn) SetRemote(ip, port uint16) {
 	s.remoteIP = ip
 	s.remotePort = port
 	s.remote.str = fmt.Sprintf("%v:%v", ip, port)
+
+	s.Sender.SetDist(ip, port)
 }
 
 func (s *Conn) LocalAddr() net.Addr {

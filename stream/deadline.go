@@ -43,7 +43,7 @@ func (s *Conn) SetWriteDeadline(t time.Time) error {
 	}
 	return s.wDeadlineGuard.Set(t, func() {
 		log.Println("write close by timeout")
-		s.CloseWrite(false)
+		s.CloseWrite()
 	})
 }
 
@@ -53,6 +53,6 @@ func (s *Conn) SetReadDeadline(t time.Time) error {
 	}
 	return s.rDeadlineGuard.Set(t, func() {
 		log.Println("read close by timeout")
-		s.AppendEOF()
+		s.CloseRead()
 	})
 }

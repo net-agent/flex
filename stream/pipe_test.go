@@ -6,37 +6,33 @@ import (
 	"math/rand"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestPipe(t *testing.T) {
-	s1, s2 := Pipe()
-
 	payload := make([]byte, 1024*1024*10)
 	rand.Read(payload)
+
+	s1, s2 := Pipe()
+
 	var wg sync.WaitGroup
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		defer s1.Close()
+
 		_, err := s1.Write(payload)
-		if err != nil {
-			t.Error(err)
-			return
-		}
+		assert.Nil(t, err)
+
+		err = s1.Close()
+		assert.Nil(t, err)
 	}()
 
 	buf := make([]byte, len(payload))
 	_, err := io.ReadFull(s2, buf)
-	if err != nil {
-		t.Error(err)
-		return
-	}
-
-	if !bytes.Equal(payload, buf) {
-		t.Error("payload not equal")
-		return
-	}
+	assert.Nil(t, err)
+	assert.True(t, bytes.Equal(payload, buf))
 
 	wg.Wait()
 }

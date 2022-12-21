@@ -143,10 +143,9 @@ func (d *Dialer) HandleCmdOpenStreamAck(pbuf *packet.Buffer) {
 	//
 	// create and bind stream
 	//
-	s := stream.New(true)
+	s := stream.New(d.host, true)
 	s.SetLocal(pbuf.DistIP(), pbuf.DistPort())
 	s.SetRemote(pbuf.SrcIP(), pbuf.SrcPort())
-	s.InitWriter(d.host)
 	defer func() {
 		if s != nil {
 			s.Close()

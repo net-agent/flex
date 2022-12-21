@@ -63,7 +63,7 @@ func (hub *DataHub) HandleCmdPushStreamData(pbuf *packet.Buffer) {
 		return
 	}
 
-	c.AppendData(pbuf.Payload)
+	c.HandleCmdPushStreamData(pbuf)
 }
 
 // 处理数据包已送达的消息
@@ -72,8 +72,7 @@ func (hub *DataHub) HandleCmdPushStreamDataAck(pbuf *packet.Buffer) {
 	if err != nil {
 		return
 	}
-
-	c.IncreaseBucket(pbuf.ACKInfo())
+	c.HandleCmdPushStreamDataAck(pbuf)
 }
 
 func (hub *DataHub) HandleCmdCloseStream(pbuf *packet.Buffer) {
@@ -82,8 +81,7 @@ func (hub *DataHub) HandleCmdCloseStream(pbuf *packet.Buffer) {
 		return
 	}
 
-	s.AppendEOF()
-	s.CloseWrite(true)
+	s.HandleCmdCloseStream(pbuf)
 
 	port, err := s.GetUsedPort()
 	if err != nil {
@@ -98,7 +96,7 @@ func (hub *DataHub) HandleCmdCloseStreamAck(pbuf *packet.Buffer) {
 		return
 	}
 
-	s.AppendEOF()
+	s.HandleCmdCloseStreamAck(pbuf)
 
 	port, err := s.GetUsedPort()
 	if err != nil {

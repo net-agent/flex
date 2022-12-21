@@ -3,12 +3,10 @@ package stream
 import (
 	"strings"
 	"testing"
-
-	"github.com/net-agent/flex/v2/packet"
 )
 
 func TestConnStrings(t *testing.T) {
-	c := New(true)
+	c := New(nil, true)
 
 	c.SetLocal(123, 456)
 	c.SetRemote(789, 543)
@@ -38,45 +36,6 @@ func TestConnStrings(t *testing.T) {
 	c.SetDialer("hello")
 	if c.Dialer() != "hello" {
 		t.Error("not equal")
-		return
-	}
-}
-
-func TestWaitOpenResp(t *testing.T) {
-	c := New(true)
-
-	go func() {
-		pbuf1 := packet.NewBuffer(nil)
-		pbuf1.SetPayload([]byte("test1"))
-		c.Opened(pbuf1)
-
-		pbuf2 := packet.NewBuffer(nil)
-		pbuf2.SetPayload(nil)
-		c.Opened(pbuf2)
-	}()
-
-	_, err := c.WaitOpenResp()
-	if err == nil {
-		t.Error("unexpected nil err")
-		return
-	}
-	if err.Error() != "test1" {
-		t.Error("unexpected err")
-		return
-	}
-	_, err = c.WaitOpenResp()
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	_, err = c.WaitOpenResp()
-	if err == nil {
-		t.Error("unexpected nil err")
-		return
-	}
-
-	if !strings.Contains(err.Error(), "timeout") {
-		t.Error("unexpected err")
 		return
 	}
 }

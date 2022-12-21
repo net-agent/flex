@@ -78,11 +78,10 @@ func (hub *ListenHub) HandleCmdOpenStream(pbuf *packet.Buffer) {
 	}
 
 	// 根据OpenCmd的信息创建stream
-	s := stream.New(false)
+	s := stream.New(hub.host, false)
 	s.SetLocal(pbuf.DistIP(), pbuf.DistPort())
 	s.SetRemote(pbuf.SrcIP(), pbuf.SrcPort())
 	s.SetDialer(string(pbuf.Payload))
-	s.InitWriter(hub.host)
 	defer func() {
 		if s != nil {
 			s.Close()

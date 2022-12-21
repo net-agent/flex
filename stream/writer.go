@@ -7,26 +7,24 @@ import (
 	"runtime"
 	"sync/atomic"
 	"time"
-
-	"github.com/net-agent/flex/v2/packet"
 )
 
-func (s *Conn) InitWriter(w packet.Writer) {
-	s.pwriter = w
+func (s *Conn) CloseRead() error {
+	s.rmut.Lock()
+	defer s.rmut.Unlock()
 
-	s.pushBuf = packet.NewBuffer(nil)
-	s.pushBuf.SetCmd(packet.CmdPushStreamData)
-	s.pushBuf.SetSrc(s.localIP, s.localPort)
-	s.pushBuf.SetDist(s.remoteIP, s.remotePort)
+	if s.rclosed {
+		return errors.New("stream closed, pbuf of close ignored")
+	}
 
-	s.pushAckBuf = packet.NewBuffer(nil)
-	s.pushAckBuf.SetCmd(packet.CmdPushStreamData | packet.CmdACKFlag)
-	s.pushAckBuf.SetSrc(s.localIP, s.localPort)
-	s.pushAckBuf.SetDist(s.remoteIP, s.remotePort)
+	s.rclosed = true
+	close(s.bytesChan)
+
+	return nil
 }
 
 // CloseWrite 设置写状态为不可写，并且告诉对端
-func (s *Conn) CloseWrite(isACK bool) error {
+func (s *Conn) CloseWrite() error {
 	s.wmut.Lock()
 	defer s.wmut.Unlock()
 
@@ -35,20 +33,7 @@ func (s *Conn) CloseWrite(isACK bool) error {
 	}
 
 	s.wclosed = true
-
-	if s.pushBuf == nil {
-		return errors.New("writer not init")
-	}
-
-	// send close cmd to peer
-	pbuf := packet.NewBuffer(nil)
-	copy(pbuf.Head[:], s.pushBuf.Head[:])
-	pbuf.SetCmd(packet.CmdCloseStream)
-	if isACK {
-		pbuf.SetCmd(packet.CmdCloseStream | packet.CmdACKFlag)
-	}
-	pbuf.SetPayload(nil)
-	return s.pwriter.WriteBuffer(pbuf)
+	return nil
 }
 
 func (s *Conn) Write(buf []byte) (int, error) {
@@ -98,45 +83,34 @@ func (s *Conn) Write(buf []byte) (int, error) {
 
 // write 一次调用最大支持64KB传输
 func (s *Conn) write(buf []byte) (int, error) {
-	s.pushBuf.SetPayload(buf)
-
 	s.wmut.Lock()
 	defer s.wmut.Unlock()
+
 	if s.wclosed {
 		return 0, errors.New("write on closed conn")
 	}
 
-	err := s.pwriter.WriteBuffer(s.pushBuf)
+	err := s.SendCmdData(buf)
 	if err != nil {
 		return 0, err
 	}
+
 	atomic.AddInt64(&s.counter.Write, int64(len(buf)))
 	return len(buf), nil
 }
 
 func (s *Conn) writeACK(n uint16) {
-	s.pushAckBuf.SetACKInfo(n)
-
 	s.wmut.Lock()
 	defer s.wmut.Unlock()
+
 	if s.wclosed {
 		return
 	}
 
-	err := s.pwriter.WriteBuffer(s.pushAckBuf)
+	err := s.SendCmdDataAck(n)
 	if err != nil {
 		log.Println("write push-ack failed")
 	}
 
 	atomic.AddInt64(&s.counter.WriteAck, int64(n))
-}
-
-func (s *Conn) IncreaseBucket(size uint16) {
-	atomic.AddInt32(&s.bucketSz, int32(size))
-	atomic.AddInt64(&s.counter.IncreaseBucket, int64(size))
-
-	select {
-	case s.bucketEv <- struct{}{}:
-	default:
-	}
 }

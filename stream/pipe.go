@@ -16,24 +16,24 @@ func Pipe() (*Conn, *Conn) {
 
 			switch pbuf.Cmd() {
 			case packet.CmdPushStreamData:
-				s.AppendData(pbuf.Payload)
+				s.HandleCmdPushStreamData(pbuf)
+
 			case packet.CmdPushStreamData | packet.CmdACKFlag:
-				s.IncreaseBucket(pbuf.ACKInfo())
+				s.HandleCmdPushStreamDataAck(pbuf)
+
 			case packet.CmdCloseStream:
-				s.AppendEOF()
-				s.CloseWrite(true)
+				s.HandleCmdCloseStream(pbuf)
+
 			case packet.CmdCloseStream | packet.CmdACKFlag:
-				s.AppendEOF()
+				s.HandleCmdCloseStreamAck(pbuf)
 			}
 		}
 	}
 
-	s1 := New(false)
-	s1.InitWriter(pc1)
+	s1 := New(pc1, false)
 	go copybuf(s1, pc1)
 
-	s2 := New(false)
-	s2.InitWriter(pc2)
+	s2 := New(pc2, false)
 	go copybuf(s2, pc2)
 
 	return s1, s2

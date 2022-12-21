@@ -28,6 +28,7 @@ type OpenResp struct {
 }
 
 type Conn struct {
+	*Sender
 	isDialer             bool
 	dialer               string
 	local                addr
@@ -35,20 +36,17 @@ type Conn struct {
 	remote               addr
 	remoteIP, remotePort uint16
 
-	// for open
-	openAck chan *packet.Buffer
-
 	// for reader
-	rmut           sync.Mutex
+	rmut           sync.RWMutex
 	rclosed        bool
 	bytesChan      chan []byte
 	currBuf        []byte
 	rDeadlineGuard *DeadlineGuard
 
 	// for writer
-	wmut           sync.Mutex
-	wclosed        bool
-	pwriter        packet.Writer
+	wmut    sync.Mutex
+	wclosed bool
+	// pwriter        packet.Writer
 	pushBuf        *packet.Buffer
 	pushAckBuf     *packet.Buffer
 	bucketSz       int32
@@ -62,11 +60,11 @@ type Conn struct {
 func (s *Conn) String() string { return fmt.Sprintf("<%v,%v>", s.local.String(), s.remote.String()) }
 func (s *Conn) State() string  { return fmt.Sprintf("%v %v", s.String(), s.counter.String()) }
 
-func New(isDialer bool) *Conn {
+func New(pwriter packet.Writer, isDialer bool) *Conn {
 	return &Conn{
+		Sender:         NewSender(pwriter),
 		isDialer:       isDialer,
 		dialer:         "self",
-		openAck:        make(chan *packet.Buffer, 1),
 		bytesChan:      make(chan []byte, DefaultBytesChanCap),
 		bucketSz:       DefaultBucketSize,
 		bucketEv:       make(chan struct{}, 16),
@@ -91,23 +89,17 @@ func (s *Conn) SetDialer(dialer string) error {
 }
 
 func (s *Conn) Close() error {
-	return s.CloseWrite(false)
-}
+	var err error
 
-func (s *Conn) WaitOpenResp() (*packet.Buffer, error) {
-	select {
-	case pbuf := <-s.openAck:
-		msg := string(pbuf.Payload)
-		if msg != "" {
-			return nil, errors.New(msg)
-		}
-		return pbuf, nil
-
-	case <-time.After(DefaultDialTimeout):
-		return nil, errors.New("timeout waitting for switcher response")
+	err = s.CloseWrite()
+	if err != nil {
+		return err
 	}
-}
 
-func (s *Conn) Opened(pbuf *packet.Buffer) {
-	s.openAck <- pbuf
+	err = s.SendCmdClose()
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
