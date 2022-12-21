@@ -1,46 +1,21 @@
 package stream
 
-import (
-	"errors"
-	"fmt"
-	"net"
-)
-
-//
-// todo
-//
+import "fmt"
 
 type addr struct {
 	network string
 	str     string
+	ip      uint16
+	port    uint16
 }
 
-func (a *addr) Network() string { return a.network }
-func (a *addr) String() string  { return a.str }
-
-func (s *Conn) SetLocal(ip, port uint16) {
-	s.localIP = ip
-	s.localPort = port
-	s.local.str = fmt.Sprintf("%v:%v", ip, port)
-}
-
-func (s *Conn) SetRemote(ip, port uint16) {
-	s.remoteIP = ip
-	s.remotePort = port
-	s.remote.str = fmt.Sprintf("%v:%v", ip, port)
-}
-
-func (s *Conn) LocalAddr() net.Addr {
-	return &s.local
-}
-
-func (s *Conn) RemoteAddr() net.Addr {
-	return &s.remote
-}
-
-func (s *Conn) GetUsedPort() (uint16, error) {
-	if s.isDialer {
-		return s.localPort, nil
-	}
-	return s.localPort, errors.New("local port still on listen")
+func (a *addr) Network() string        { return a.network }
+func (a *addr) String() string         { return a.str }
+func (a *addr) IP() uint16             { return a.ip }
+func (a *addr) Port() uint16           { return a.port }
+func (a *addr) SetNetwork(name string) { a.network = name }
+func (a *addr) SetIPPort(ip, port uint16) {
+	a.str = fmt.Sprintf("%v:%v", ip, port)
+	a.ip = ip
+	a.port = port
 }

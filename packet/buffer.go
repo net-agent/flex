@@ -42,6 +42,12 @@ func NewBuffer(head *Header) *Buffer {
 	return &Buffer{Head: head}
 }
 
+func NewBufferWithCmd(cmd byte) *Buffer {
+	pbuf := NewBuffer(nil)
+	pbuf.SetCmd(cmd)
+	return pbuf
+}
+
 func (buf *Buffer) HeaderString() string {
 	return fmt.Sprintf("[%v][src=%v:%v][dist=%v:%v][size=%v]",
 		buf.CmdName(),

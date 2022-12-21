@@ -34,7 +34,7 @@ func (hub *ListenHub) Listen(port uint16) (net.Listener, error) {
 	listener := &Listener{
 		hub:     hub,
 		port:    port,
-		streams: make(chan *stream.Conn, 32),
+		streams: make(chan *stream.Stream, 32),
 		closed:  false,
 		str:     fmt.Sprintf("%v:%v", hub.host.GetIP(), port),
 	}
@@ -78,11 +78,10 @@ func (hub *ListenHub) HandleCmdOpenStream(pbuf *packet.Buffer) {
 	}
 
 	// 根据OpenCmd的信息创建stream
-	s := stream.New(false)
+	s := stream.New(hub.host, false)
 	s.SetLocal(pbuf.DistIP(), pbuf.DistPort())
 	s.SetRemote(pbuf.SrcIP(), pbuf.SrcPort())
 	s.SetDialer(string(pbuf.Payload))
-	s.InitWriter(hub.host)
 	defer func() {
 		if s != nil {
 			s.Close()
@@ -106,7 +105,7 @@ func (hub *ListenHub) HandleCmdOpenStream(pbuf *packet.Buffer) {
 type Listener struct {
 	port    uint16
 	hub     *ListenHub
-	streams chan *stream.Conn
+	streams chan *stream.Stream
 
 	closed bool
 	locker sync.RWMutex

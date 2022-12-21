@@ -1,25 +1,26 @@
 package stream
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
 
 func TestAddr(t *testing.T) {
-	s := New(false)
-
+	s := New(nil, false)
 	s.SetLocal(1234, 5678)
 	s.SetRemote(9876, 5432)
+	s.SetNetwork("helloworld")
 
-	if s.LocalAddr().String() != "1234:5678" {
-		t.Error("LocalAddr not equal")
-		return
-	}
-
-	if s.RemoteAddr().String() != "9876:5432" {
-		t.Error("RemoteAddr not equal")
-	}
+	assert.Equal(t, uint16(1234), s.local.IP())
+	assert.Equal(t, uint16(9876), s.remote.IP())
+	assert.Equal(t, "1234:5678", s.LocalAddr().String())
+	assert.Equal(t, "9876:5432", s.RemoteAddr().String())
+	assert.Equal(t, "helloworld", s.LocalAddr().Network())
 }
 
 func TestUsedPort(t *testing.T) {
-	s1 := New(false)
+	s1 := New(nil, false)
 	s1.SetLocal(0, 1234)
 	port, err := s1.GetUsedPort()
 	if err == nil {
@@ -31,7 +32,7 @@ func TestUsedPort(t *testing.T) {
 		return
 	}
 
-	s2 := New(true)
+	s2 := New(nil, true)
 	s2.SetLocal(0, 3456)
 	port, err = s2.GetUsedPort()
 	if err != nil {

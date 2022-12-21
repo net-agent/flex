@@ -21,7 +21,7 @@ var (
 
 type dialresp struct {
 	err    error
-	stream *stream.Conn
+	stream *stream.Stream
 }
 
 type Dialer struct {
@@ -36,7 +36,7 @@ func (d *Dialer) Init(host *Node, portm *numsrc.Manager) {
 }
 
 // Dial 通过address信息创建新的连接
-func (d *Dialer) Dial(addr string) (*stream.Conn, error) {
+func (d *Dialer) Dial(addr string) (*stream.Stream, error) {
 	isDomain, domain, ip, port, err := parseAddress(addr)
 	if err != nil {
 		return nil, err
@@ -50,7 +50,7 @@ func (d *Dialer) Dial(addr string) (*stream.Conn, error) {
 }
 
 // DialDomain 通过domain信息进行dial
-func (d *Dialer) DialDomain(domain string, port uint16) (*stream.Conn, error) {
+func (d *Dialer) DialDomain(domain string, port uint16) (*stream.Stream, error) {
 	if domain == d.host.domain || domain == "local" || domain == "localhost" {
 		return d.DialIP(d.host.GetIP(), port)
 	}
@@ -64,7 +64,7 @@ func (d *Dialer) DialDomain(domain string, port uint16) (*stream.Conn, error) {
 }
 
 // DialIP 通过IP信息进行dial
-func (d *Dialer) DialIP(ip, port uint16) (*stream.Conn, error) {
+func (d *Dialer) DialIP(ip, port uint16) (*stream.Stream, error) {
 	// return node.dial("", ip, port)
 	pbuf := packet.NewBuffer(nil)
 	pbuf.SetCmd(packet.CmdOpenStream)
@@ -76,7 +76,7 @@ func (d *Dialer) DialIP(ip, port uint16) (*stream.Conn, error) {
 
 // DialPbuf dial的底层实现
 // 注意：pbuf里的srcPort还需要在writeBuffer前进行确认
-func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Conn, error) {
+func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 	// 第一步：选择可用端口。
 	// 如果此函数退出时srcPort非0，需要回收端口
 	srcPort, err := d.portm.GetFreeNumberSrc()
@@ -143,10 +143,9 @@ func (d *Dialer) HandleCmdOpenStreamAck(pbuf *packet.Buffer) {
 	//
 	// create and bind stream
 	//
-	s := stream.New(true)
+	s := stream.New(d.host, true)
 	s.SetLocal(pbuf.DistIP(), pbuf.DistPort())
 	s.SetRemote(pbuf.SrcIP(), pbuf.SrcPort())
-	s.InitWriter(d.host)
 	defer func() {
 		if s != nil {
 			s.Close()
