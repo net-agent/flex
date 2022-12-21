@@ -93,14 +93,14 @@ func TestPbufRouteLoop(t *testing.T) {
 
 func TestKeepalive(t *testing.T) {
 	oldValue := DefaultHeartbeatInterval
-	DefaultHeartbeatInterval = time.Millisecond * 100
+	DefaultHeartbeatInterval = time.Millisecond * 400 // github上设置为100ms可能会失败
 	defer func() {
 		DefaultHeartbeatInterval = oldValue
 	}()
 
 	n1, n2 := Pipe("test1", "")
 
-	<-time.After(DefaultHeartbeatInterval * 4)
+	<-time.After(DefaultHeartbeatInterval * 3)
 
 	_, err := n1.PingDomain("", time.Second)
 	assert.NotNil(t, err)
