@@ -34,7 +34,7 @@ func (hub *ListenHub) Listen(port uint16) (net.Listener, error) {
 	listener := &Listener{
 		hub:     hub,
 		port:    port,
-		streams: make(chan *stream.Conn, 32),
+		streams: make(chan *stream.Stream, 32),
 		closed:  false,
 		str:     fmt.Sprintf("%v:%v", hub.host.GetIP(), port),
 	}
@@ -105,7 +105,7 @@ func (hub *ListenHub) HandleCmdOpenStream(pbuf *packet.Buffer) {
 type Listener struct {
 	port    uint16
 	hub     *ListenHub
-	streams chan *stream.Conn
+	streams chan *stream.Stream
 
 	closed bool
 	locker sync.RWMutex

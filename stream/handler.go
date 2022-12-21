@@ -8,7 +8,7 @@ import (
 	"github.com/net-agent/flex/v2/packet"
 )
 
-func (s *Conn) HandleCmdPushStreamData(pbuf *packet.Buffer) {
+func (s *Stream) HandleCmdPushStreamData(pbuf *packet.Buffer) {
 	s.rmut.RLock()
 	defer s.rmut.RUnlock()
 
@@ -32,7 +32,7 @@ func (s *Conn) HandleCmdPushStreamData(pbuf *packet.Buffer) {
 	}
 }
 
-func (s *Conn) HandleCmdPushStreamDataAck(pbuf *packet.Buffer) {
+func (s *Stream) HandleCmdPushStreamDataAck(pbuf *packet.Buffer) {
 	size := pbuf.ACKInfo()
 	atomic.AddInt32(&s.bucketSz, int32(size))
 	atomic.AddInt64(&s.counter.IncreaseBucket, int64(size))
@@ -46,7 +46,7 @@ func (s *Conn) HandleCmdPushStreamDataAck(pbuf *packet.Buffer) {
 // HandleCmdCloseStream 收到对端的close请求
 // * 说明对端已经不会再发送数据，可以安全关闭读状态
 // * 由于对端已经请求关闭，所以本地应该尽快关闭write状态，并告知对面
-func (s *Conn) HandleCmdCloseStream(pbuf *packet.Buffer) {
+func (s *Stream) HandleCmdCloseStream(pbuf *packet.Buffer) {
 	// step1：响应对端的close请求，停止继续读数据
 	s.CloseRead()
 
@@ -59,6 +59,6 @@ func (s *Conn) HandleCmdCloseStream(pbuf *packet.Buffer) {
 
 // HandleCmdCloseStream 收到对端的closeAck应答
 // * 说明对端已经响应本地发出的close请求，并且停止继续写入数据，所以可以安全关闭读状态
-func (s *Conn) HandleCmdCloseStreamAck(pbuf *packet.Buffer) {
+func (s *Stream) HandleCmdCloseStreamAck(pbuf *packet.Buffer) {
 	s.CloseRead()
 }

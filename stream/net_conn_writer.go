@@ -9,34 +9,7 @@ import (
 	"time"
 )
 
-func (s *Conn) CloseRead() error {
-	s.rmut.Lock()
-	defer s.rmut.Unlock()
-
-	if s.rclosed {
-		return errors.New("stream closed, pbuf of close ignored")
-	}
-
-	s.rclosed = true
-	close(s.bytesChan)
-
-	return nil
-}
-
-// CloseWrite 设置写状态为不可写，并且告诉对端
-func (s *Conn) CloseWrite() error {
-	s.wmut.Lock()
-	defer s.wmut.Unlock()
-
-	if s.wclosed {
-		return errors.New("close on closed conn")
-	}
-
-	s.wclosed = true
-	return nil
-}
-
-func (s *Conn) Write(buf []byte) (int, error) {
+func (s *Stream) Write(buf []byte) (int, error) {
 	var buflen = len(buf)
 	var wn int
 	const sz = DefaultSplitSize
@@ -82,7 +55,7 @@ func (s *Conn) Write(buf []byte) (int, error) {
 }
 
 // write 一次调用最大支持64KB传输
-func (s *Conn) write(buf []byte) (int, error) {
+func (s *Stream) write(buf []byte) (int, error) {
 	s.wmut.Lock()
 	defer s.wmut.Unlock()
 
@@ -99,7 +72,7 @@ func (s *Conn) write(buf []byte) (int, error) {
 	return len(buf), nil
 }
 
-func (s *Conn) writeACK(n uint16) {
+func (s *Stream) writeACK(n uint16) {
 	s.wmut.Lock()
 	defer s.wmut.Unlock()
 

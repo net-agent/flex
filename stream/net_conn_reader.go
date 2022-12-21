@@ -31,7 +31,7 @@ import (
 // 	close(s.bytesChan)
 // }
 
-func (s *Conn) Read(dist []byte) (int, error) {
+func (s *Stream) Read(dist []byte) (int, error) {
 	if len(s.currBuf) == 0 {
 		select {
 		case buf, ok := <-s.bytesChan:

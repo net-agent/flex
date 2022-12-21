@@ -4,10 +4,10 @@ import (
 	"github.com/net-agent/flex/v2/packet"
 )
 
-func Pipe() (*Conn, *Conn) {
+func Pipe() (*Stream, *Stream) {
 	pc1, pc2 := packet.Pipe()
 
-	copybuf := func(s *Conn, src packet.Conn) {
+	copybuf := func(s *Stream, src packet.Conn) {
 		for {
 			pbuf, err := src.ReadBuffer()
 			if err != nil {

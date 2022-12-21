@@ -21,13 +21,7 @@ const (
 	DefaultReadTimeout       = time.Minute * 10 // 此参数设置过小会导致长连接容易断开
 )
 
-type OpenResp struct {
-	ErrCode int
-	ErrMsg  string
-	DistIP  uint16
-}
-
-type Conn struct {
+type Stream struct {
 	*Sender
 	isDialer             bool
 	dialer               string
@@ -44,11 +38,8 @@ type Conn struct {
 	rDeadlineGuard *DeadlineGuard
 
 	// for writer
-	wmut    sync.Mutex
-	wclosed bool
-	// pwriter        packet.Writer
-	pushBuf        *packet.Buffer
-	pushAckBuf     *packet.Buffer
+	wmut           sync.Mutex
+	wclosed        bool
 	bucketSz       int32
 	bucketEv       chan struct{}
 	wDeadlineGuard *DeadlineGuard
@@ -57,11 +48,11 @@ type Conn struct {
 	counter Counter
 }
 
-func (s *Conn) String() string { return fmt.Sprintf("<%v,%v>", s.local.String(), s.remote.String()) }
-func (s *Conn) State() string  { return fmt.Sprintf("%v %v", s.String(), s.counter.String()) }
+func (s *Stream) String() string { return fmt.Sprintf("<%v,%v>", s.local.String(), s.remote.String()) }
+func (s *Stream) State() string  { return fmt.Sprintf("%v %v", s.String(), s.counter.String()) }
 
-func New(pwriter packet.Writer, isDialer bool) *Conn {
-	return &Conn{
+func New(pwriter packet.Writer, isDialer bool) *Stream {
+	return &Stream{
 		Sender:         NewSender(pwriter),
 		isDialer:       isDialer,
 		dialer:         "self",
@@ -73,33 +64,17 @@ func New(pwriter packet.Writer, isDialer bool) *Conn {
 	}
 }
 
-func (s *Conn) Dialer() string {
+func (s *Stream) Dialer() string {
 	if s.isDialer {
 		return "self"
 	}
 	return s.dialer
 }
 
-func (s *Conn) SetDialer(dialer string) error {
+func (s *Stream) SetDialer(dialer string) error {
 	if s.isDialer {
 		return errors.New("conn is dialer, can't set new dialer info")
 	}
 	s.dialer = dialer
-	return nil
-}
-
-func (s *Conn) Close() error {
-	var err error
-
-	err = s.CloseWrite()
-	if err != nil {
-		return err
-	}
-
-	err = s.SendCmdClose()
-	if err != nil {
-		return err
-	}
-
 	return nil
 }

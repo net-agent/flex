@@ -31,13 +31,13 @@ func (guard *DeadlineGuard) Set(t time.Time, callback func()) error {
 	return nil
 }
 
-func (s *Conn) SetDeadline(t time.Time) error {
+func (s *Stream) SetDeadline(t time.Time) error {
 	s.SetReadDeadline(t)
 	s.SetWriteDeadline(t)
 	return nil
 }
 
-func (s *Conn) SetWriteDeadline(t time.Time) error {
+func (s *Stream) SetWriteDeadline(t time.Time) error {
 	if s.wclosed {
 		return errors.New("writer closed")
 	}
@@ -47,7 +47,7 @@ func (s *Conn) SetWriteDeadline(t time.Time) error {
 	})
 }
 
-func (s *Conn) SetReadDeadline(t time.Time) error {
+func (s *Stream) SetReadDeadline(t time.Time) error {
 	if s.rclosed {
 		return errors.New("reader closed")
 	}
