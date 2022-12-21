@@ -16,19 +16,17 @@ const (
 	DefaultSplitSize    = 63 * KB
 	DefaultBytesChanCap = 4 * DefaultBucketSize / DefaultSplitSize
 
-	DefaultDialTimeout       = time.Second * 5  // 此参数设置应该考虑网络延时，延时大的情况下需设置大一些
-	DefaultAppendDataTimeout = time.Second * 2  // 此参数设置过小会导致丢包。过大会导致全局阻塞
-	DefaultReadTimeout       = time.Minute * 10 // 此参数设置过小会导致长连接容易断开
+	DefaultAppendDataTimeout  = time.Second * 2  // 此参数设置过小会导致丢包。过大会导致全局阻塞
+	DefaultReadTimeout        = time.Minute * 10 // 此参数设置过小会导致长连接容易断开
+	DefaultWaitDataAckTimeout = DefaultReadTimeout
 )
 
 type Stream struct {
 	*Sender
-	isDialer             bool
-	dialer               string
-	local                addr
-	localIP, localPort   uint16
-	remote               addr
-	remoteIP, remotePort uint16
+	isDialer bool
+	dialer   string
+	local    addr
+	remote   addr
 
 	// for reader
 	rmut           sync.RWMutex
@@ -44,8 +42,16 @@ type Stream struct {
 	bucketEv       chan struct{}
 	wDeadlineGuard *DeadlineGuard
 
+	// for closer
+	closeAckCh chan struct{}
+
 	// counter
 	counter Counter
+
+	// variables
+	appendDataTimeout  time.Duration
+	readTimeout        time.Duration
+	waitDataAckTimeout time.Duration
 }
 
 func (s *Stream) String() string { return fmt.Sprintf("<%v,%v>", s.local.String(), s.remote.String()) }
@@ -53,14 +59,18 @@ func (s *Stream) State() string  { return fmt.Sprintf("%v %v", s.String(), s.cou
 
 func New(pwriter packet.Writer, isDialer bool) *Stream {
 	return &Stream{
-		Sender:         NewSender(pwriter),
-		isDialer:       isDialer,
-		dialer:         "self",
-		bytesChan:      make(chan []byte, DefaultBytesChanCap),
-		bucketSz:       DefaultBucketSize,
-		bucketEv:       make(chan struct{}, 16),
-		rDeadlineGuard: &DeadlineGuard{},
-		wDeadlineGuard: &DeadlineGuard{},
+		Sender:             NewSender(pwriter),
+		isDialer:           isDialer,
+		dialer:             "self",
+		bytesChan:          make(chan []byte, DefaultBytesChanCap),
+		bucketSz:           DefaultBucketSize,
+		bucketEv:           make(chan struct{}, 16),
+		rDeadlineGuard:     &DeadlineGuard{},
+		wDeadlineGuard:     &DeadlineGuard{},
+		closeAckCh:         make(chan struct{}, 1),
+		appendDataTimeout:  DefaultAppendDataTimeout,
+		readTimeout:        DefaultReadTimeout,
+		waitDataAckTimeout: DefaultWaitDataAckTimeout,
 	}
 }
 

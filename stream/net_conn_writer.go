@@ -2,15 +2,16 @@ package stream
 
 import (
 	"errors"
-	"fmt"
-	"log"
 	"runtime"
 	"sync/atomic"
 	"time"
 )
 
+var (
+	ErrWaitForDataAckTimeout = errors.New("wait for dataAck timeout")
+)
+
 func (s *Stream) Write(buf []byte) (int, error) {
-	var buflen = len(buf)
 	var wn int
 	const sz = DefaultSplitSize
 	var slice []byte
@@ -23,9 +24,9 @@ func (s *Stream) Write(buf []byte) (int, error) {
 			select {
 			case <-s.bucketEv:
 				continue
-			case <-time.After(time.Second * 5):
 
-				return wn, fmt.Errorf("bucket dry. writed=%v/%v state=%v", wn, buflen, s.State())
+			case <-time.After(s.waitDataAckTimeout):
+				return wn, ErrWaitForDataAckTimeout
 			}
 		}
 
@@ -60,7 +61,7 @@ func (s *Stream) write(buf []byte) (int, error) {
 	defer s.wmut.Unlock()
 
 	if s.wclosed {
-		return 0, errors.New("write on closed conn")
+		return 0, ErrWriterIsClosed
 	}
 
 	err := s.SendCmdData(buf)
@@ -70,20 +71,4 @@ func (s *Stream) write(buf []byte) (int, error) {
 
 	atomic.AddInt64(&s.counter.Write, int64(len(buf)))
 	return len(buf), nil
-}
-
-func (s *Stream) writeACK(n uint16) {
-	s.wmut.Lock()
-	defer s.wmut.Unlock()
-
-	if s.wclosed {
-		return
-	}
-
-	err := s.SendCmdDataAck(n)
-	if err != nil {
-		log.Println("write push-ack failed")
-	}
-
-	atomic.AddInt64(&s.counter.WriteAck, int64(n))
 }

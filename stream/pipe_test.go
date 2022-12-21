@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -27,6 +28,8 @@ func TestPipe(t *testing.T) {
 
 		err = s1.Close()
 		assert.Nil(t, err)
+
+		<-time.After(time.Millisecond * 100)
 	}()
 
 	buf := make([]byte, len(payload))

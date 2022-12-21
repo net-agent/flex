@@ -2,6 +2,11 @@ package stream
 
 import "errors"
 
+var (
+	ErrWriterIsClosed = errors.New("writer is closed")
+	ErrReaderIsClosed = errors.New("reader is closed")
+)
+
 func (s *Stream) Close() error {
 	var err error
 
@@ -15,7 +20,9 @@ func (s *Stream) Close() error {
 		return err
 	}
 
-	return nil
+	<-s.closeAckCh
+
+	return s.CloseRead()
 }
 
 func (s *Stream) CloseRead() error {
@@ -23,7 +30,7 @@ func (s *Stream) CloseRead() error {
 	defer s.rmut.Unlock()
 
 	if s.rclosed {
-		return errors.New("stream closed, pbuf of close ignored")
+		return ErrReaderIsClosed
 	}
 
 	s.rclosed = true
@@ -38,7 +45,7 @@ func (s *Stream) CloseWrite() error {
 	defer s.wmut.Unlock()
 
 	if s.wclosed {
-		return errors.New("close on closed conn")
+		return ErrWriterIsClosed
 	}
 
 	s.wclosed = true

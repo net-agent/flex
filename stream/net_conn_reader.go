@@ -1,35 +1,14 @@
 package stream
 
 import (
-	"fmt"
+	"errors"
 	"io"
 	"time"
 )
 
-// func (s *Conn) AppendData(buf []byte) {
-// 	if len(buf) > 0 && !s.rclosed {
-// 		select {
-// 		case s.bytesChan <- buf:
-// 			atomic.AddInt64(&s.counter.AppendData, int64(len(buf)))
-// 		case <-time.After(DefaultAppendDataTimeout):
-// 			log.Printf("append data timeout. %v\n", s.String())
-// 		}
-
-// 	} else {
-// 		log.Printf("append data failed\n")
-// 	}
-// }
-
-// func (s *Conn) AppendEOF() {
-// 	s.rmut.Lock()
-// 	defer s.rmut.Unlock()
-
-// 	if s.rclosed {
-// 		return
-// 	}
-// 	s.rclosed = true
-// 	close(s.bytesChan)
-// }
+var (
+	ErrReadFromStreamTimeout = errors.New("read from stream timeout")
+)
 
 func (s *Stream) Read(dist []byte) (int, error) {
 	if len(s.currBuf) == 0 {
@@ -40,8 +19,8 @@ func (s *Stream) Read(dist []byte) (int, error) {
 			}
 			s.currBuf = buf
 
-		case <-time.After(DefaultReadTimeout):
-			return 0, fmt.Errorf("read timeout. %v", s.State())
+		case <-time.After(s.readTimeout):
+			return 0, ErrReadFromStreamTimeout
 		}
 	}
 

@@ -18,7 +18,7 @@ func (s *Stream) HandleCmdPushStreamData(pbuf *packet.Buffer) {
 	}
 
 	if pbuf.PayloadSize() <= 0 {
-		log.Println("empty data payload")
+		log.Println("payload is empty")
 		return
 	}
 
@@ -26,7 +26,7 @@ func (s *Stream) HandleCmdPushStreamData(pbuf *packet.Buffer) {
 	case s.bytesChan <- pbuf.Payload:
 		atomic.AddInt64(&s.counter.AppendData, int64(pbuf.PayloadSize()))
 		return
-	case <-time.After(DefaultAppendDataTimeout):
+	case <-time.After(s.appendDataTimeout):
 		log.Println("append data timeout")
 		return
 	}
@@ -60,5 +60,5 @@ func (s *Stream) HandleCmdCloseStream(pbuf *packet.Buffer) {
 // HandleCmdCloseStream 收到对端的closeAck应答
 // * 说明对端已经响应本地发出的close请求，并且停止继续写入数据，所以可以安全关闭读状态
 func (s *Stream) HandleCmdCloseStreamAck(pbuf *packet.Buffer) {
-	s.CloseRead()
+	s.closeAckCh <- struct{}{}
 }

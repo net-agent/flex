@@ -7,7 +7,7 @@ import (
 func Pipe() (*Stream, *Stream) {
 	pc1, pc2 := packet.Pipe()
 
-	copybuf := func(s *Stream, src packet.Conn) {
+	copybuf := func(s *Stream, src packet.Reader) {
 		for {
 			pbuf, err := src.ReadBuffer()
 			if err != nil {
