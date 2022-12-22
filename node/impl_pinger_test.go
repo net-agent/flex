@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/net-agent/flex/v2/packet"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -50,4 +51,13 @@ func TestPingDomainErr_timeout(t *testing.T) {
 
 	_, err := n1.PingDomain("test2", time.Millisecond*20)
 	assert.Equal(t, err, ErrPingDomainTimeout, "test: ping timeout")
+}
+
+func TestPingDomainAckErr(t *testing.T) {
+	n1, _ := Pipe("test1", "test2")
+
+	ackPbuf := packet.NewBufferWithCmd(packet.CmdPingDomain | packet.CmdACKFlag)
+	n1.HandleCmdPingDomainAck(ackPbuf)
+	n1.ackwaiter.Store(ackPbuf.DistPort(), 1234)
+	n1.HandleCmdPingDomainAck(ackPbuf)
 }

@@ -24,7 +24,7 @@ func (s *Stream) HandleCmdPushStreamData(pbuf *packet.Buffer) {
 
 	select {
 	case s.bytesChan <- pbuf.Payload:
-		atomic.AddInt64(&s.counter.AppendData, int64(pbuf.PayloadSize()))
+		atomic.AddInt64(&s.counter.HandlePushDataSize, int64(pbuf.PayloadSize()))
 		return
 	case <-time.After(s.appendDataTimeout):
 		log.Println("append data timeout")
@@ -35,7 +35,7 @@ func (s *Stream) HandleCmdPushStreamData(pbuf *packet.Buffer) {
 func (s *Stream) HandleCmdPushStreamDataAck(pbuf *packet.Buffer) {
 	size := pbuf.ACKInfo()
 	atomic.AddInt32(&s.bucketSz, int32(size))
-	atomic.AddInt64(&s.counter.IncreaseBucket, int64(size))
+	atomic.AddInt64(&s.counter.HandlePushDataAckSum, int64(size))
 
 	select {
 	case s.bucketEv <- struct{}{}:

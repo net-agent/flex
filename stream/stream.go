@@ -88,3 +88,7 @@ func (s *Stream) SetDialer(dialer string) error {
 	s.dialer = dialer
 	return nil
 }
+
+func (s *Stream) GetReadWriteSize() (int64, int64) {
+	return s.counter.ConnReadSize, s.counter.ConnWriteSize
+}

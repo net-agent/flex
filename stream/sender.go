@@ -20,7 +20,7 @@ type Sender struct {
 	closePbuf    *packet.Buffer
 	closeAckPbuf *packet.Buffer
 
-	dataAckMut sync.Mutex
+	senderMut sync.Mutex
 }
 
 func NewSender(w packet.Writer) *Sender {
@@ -57,22 +57,28 @@ func (s *Sender) SendCmdData(buf []byte) error {
 		return ErrSendDataOversize
 	}
 
+	s.senderMut.Lock()
+	defer s.senderMut.Unlock()
 	s.dataPbuf.SetPayload(buf)
 	return s.WriteBuffer(s.dataPbuf)
 }
 
 // SendCmdDataAck 回复dataAck，调用频率很高，且需要保证线程安全
 func (s *Sender) SendCmdDataAck(n uint16) error {
-	s.dataAckMut.Lock()
-	defer s.dataAckMut.Unlock()
+	s.senderMut.Lock()
+	defer s.senderMut.Unlock()
 	s.dataAckPbuf.SetACKInfo(n)
 	return s.WriteBuffer(s.dataAckPbuf)
 }
 
 func (s *Sender) SendCmdClose() error {
+	s.senderMut.Lock()
+	defer s.senderMut.Unlock()
 	return s.WriteBuffer(s.closePbuf)
 }
 
 func (s *Sender) SendCmdCloseAck() error {
+	s.senderMut.Lock()
+	defer s.senderMut.Unlock()
 	return s.WriteBuffer(s.closeAckPbuf)
 }
