@@ -69,6 +69,6 @@ func (s *Stream) write(buf []byte) (int, error) {
 		return 0, err
 	}
 
-	atomic.AddInt64(&s.counter.Write, int64(len(buf)))
+	atomic.AddInt64(&s.counter.ConnWriteSize, int64(len(buf)))
 	return len(buf), nil
 }

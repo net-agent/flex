@@ -3,6 +3,8 @@ package stream
 import (
 	"errors"
 	"io"
+	"log"
+	"sync/atomic"
 	"time"
 )
 
@@ -25,10 +27,17 @@ func (s *Stream) Read(dist []byte) (int, error) {
 	}
 
 	n := copy(dist, s.currBuf)
-	s.counter.Read += int64(n)
+	atomic.AddInt64(&s.counter.ConnReadSize, int64(n))
 	s.currBuf = s.currBuf[n:]
 	if n > 0 {
-		go s.SendCmdDataAck(uint16(n))
+		go func() {
+			err := s.SendCmdDataAck(uint16(n))
+			if err != nil {
+				log.Println("SendCmdDataAck failed:", err)
+				return
+			}
+			atomic.AddInt64(&s.counter.SendDataAck, int64(n))
+		}()
 	}
 	return n, nil
 }

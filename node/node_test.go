@@ -66,31 +66,6 @@ func TestAttachStream(t *testing.T) {
 	assert.Equal(t, err, errStreamNotFound, "getAndDelete flag should work")
 }
 
-func TestPbufRouteLoop(t *testing.T) {
-	ch := make(chan *packet.Buffer, 10)
-	defer close(ch)
-
-	n := New(nil)
-	go n.pbufRouteLoop(ch)
-
-	cmds := []byte{
-		packet.CmdOpenStream,
-		packet.CmdPushStreamData,
-		packet.CmdCloseStream,
-		packet.CmdPingDomain,
-	}
-
-	for _, cmd := range cmds {
-		pbuf1 := packet.NewBuffer(nil)
-		pbuf1.SetCmd(cmd)
-		ch <- pbuf1
-
-		pbuf2 := packet.NewBuffer(nil)
-		pbuf2.SetCmd(cmd | packet.CmdACKFlag)
-		ch <- pbuf2
-	}
-}
-
 func TestKeepalive(t *testing.T) {
 	oldValue := DefaultHeartbeatInterval
 	DefaultHeartbeatInterval = time.Millisecond * 400 // github上设置为100ms可能会失败
@@ -113,20 +88,30 @@ func TestKeepalive(t *testing.T) {
 	// assert.NotNil(t, err)
 }
 
-func TestCoverReadBufUntilFailed(t *testing.T) {
-	n1, n2 := Pipe("test1", "test2")
-	go func() {
-		n2.WriteBuffer(packet.NewBuffer(nil))
-	}()
+func TestCoverWriteBuffer(t *testing.T) {
+	n := New(nil)
 
-	ch := make(chan *packet.Buffer)
-	oldValue := DefaultWriteLocalTimeout
-	DefaultWriteLocalTimeout = time.Millisecond * 200
-	defer func() {
-		DefaultWriteLocalTimeout = oldValue
-	}()
+	// 直接向为设置packet.Conn的node调用WriteBuffer，触发指定错误
+	pbuf := packet.NewBufferWithCmd(packet.CmdPingDomain)
+	pbuf.SetDist(100, 100)
+	err := n.WriteBuffer(pbuf)
+	assert.Equal(t, ErrWriterIsNil, err)
 
-	go n1.readBufferUntilFailed(ch)
+	// n.running是false，触发handlePbuf的错误
+	n.WriteBuffer(packet.NewBuffer(nil))
+}
 
-	<-time.After(DefaultWriteLocalTimeout * 2)
+// 覆盖route的default分支测试
+func TestCoverRoutePbufDefaultBranch(t *testing.T) {
+	cmdChan := make(chan *packet.Buffer, 4)
+	dataChan := make(chan *packet.Buffer, 4)
+	n := New(nil)
+	go n.routeCmdPbufChan(cmdChan)
+	go n.routeDataPbufChan(dataChan)
+
+	cmdChan <- packet.NewBufferWithCmd(0)
+	dataChan <- packet.NewBufferWithCmd(0)
+
+	close(cmdChan)
+	close(dataChan)
 }

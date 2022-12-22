@@ -4,6 +4,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v2/vars"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -56,4 +58,37 @@ func TestNodeListen(t *testing.T) {
 	assert.Nil(t, err, "test dial")
 	c.Close()
 	wg.Wait()
+}
+
+func TestHandleCmdOpenErr(t *testing.T) {
+	n := New(nil)
+	pbuf := packet.NewBuffer(nil)
+	pbuf.SetSrc(100, 100)
+	n.HandleCmdOpenStream(pbuf)
+
+	// 覆盖测试：SID已经存在的情况
+	n1, n2 := Pipe("test1", "test2")
+	l, err := n2.Listen(80)
+	assert.Nil(t, err)
+	assert.NotNil(t, l)
+	go func() {
+		for {
+			_, err := l.Accept()
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	pbuf.SetCmd(packet.CmdOpenStream)
+	pbuf.SetDist(vars.SwitcherIP, 80)
+	pbuf.SetSrc(1, 1000)
+	pbuf.SetPayload([]byte("test2"))
+
+	s, err := n1.dialPbuf(pbuf)
+	assert.Nil(t, err)
+	assert.NotNil(t, s)
+
+	//用重复的pbuf去创建连接，触发AttachStream错误
+	err = n1.WriteBuffer(pbuf)
 }
