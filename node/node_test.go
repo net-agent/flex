@@ -1,6 +1,9 @@
 package node
 
 import (
+	"errors"
+	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,6 +27,10 @@ func TestSet(t *testing.T) {
 	n.SetIP(ip)
 	assert.Equal(t, n.GetDomain(), domain, "call SetDomain")
 	assert.Equal(t, n.GetIP(), ip, "call SetIP/GetIP")
+
+	network := "hellowork"
+	n.SetNetwork(network)
+	assert.Equal(t, network, n.GetNetwork())
 }
 
 func TestRun(t *testing.T) {
@@ -67,25 +74,39 @@ func TestAttachStream(t *testing.T) {
 }
 
 func TestKeepalive(t *testing.T) {
-	oldValue := DefaultHeartbeatInterval
-	DefaultHeartbeatInterval = time.Millisecond * 400 // github上设置为100ms可能会失败
-	defer func() {
-		DefaultHeartbeatInterval = oldValue
+	beat := time.Millisecond * 50
+	c1, c2 := net.Pipe()
+	pc1 := packet.NewWithConn(c1)
+	pc2 := packet.NewWithConn(c2)
+	n1 := New(pc1)
+	n2 := New(pc2)
+	n1.heartbeatInterval = beat * 5
+	n2.heartbeatInterval = beat * 5
+
+	count := 0
+	n2.aliveChecker = func() error {
+		count++
+		if count < 2 {
+			return nil
+		}
+		return errors.New("failed")
+	}
+
+	var waiter sync.WaitGroup
+	waiter.Add(2)
+	go func() {
+		n1.keepalive(time.NewTicker(beat * 1))
+		waiter.Done()
+	}()
+	go func() {
+		n2.keepalive(time.NewTicker(beat * 1))
+		waiter.Done()
 	}()
 
-	n1, n2 := Pipe("test1", "")
-	assert.NotNil(t, n1)
-	assert.NotNil(t, n2)
+	waiter.Wait()
 
-	// 等待几个间隔，触发keepalive的定时ping
-	// 因为默认定时ping的对象是domain=""，所以n1的keepalive会失败，然后关闭连接
-	// 有一方关闭连接后，后面的pingDomain都会应该返回失败
-	<-time.After(DefaultHeartbeatInterval * 3)
-
-	// _, err := n1.PingDomain("", time.Second)
-	// assert.NotNil(t, err)
-	// _, err = n2.PingDomain("test1", time.Second)
-	// assert.NotNil(t, err)
+	n1.aliveChecker = nil
+	n1.keepalive(time.NewTicker(beat * 1))
 }
 
 func TestCoverWriteBuffer(t *testing.T) {

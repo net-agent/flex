@@ -16,8 +16,12 @@ import (
 )
 
 var (
-	errInvalidIPNumber   = errors.New("invalid ip number")
-	errInvalidPortNumber = errors.New("invalid port number")
+	errInvalidIPNumber       = errors.New("invalid ip number")
+	errInvalidPortNumber     = errors.New("invalid port number")
+	ErrLocalPortUsed         = errors.New("local port used")
+	ErrWaitResponseTimeout   = errors.New("wait dial response timeout")
+	ErrWriteDialPbufFailed   = errors.New("write dial buffer failed")
+	ErrUnexpectedNilResponse = errors.New("unexpected nil response")
 )
 
 type dialresp struct {
@@ -28,13 +32,17 @@ type dialresp struct {
 type Dialer struct {
 	host      *Node
 	portm     *numsrc.Manager
+	timeout   time.Duration
 	responses sync.Map // map[uint16]chan *dialresp
 }
 
 func (d *Dialer) Init(host *Node, portm *numsrc.Manager) {
 	d.host = host
 	d.portm = portm
+	d.SetDialTimeout(time.Second * 8)
 }
+
+func (d *Dialer) SetDialTimeout(timeout time.Duration) { d.timeout = timeout }
 
 // Dial 通过address信息创建新的连接
 func (d *Dialer) Dial(addr string) (*stream.Stream, error) {
@@ -100,7 +108,7 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 	defer close(ch)
 	_, loaded := d.responses.LoadOrStore(srcPort, ch)
 	if loaded {
-		return nil, errors.New("local port used")
+		return nil, ErrLocalPortUsed
 	}
 	defer d.responses.Delete(srcPort)
 
@@ -108,14 +116,14 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 	pbuf.SetSrcPort(srcPort)
 	err = d.host.WriteBuffer(pbuf)
 	if err != nil {
-		return nil, err
+		return nil, ErrWriteDialPbufFailed
 	}
 
 	// 第四步：等待ack返回（设置超时时间）
 	select {
 	case resp := <-ch:
 		if resp == nil {
-			return nil, errors.New("open stream failed")
+			return nil, ErrUnexpectedNilResponse
 		}
 		if resp.err != nil {
 			return nil, resp.err
@@ -123,8 +131,8 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 		srcPort = 0
 		resp.stream.SetRemoteDomain(remoteDomain)
 		return resp.stream, nil
-	case <-time.After(time.Second * 8):
-		return nil, errors.New("dial timeout")
+	case <-time.After(d.timeout):
+		return nil, ErrWaitResponseTimeout
 	}
 }
 
@@ -154,11 +162,11 @@ func (d *Dialer) HandleCmdOpenStreamAck(pbuf *packet.Buffer) {
 		d.host.domain, pbuf.DistIP(), pbuf.DistPort(),
 		"", pbuf.SrcIP(), pbuf.SrcPort(),
 	)
-	defer func() {
-		if s != nil {
-			s.Close()
-		}
-	}()
+	// defer func() {
+	// 	if s != nil {
+	// 		s.Close()
+	// 	}
+	// }()
 
 	err := d.host.AttachStream(s, pbuf.SID())
 	if err != nil {

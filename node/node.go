@@ -41,7 +41,8 @@ type Node struct {
 	domain  string
 	ip      uint16
 
-	onceClose sync.Once
+	onceClose    sync.Once
+	aliveChecker func() error
 }
 
 func New(conn packet.Conn) *Node {
@@ -62,6 +63,10 @@ func NewWithOptions(conn packet.Conn, portm *numsrc.Manager, heartbeatInterval, 
 	node.Dialer.Init(node, portm)
 	node.Pinger.Init(node)
 	node.DataHub.Init(portm)
+	node.aliveChecker = func() error {
+		_, err := node.PingDomain("", time.Second*2)
+		return err
+	}
 
 	return node
 }
@@ -89,7 +94,7 @@ func (node *Node) Run() {
 	go node.routeDataPbufChan(node.dataChan)
 
 	// 创建一个计时器，用于定时探活
-	ticker := time.NewTicker(DefaultHeartbeatInterval)
+	ticker := time.NewTicker(node.heartbeatInterval)
 	defer ticker.Stop()
 	go node.keepalive(ticker)
 
@@ -206,11 +211,16 @@ func (node *Node) routeDataPbufChan(ch chan *packet.Buffer) {
 
 func (node *Node) keepalive(ticker *time.Ticker) {
 	for range ticker.C {
-		if time.Since(node.lastWriteTime) < DefaultHeartbeatInterval {
+		if time.Since(node.lastWriteTime) < node.heartbeatInterval {
 			continue
 		}
 
-		_, err := node.PingDomain("", time.Second*3)
+		if node.aliveChecker == nil {
+			log.Println("keepalive error: alive checker is nil")
+			return
+		}
+		// _, err := node.PingDomain("", time.Second*3)
+		err := node.aliveChecker()
 		if err == nil {
 			continue
 		}

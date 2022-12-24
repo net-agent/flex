@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v2/stream"
 	"github.com/net-agent/flex/v2/vars"
 	"github.com/stretchr/testify/assert"
 )
@@ -49,7 +50,11 @@ func TestNodeListen(t *testing.T) {
 		_, err := l.Accept()
 		assert.Nil(t, err, "accept should be ok")
 
-		l.Close()
+		err = l.Close()
+		assert.Nil(t, err)
+		err = l.Close()
+		assert.Equal(t, ErrListenerClosed, err)
+
 		_, err = l.Accept()
 		assert.NotNil(t, err, "test: accept close listener")
 	}()
@@ -90,5 +95,14 @@ func TestHandleCmdOpenErr(t *testing.T) {
 	assert.NotNil(t, s)
 
 	//用重复的pbuf去创建连接，触发AttachStream错误
-	err = n1.WriteBuffer(pbuf)
+	n1.WriteBuffer(pbuf)
+}
+
+func TestAcceptErr(t *testing.T) {
+	l := &Listener{}
+
+	l.streams = make(chan *stream.Stream, 10)
+	l.streams <- nil
+	_, err := l.Accept()
+	assert.Equal(t, ErrUnexpectedNilStream, err)
 }

@@ -17,6 +17,7 @@ var (
 	ErrListenerClosed        = errors.New("listener closed")
 	ErrListenerNotFound      = errors.New("listener not found")
 	ErrConvertListenerFailed = errors.New("convert listener failed")
+	ErrUnexpectedNilStream   = errors.New("unexpected nil stream accepted")
 )
 
 type ListenHub struct {
@@ -119,7 +120,7 @@ func (l *Listener) Accept() (net.Conn, error) {
 	}
 	s := <-l.streams
 	if s == nil {
-		return nil, errors.New("unexpected nil stream")
+		return nil, ErrUnexpectedNilStream
 	}
 	return s, nil
 }
@@ -129,7 +130,7 @@ func (l *Listener) Close() error {
 	defer l.locker.Unlock()
 
 	if l.closed {
-		return errors.New("close on closed listener")
+		return ErrListenerClosed
 	}
 
 	l.closed = true

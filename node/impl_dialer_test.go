@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/net-agent/flex/v2/numsrc"
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/vars"
 	"github.com/stretchr/testify/assert"
@@ -226,7 +227,80 @@ func TestHandleCmdOpenAck(t *testing.T) {
 	n.responses.Store(port, make(chan *dialresp, 1))
 	n.HandleCmdOpenStreamAck(pbuf)
 
-	// branch: attach stream failed
+	// branch: attach stream failed（上一个branch中，sid已经被登记）
 	n.responses.Store(port, make(chan *dialresp, 1))
 	n.HandleCmdOpenStreamAck(pbuf)
+}
+
+func TestDialBufErr_portmAndRepsonse(t *testing.T) {
+	portm, err := numsrc.NewManager(1, 1, 2)
+	assert.Nil(t, err)
+
+	c1, _ := net.Pipe()
+	pc := packet.NewWithConn(c1)
+	pc.SetWriteTimeout(time.Millisecond * 100)
+	n := New(pc)
+
+	d1 := &Dialer{}
+	d1.Init(n, portm)
+
+	// d1.SetDialTimeout(time.Millisecond * 200)
+
+	// 测试用例：提前把response设置好，触发local port used错误
+	d1.responses.Store(uint16(1), nil)
+	pbuf := packet.NewBuffer(nil)
+	_, err = d1.dialPbuf(pbuf)
+	assert.Equal(t, ErrLocalPortUsed, err)
+
+	// 测试用例：提前把free port申请完，触发无可用端口错误
+	for {
+		_, err = portm.GetFreeNumberSrc()
+		if err != nil {
+			break
+		}
+	}
+	_, err = d1.dialPbuf(pbuf)
+	assert.NotNil(t, err)
+
+}
+
+func TestDialBuffErr_timeoutAndWriteFailed(t *testing.T) {
+	portm, err := numsrc.NewManager(1, 1, 20)
+	assert.Nil(t, err)
+
+	c1, _ := net.Pipe()
+	pc := packet.NewWithConn(c1)
+	pc.SetWriteTimeout(time.Millisecond * 100)
+	n := New(pc)
+
+	d1 := &Dialer{}
+	d1.Init(n, portm)
+
+	// 测试用例：正常发送，触发timeout（因为对端不会有应答）
+	// portm(1)
+	pbuf := packet.NewBuffer(nil)
+	pbuf.SetDistIP(0) // 默认0，会进入本地循环，触发timeout
+	d1.SetDialTimeout(time.Millisecond * 100)
+	_, err = d1.dialPbuf(pbuf)
+	assert.Equal(t, ErrWaitResponseTimeout, err)
+
+	// 测试用例：关闭pipe，触发write错误
+	// portm(2)
+	pbuf.SetDistIP(1) // 会通过pipe发送，触发writetimeout
+	_, err = d1.dialPbuf(pbuf)
+	assert.Equal(t, ErrWriteDialPbufFailed, err)
+
+	// 测试用例：通过往本地发送，进入等待环节，然后自己用nil response触发错误
+	// portm(3)
+	go func() {
+		<-time.After(time.Millisecond * 100)
+		it, found := d1.responses.Load(uint16(3))
+		assert.True(t, found)
+		ch := it.(chan *dialresp)
+		ch <- nil
+	}()
+	pbuf.SetDistIP(0)
+	d1.SetDialTimeout(time.Millisecond * 300)
+	_, err = d1.dialPbuf(pbuf)
+	assert.Equal(t, ErrUnexpectedNilResponse, err)
 }

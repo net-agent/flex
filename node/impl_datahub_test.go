@@ -1,8 +1,14 @@
 package node
 
 import (
+	"bytes"
+	"io"
+	"log"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/stream"
 	"github.com/stretchr/testify/assert"
 )
@@ -36,30 +42,68 @@ func TestGetStreamBySID(t *testing.T) {
 	assert.True(t, loaded, "test loadAndDelete flag")
 }
 
-// func TestCloseStreamAndReleasePort(t *testing.T) {
-// 	portm, _ := numsrc.NewManager(1, 100, 1000)
-// 	hub := &DataHub{}
-// 	hub.Init(portm)
+func TestHandleErr_SIDNotFound(t *testing.T) {
+	d := &DataHub{}
+	pbuf := packet.NewBufferWithCmd(0)
 
-// 	// prepare context
-// 	isDialer := true // dialer的src port在使用完后需要归还
-// 	s := stream.New(nil, isDialer)
-// 	pbuf := packet.NewBuffer(nil)
-// 	pbuf.SetCmd(packet.CmdCloseStream)
-// 	pbuf.SetSrc(1, 2)
-// 	pbuf.SetDist(3, 4)
-// 	sid := pbuf.SID()
-// 	err := hub.AttachStream(s, sid)
-// 	assert.Nil(t, err, "AttachStream should be ok")
+	d.HandleCmdPushStreamData(pbuf)
+	d.HandleCmdPushStreamDataAck(pbuf)
+	d.HandleCmdCloseStream(pbuf)
+	d.HandleCmdCloseStreamAck(pbuf)
+}
 
-// 	// test close handler
-// 	hub.HandleCmdCloseStream(pbuf)
+func TestStreamList(t *testing.T) {
+	n1, n2 := Pipe("test1", "test2")
 
-// 	// test close ack handler
-// 	isDialer = false
-// 	s2 := stream.New(nil, isDialer)
-// 	pbuf.SetCmd(packet.CmdCloseStream | packet.CmdACKFlag)
-// 	err = hub.AttachStream(s2, sid)
-// 	assert.Nil(t, err, "AttachStream should be ok")
-// 	hub.HandleCmdCloseStreamAck(pbuf)
-// }
+	l, err := n2.Listen(80)
+	assert.Nil(t, err)
+
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go io.Copy(c, c)
+		}
+	}()
+
+	var closeWaiter sync.WaitGroup
+	var sendWaiter sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		sendWaiter.Add(1)
+		closeWaiter.Add(1)
+		go func() {
+			start := time.Now()
+			payload := make([]byte, 64*1024*1024)
+			c, err := n1.Dial("test2:80")
+			assert.Nil(t, err)
+
+			go c.Write(payload)
+			buf := make([]byte, len(payload))
+			_, err = io.ReadFull(c, buf)
+			assert.Nil(t, err)
+			assert.True(t, bytes.Equal(payload, buf))
+			sendWaiter.Done()
+
+			<-time.After(time.Millisecond * 100)
+			c.Close()
+			log.Printf("send data ok: %v\n", time.Since(start))
+			closeWaiter.Done()
+		}()
+	}
+
+	sendWaiter.Wait()
+	list1 := n1.GetDataStreamList()
+	list2 := n2.GetDataStreamList()
+	assert.Equal(t, len(list1), len(list2))
+	assert.NotEqual(t, len(list1), 0)
+	log.Println("len(list1)=", len(list1))
+
+	closeWaiter.Wait()
+	list1 = n1.GetDataStreamList()
+	list2 = n2.GetDataStreamList()
+	assert.Equal(t, len(list1), len(list2))
+	assert.Equal(t, len(list1), 0)
+	log.Println("len(list1)=", len(list1))
+}
