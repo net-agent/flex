@@ -103,7 +103,7 @@ func TestReadErr_Header(t *testing.T) {
 	var err error
 
 	// 设置超时时间，加快超时
-	DefaultReadDeadline = time.Millisecond * 100
+	r.SetReadTimeout(time.Millisecond * 100)
 
 	_, err = r.ReadBuffer()
 	assert.Nil(t, err)
@@ -128,7 +128,7 @@ func TestReadErr_Payload(t *testing.T) {
 	var err error
 
 	// 设置超时时间，加快超时
-	DefaultReadDeadline = time.Millisecond * 100
+	r.SetReadTimeout(time.Millisecond * 100)
 
 	_, err = r.ReadBuffer()
 	assert.Nil(t, err)

@@ -16,52 +16,56 @@ var (
 
 type Writer interface {
 	WriteBuffer(buf *Buffer) error
+	SetWriteTimeout(dur time.Duration)
 }
 
 // Writer implements with net.Conn
 type connWriter struct {
-	conn net.Conn
+	conn         net.Conn
+	writeTimeout time.Duration
 }
 
 func NewConnWriter(conn net.Conn) Writer {
-	return &connWriter{conn}
+	return &connWriter{conn, DefaultWriteTimeout}
 }
 
-func (writer *connWriter) WriteBuffer(buf *Buffer) (retErr error) {
+func (w *connWriter) SetWriteTimeout(dur time.Duration) { w.writeTimeout = dur }
+
+func (w *connWriter) WriteBuffer(buf *Buffer) (retErr error) {
+	if buf == nil {
+		return nil
+	}
 	if LOG_WRITE_BUFFER_HEADER {
 		start := time.Now()
 		defer func() {
 			log.Printf("[W]%v timeuse=%v\n", buf.HeaderString(), time.Since(start))
 		}()
 	}
-	err := writer.conn.SetWriteDeadline(time.Now().Add(DefaultWriteDeadline))
+	err := w.conn.SetWriteDeadline(time.Now().Add(w.writeTimeout))
 	if err != nil {
 		return err
 	}
-	_, err = writer.conn.Write(buf.Head[:])
-	if err != nil {
-		return ErrWriteHeaderFailed
-	}
-	if len(buf.Payload) > 0 {
-		_, err = writer.conn.Write(buf.Payload)
-		if err != nil {
-			return ErrWritePayloadFailed
-		}
-	}
-	writer.conn.SetWriteDeadline(time.Time{})
-	return nil
+	_, err = buf.WriteTo(w.conn)
+	w.conn.SetWriteDeadline(time.Time{})
+	return err
 }
 
 // Writer implements with websocket.Conn
 type wsWriter struct {
-	wsconn *websocket.Conn
+	wsconn       *websocket.Conn
+	writeTimeout time.Duration
 }
 
 func NewWsWriter(wsconn *websocket.Conn) Writer {
-	return &wsWriter{wsconn}
+	return &wsWriter{wsconn, DefaultWriteTimeout}
 }
 
-func (writer *wsWriter) WriteBuffer(buf *Buffer) (retErr error) {
+func (w *wsWriter) SetWriteTimeout(dur time.Duration) { w.writeTimeout = dur }
+
+func (w *wsWriter) WriteBuffer(buf *Buffer) (retErr error) {
+	if buf == nil {
+		return nil
+	}
 	if LOG_WRITE_BUFFER_HEADER {
 		start := time.Now()
 		defer func() {
@@ -69,23 +73,13 @@ func (writer *wsWriter) WriteBuffer(buf *Buffer) (retErr error) {
 		}()
 	}
 
-	writer.wsconn.SetWriteDeadline(time.Now().Add(DefaultWriteDeadline))
-	w, err := writer.wsconn.NextWriter(websocket.BinaryMessage)
+	w.wsconn.SetWriteDeadline(time.Now().Add(w.writeTimeout))
+	nw, err := w.wsconn.NextWriter(websocket.BinaryMessage)
 	if err != nil {
 		return err
 	}
-	defer w.Close()
+	defer nw.Close()
 
-	_, err = w.Write(buf.Head[:])
-	if err != nil {
-		return err
-	}
-	if len(buf.Payload) > 0 {
-		_, err = w.Write(buf.Payload)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
+	_, err = buf.WriteTo(nw)
+	return err
 }

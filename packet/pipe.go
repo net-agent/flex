@@ -63,6 +63,11 @@ func (wp *wsPiper) Pipe() (Conn, Conn) {
 	pc1 := NewWithWs(c)
 	pc2 := <-wp.pcChan
 
+	pc1.SetReadTimeout(DefaultReadTimeout)
+	pc1.SetWriteTimeout(DefaultWriteTimeout)
+	pc2.SetReadTimeout(DefaultReadTimeout)
+	pc2.SetWriteTimeout(DefaultWriteTimeout)
+
 	return pc1, pc2
 }
 

@@ -19,16 +19,20 @@ var (
 
 type Reader interface {
 	ReadBuffer() (*Buffer, error)
+	SetReadTimeout(time.Duration)
 }
 
 // Reader implements with net.Conn
 type connReader struct {
-	conn net.Conn
+	conn        net.Conn
+	readTimeout time.Duration
 }
 
 func NewConnReader(conn net.Conn) Reader {
-	return &connReader{conn}
+	return &connReader{conn, DefaultReadTimeout}
 }
+
+func (reader *connReader) SetReadTimeout(timeout time.Duration) { reader.readTimeout = timeout }
 
 func (reader *connReader) ReadBuffer() (retBuf *Buffer, retErr error) {
 	if LOG_READ_BUFFER_HEADER {
@@ -42,7 +46,7 @@ func (reader *connReader) ReadBuffer() (retBuf *Buffer, retErr error) {
 	}
 	// 如果30秒读不到任何数据，则会报错关闭
 	// 所以心跳包的时间间隔不应该超过这个数值
-	err := reader.conn.SetReadDeadline(time.Now().Add(DefaultReadDeadline))
+	err := reader.conn.SetReadDeadline(time.Now().Add(reader.readTimeout))
 	if err != nil {
 		return nil, ErrSetDeadlineFailed
 	}
@@ -71,12 +75,15 @@ func (reader *connReader) ReadBuffer() (retBuf *Buffer, retErr error) {
 //
 
 type wsReader struct {
-	wsconn *websocket.Conn
+	wsconn      *websocket.Conn
+	readTimeout time.Duration
 }
 
 func NewWsReader(wsconn *websocket.Conn) Reader {
-	return &wsReader{wsconn}
+	return &wsReader{wsconn, DefaultReadTimeout}
 }
+
+func (reader *wsReader) SetReadTimeout(timeout time.Duration) { reader.readTimeout = timeout }
 
 func (reader *wsReader) ReadBuffer() (retBuf *Buffer, retErr error) {
 	if LOG_READ_BUFFER_HEADER {
@@ -90,7 +97,7 @@ func (reader *wsReader) ReadBuffer() (retBuf *Buffer, retErr error) {
 	}
 	buf := NewBuffer(nil)
 
-	reader.wsconn.SetReadDeadline(time.Now().Add(DefaultReadDeadline))
+	reader.wsconn.SetReadDeadline(time.Now().Add(reader.readTimeout))
 	mtype, data, err := reader.wsconn.ReadMessage()
 	if err != nil {
 		return nil, err

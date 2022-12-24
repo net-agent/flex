@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/net-agent/flex/v2/vars"
+	"github.com/stretchr/testify/assert"
 )
 
 type testCase struct {
@@ -27,70 +28,35 @@ func TestSetGet(t *testing.T) {
 		buf.SetHeader(c.cmd, c.distIP, c.distPort, c.srcIP, c.srcPort)
 		buf.SetPayload(c.payload)
 
-		if buf.Cmd() != c.cmd {
-			t.Error("cmd not equal")
-			return
-		}
-		if buf.DistIP() != c.distIP {
-			t.Error("dist ip not equal")
-			return
-		}
-		if buf.DistPort() != c.distPort {
-			t.Error("dist port not equal")
-			return
-		}
-		if buf.SrcIP() != c.srcIP {
-			t.Error("src ip not equal")
-			return
-		}
-		if buf.SrcPort() != c.srcPort {
-			t.Error("src port not equal")
-			return
-		}
-		if !bytes.Equal(buf.Payload, c.payload) {
-			t.Error("payload not equal")
-			return
-		}
+		assert.Equal(t, c.cmd, buf.Cmd())
+		assert.Equal(t, c.distIP, buf.DistIP())
+		assert.Equal(t, c.distPort, buf.DistPort())
+		assert.Equal(t, c.srcIP, buf.SrcIP())
+		assert.Equal(t, c.srcPort, buf.SrcPort())
+		assert.True(t, bytes.Equal(buf.Payload, c.payload))
 	}
 }
 
 func TestIsACK(t *testing.T) {
-	pbuf := NewBuffer(nil)
-	pbuf.SetCmd(CmdOpenStream | CmdACKFlag)
-	if !pbuf.IsACK() {
-		t.Error("not equal")
-		return
-	}
+	pbuf := NewBufferWithCmd(CmdOpenStream | CmdACKFlag)
+	assert.True(t, pbuf.IsACK())
 	pbuf.SetCmd(CmdOpenStream)
-	if pbuf.IsACK() {
-		t.Error("not equal")
-		return
-	}
+	assert.False(t, pbuf.IsACK())
 }
 
 func TestSID(t *testing.T) {
 	pbuf := NewBuffer(nil)
 	pbuf.SetHeader(0, 0, 0, 0, 0)
-	if pbuf.SID() != 0 {
-		t.Error("not equal")
-		return
-	}
+	assert.Equal(t, uint64(0), pbuf.SID())
+
 	pbuf.SetHeader(0, 0xffff, 0xffff, 0xffff, 0xffff)
-	if pbuf.SID() != 0xffffFFFFffffFFFF {
-		t.Error("not equal")
-		return
-	}
+	assert.Equal(t, uint64(0xffffFFFFffffFFFF), pbuf.SID())
+
 	pbuf.SetHeader(0, 12, 34, 56, 78)
-	sidstr := pbuf.SIDStr()
-	if sidstr != "56:78-12:34" {
-		t.Error("not equal", sidstr)
-		return
-	}
+	assert.Equal(t, "56:78-12:34", pbuf.SIDStr())
+
 	pbuf.SwapSrcDist()
-	if pbuf.SIDStr() != "12:34-56:78" {
-		t.Error("not euqal")
-		return
-	}
+	assert.Equal(t, "12:34-56:78", pbuf.SIDStr())
 }
 
 func TestPayload(t *testing.T) {
@@ -100,26 +66,14 @@ func TestPayload(t *testing.T) {
 	// test base payload
 	pbuf.SetCmd(CmdOpenStream)
 	pbuf.SetPayload(payload)
-	if pbuf.PayloadSize() != uint16(len(payload)) {
-		t.Error("not equal")
-		return
-	}
-	if pbuf.ACKInfo() != 0 {
-		t.Error("not equal")
-		return
-	}
+	assert.Equal(t, uint16(len(payload)), pbuf.PayloadSize())
+	assert.Equal(t, uint16(0), pbuf.ACKInfo())
 
 	// test base ack
 	pbuf.SetCmd(CmdPushStreamData | CmdACKFlag)
 	pbuf.SetACKInfo(10245)
-	if pbuf.PayloadSize() != 0 {
-		t.Error("not equal")
-		return
-	}
-	if pbuf.ACKInfo() != 10245 {
-		t.Error("not equal")
-		return
-	}
+	assert.Equal(t, uint16(0), pbuf.PayloadSize())
+	assert.Equal(t, uint16(10245), pbuf.ACKInfo())
 
 	// test SetOpenAck
 	pbuf.SetCmd(CmdOpenStream)

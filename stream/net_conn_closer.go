@@ -6,8 +6,9 @@ import (
 )
 
 var (
-	ErrWriterIsClosed = errors.New("writer is closed")
-	ErrReaderIsClosed = errors.New("reader is closed")
+	ErrWriterIsClosed      = errors.New("writer is closed")
+	ErrReaderIsClosed      = errors.New("reader is closed")
+	ErrWaitCloseAckTimeout = errors.New("wait close ack timeout")
 )
 
 func (s *Stream) Close() error {
@@ -26,8 +27,8 @@ func (s *Stream) Close() error {
 	select {
 	case <-s.closeAckCh:
 		return s.CloseRead()
-	case <-time.After(time.Second * 2):
-		return errors.New("wait close ack timeout")
+	case <-time.After(s.closeAckTimeout):
+		return ErrWaitCloseAckTimeout
 	}
 }
 

@@ -3,6 +3,7 @@ package packet
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
 
 	"github.com/net-agent/flex/v2/vars"
 )
@@ -40,6 +41,26 @@ func NewBuffer(head *Header) *Buffer {
 		head = &Header{}
 	}
 	return &Buffer{Head: head}
+}
+
+func (buf *Buffer) WriteTo(w io.Writer) (total int64, err error) {
+	n, err := w.Write(buf.Head[:])
+	total = total + int64(n)
+	if err != nil {
+		return total, ErrWriteHeaderFailed
+	}
+
+	if len(buf.Payload) <= 0 {
+		return total, nil
+	}
+
+	n, err = w.Write(buf.Payload)
+	total = total + int64(n)
+	if err != nil {
+		return total, ErrWritePayloadFailed
+	}
+
+	return total, nil
 }
 
 func NewBufferWithCmd(cmd byte) *Buffer {

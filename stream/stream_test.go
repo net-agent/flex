@@ -10,41 +10,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// func TestConnStrings(t *testing.T) {
-// 	c := New(nil, true)
-
-// 	c.SetLocal(123, 456)
-// 	c.SetRemote(789, 543)
-
-// 	if c.String() != "<123:456,789:543>" {
-// 		t.Error("not equal")
-// 		return
-// 	}
-
-// 	if c.State() == "" {
-// 		t.Error("unexpected empty state")
-// 		return
-// 	}
-
-// 	if c.Dialer() != "self" {
-// 		t.Error("not equal")
-// 		return
-// 	}
-
-// 	err := c.SetDialer("haah")
-// 	if !strings.HasPrefix(err.Error(), "conn is dialer") {
-// 		t.Error("unexpected err")
-// 		return
-// 	}
-
-// 	c.isDialer = false
-// 	c.SetDialer("hello")
-// 	if c.Dialer() != "hello" {
-// 		t.Error("not equal")
-// 		return
-// 	}
-// }
-
 func TestGetReadWriteSize(t *testing.T) {
 	c1, c2 := net.Pipe()
 	testPipeConn(t, c1, c2)
@@ -89,4 +54,35 @@ func testPipeConn(t *testing.T, conn1, conn2 net.Conn) {
 	}
 	assert.Equal(t, size, readed)
 	assert.True(t, bytes.Equal(readBuf, payload))
+}
+
+func TestSetRemoteDomain(t *testing.T) {
+	s := New(nil)
+	domain := "testdomain"
+
+	s.SetRemoteDomain(domain)
+	assert.Equal(t, domain, s.remoteDomain)
+}
+
+func Test_directionStr(t *testing.T) {
+	type args struct {
+		d int
+	}
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{"1", args{DIRECTION_LOCAL_TO_REMOTE}, "local-remote"},
+		{"2", args{DIRECTION_REMOTE_TO_LOCAL}, "remote-local"},
+		{"3", args{0}, "invalid"},
+		{"4", args{3}, "invalid"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := directionStr(tt.args.d); got != tt.want {
+				t.Errorf("directionStr() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }

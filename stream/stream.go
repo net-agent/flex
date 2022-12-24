@@ -15,6 +15,7 @@ const (
 	DefaultSplitSize    = 63 * KB
 	DefaultBytesChanCap = 4 * DefaultBucketSize / DefaultSplitSize
 
+	DefaultCloseAckTimeout    = time.Second * 2
 	DefaultAppendDataTimeout  = time.Second * 2  // 此参数设置过小会导致丢包。过大会导致全局阻塞
 	DefaultReadTimeout        = time.Minute * 10 // 此参数设置过小会导致长连接容易断开
 	DefaultWaitDataAckTimeout = DefaultReadTimeout
@@ -47,7 +48,8 @@ type Stream struct {
 	wDeadlineGuard *DeadlineGuard
 
 	// for closer
-	closeAckCh chan struct{}
+	closeAckCh      chan struct{}
+	closeAckTimeout time.Duration
 
 	// counter
 	counter Counter
@@ -72,6 +74,7 @@ func New(pwriter packet.Writer) *Stream {
 		rDeadlineGuard:     &DeadlineGuard{},
 		wDeadlineGuard:     &DeadlineGuard{},
 		closeAckCh:         make(chan struct{}, 1),
+		closeAckTimeout:    DefaultCloseAckTimeout,
 		appendDataTimeout:  DefaultAppendDataTimeout,
 		readTimeout:        DefaultReadTimeout,
 		waitDataAckTimeout: DefaultWaitDataAckTimeout,

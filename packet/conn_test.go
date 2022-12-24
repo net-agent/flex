@@ -46,7 +46,7 @@ func TestNetConn(t *testing.T) {
 func TestWebsocket(t *testing.T) {
 	LOG_READ_BUFFER_HEADER = true
 	LOG_WRITE_BUFFER_HEADER = true
-	DefaultReadDeadline = time.Millisecond * 50
+	DefaultReadTimeout = time.Millisecond * 50
 
 	msg := []byte("hello world")
 	buf := NewBuffer(nil)
@@ -106,6 +106,6 @@ func TestWebsocket(t *testing.T) {
 		assert.Nil(t, err)
 		defer c.Close()
 
-		<-time.After(DefaultReadDeadline + time.Millisecond*100)
+		<-time.After(DefaultReadTimeout + time.Millisecond*100)
 	})
 }
