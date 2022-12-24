@@ -7,7 +7,7 @@ import (
 )
 
 func TestDeadline(t *testing.T) {
-	c := New(nil, true)
+	c := New(nil)
 	past := time.Now()
 	<-time.After(10 * time.Millisecond)
 

@@ -8,6 +8,7 @@ import (
 	"github.com/net-agent/flex/v2/packet"
 )
 
+// HandleCmdPushStreamData 处理对端发送过来的数据包
 func (s *Stream) HandleCmdPushStreamData(pbuf *packet.Buffer) {
 	s.rmut.RLock()
 	defer s.rmut.RUnlock()

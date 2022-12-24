@@ -37,8 +37,9 @@ type Node struct {
 	Pinger    // 提供PingDomain实现
 	DataHub   // 处理Data、DataAck、Close、CloseAck
 
-	domain string
-	ip     uint16
+	network string
+	domain  string
+	ip      uint16
 
 	onceClose sync.Once
 }
@@ -65,6 +66,8 @@ func NewWithOptions(conn packet.Conn, portm *numsrc.Manager, heartbeatInterval, 
 	return node
 }
 
+func (node *Node) SetNetwork(n string)     { node.network = n }
+func (node *Node) GetNetwork() string      { return node.network }
 func (node *Node) SetDomain(domain string) { node.domain = domain }
 func (node *Node) GetDomain() string       { return node.domain }
 func (node *Node) SetIP(ip uint16)         { node.ip = ip }

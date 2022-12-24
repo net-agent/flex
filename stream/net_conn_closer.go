@@ -1,6 +1,9 @@
 package stream
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 var (
 	ErrWriterIsClosed = errors.New("writer is closed")
@@ -20,9 +23,12 @@ func (s *Stream) Close() error {
 		return err
 	}
 
-	<-s.closeAckCh
-
-	return s.CloseRead()
+	select {
+	case <-s.closeAckCh:
+		return s.CloseRead()
+	case <-time.After(time.Second * 2):
+		return errors.New("wait close ack timeout")
+	}
 }
 
 func (s *Stream) CloseRead() error {

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/vars"
 	"github.com/stretchr/testify/assert"
 )
@@ -206,4 +207,26 @@ func Test_parseAddress(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandleCmdOpenAck(t *testing.T) {
+	n := New(nil)
+	port := uint16(1234)
+	pbuf := packet.NewBufferWithCmd(packet.CmdOpenStream | packet.CmdACKFlag)
+	pbuf.SetDistPort(port)
+
+	// branch: not found error
+	n.HandleCmdOpenStreamAck(pbuf)
+
+	// branch: convert failed
+	n.responses.Store(port, 1234)
+	n.HandleCmdOpenStreamAck(pbuf)
+
+	// branch: ok
+	n.responses.Store(port, make(chan *dialresp, 1))
+	n.HandleCmdOpenStreamAck(pbuf)
+
+	// branch: attach stream failed
+	n.responses.Store(port, make(chan *dialresp, 1))
+	n.HandleCmdOpenStreamAck(pbuf)
 }

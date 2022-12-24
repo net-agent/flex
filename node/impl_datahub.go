@@ -56,6 +56,18 @@ func (hub *DataHub) GetStreamBySID(sid uint64, getAndDelete bool) (*stream.Strea
 	return c, nil
 }
 
+func (hub *DataHub) GetDataStreamList() []*stream.Stream {
+	list := []*stream.Stream{}
+	hub.streams.Range(func(key, value interface{}) bool {
+		s, ok := value.(*stream.Stream)
+		if ok {
+			list = append(list, s)
+		}
+		return true
+	})
+	return list
+}
+
 // 处理数据包
 func (hub *DataHub) HandleCmdPushStreamData(pbuf *packet.Buffer) {
 	c, err := hub.GetStreamBySID(pbuf.SID(), false)
@@ -82,12 +94,7 @@ func (hub *DataHub) HandleCmdCloseStream(pbuf *packet.Buffer) {
 	}
 
 	s.HandleCmdCloseStream(pbuf)
-
-	port, err := s.GetUsedPort()
-	if err != nil {
-		return
-	}
-	hub.portm.ReleaseNumberSrc(port)
+	hub.portm.ReleaseNumberSrc(s.GetUsedPort())
 }
 
 func (hub *DataHub) HandleCmdCloseStreamAck(pbuf *packet.Buffer) {
@@ -97,10 +104,5 @@ func (hub *DataHub) HandleCmdCloseStreamAck(pbuf *packet.Buffer) {
 	}
 
 	s.HandleCmdCloseStreamAck(pbuf)
-
-	port, err := s.GetUsedPort()
-	if err != nil {
-		return
-	}
-	hub.portm.ReleaseNumberSrc(port)
+	hub.portm.ReleaseNumberSrc(s.GetUsedPort())
 }

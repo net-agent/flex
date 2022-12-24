@@ -52,10 +52,10 @@ func Pipe() (*Stream, *Stream) {
 		}
 	}
 
-	s1 := New(pc1, false)
+	s1 := NewDialStream(pc1, "test1", 1, 1, "test2", 2, 2)
 	go copybuf(s1, pc1)
 
-	s2 := New(pc2, false)
+	s2 := NewAcceptStream(pc2, "test2", 2, 2, "test1", 1, 1)
 	go copybuf(s2, pc2)
 
 	return s1, s2

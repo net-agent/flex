@@ -3,6 +3,7 @@ package stream
 import (
 	"bytes"
 	"io"
+	"log"
 	"math/rand"
 	"sync"
 	"testing"
@@ -16,6 +17,9 @@ func TestPipe(t *testing.T) {
 	rand.Read(payload)
 
 	s1, s2 := Pipe()
+
+	log.Println(s1.State())
+	log.Println(s2.State())
 
 	var wg sync.WaitGroup
 

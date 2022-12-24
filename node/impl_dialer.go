@@ -2,6 +2,7 @@ package node
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"strconv"
@@ -77,6 +78,10 @@ func (d *Dialer) DialIP(ip, port uint16) (*stream.Stream, error) {
 // DialPbuf dial的底层实现
 // 注意：pbuf里的srcPort还需要在writeBuffer前进行确认
 func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
+	remoteDomain := string(pbuf.Payload)
+	if remoteDomain == "" {
+		remoteDomain = fmt.Sprintf("%v", pbuf.DistIP())
+	}
 	// 第一步：选择可用端口。
 	// 如果此函数退出时srcPort非0，需要回收端口
 	srcPort, err := d.portm.GetFreeNumberSrc()
@@ -116,6 +121,7 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 			return nil, resp.err
 		}
 		srcPort = 0
+		resp.stream.SetRemoteDomain(remoteDomain)
 		return resp.stream, nil
 	case <-time.After(time.Second * 8):
 		return nil, errors.New("dial timeout")
@@ -143,9 +149,11 @@ func (d *Dialer) HandleCmdOpenStreamAck(pbuf *packet.Buffer) {
 	//
 	// create and bind stream
 	//
-	s := stream.New(d.host, true)
-	s.SetLocal(pbuf.DistIP(), pbuf.DistPort())
-	s.SetRemote(pbuf.SrcIP(), pbuf.SrcPort())
+	s := stream.NewDialStream(
+		d.host,
+		d.host.domain, pbuf.DistIP(), pbuf.DistPort(),
+		"", pbuf.SrcIP(), pbuf.SrcPort(),
+	)
 	defer func() {
 		if s != nil {
 			s.Close()
