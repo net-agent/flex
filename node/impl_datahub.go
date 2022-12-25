@@ -56,12 +56,12 @@ func (hub *DataHub) GetStreamBySID(sid uint64, getAndDelete bool) (*stream.Strea
 	return c, nil
 }
 
-func (hub *DataHub) GetDataStreamList() []*stream.Stream {
-	list := []*stream.Stream{}
+func (hub *DataHub) GetStreamStateList() []*stream.State {
+	list := []*stream.State{}
 	hub.streams.Range(func(key, value interface{}) bool {
 		s, ok := value.(*stream.Stream)
 		if ok {
-			list = append(list, s)
+			list = append(list, s.GetState())
 		}
 		return true
 	})

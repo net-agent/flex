@@ -56,5 +56,7 @@ func (s *Stream) CloseWrite() error {
 	}
 
 	s.wclosed = true
+	s.state.Closed = time.Now()
+	s.state.IsClosed = true
 	return nil
 }

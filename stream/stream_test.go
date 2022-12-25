@@ -61,7 +61,7 @@ func TestSetRemoteDomain(t *testing.T) {
 	domain := "testdomain"
 
 	s.SetRemoteDomain(domain)
-	assert.Equal(t, domain, s.remoteDomain)
+	assert.Equal(t, domain, s.state.RemoteDomain)
 }
 
 func Test_directionStr(t *testing.T) {
@@ -85,4 +85,15 @@ func Test_directionStr(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGetState(t *testing.T) {
+	s := New(nil)
+
+	st1 := s.GetState()
+	st2 := s.GetState()
+	assert.EqualValues(t, st1, st2)
+
+	st1.IsClosed = true
+	assert.NotEqualValues(t, st1, st2)
 }

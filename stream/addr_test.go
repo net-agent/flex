@@ -7,7 +7,7 @@ import (
 )
 
 func TestAddrStruct(t *testing.T) {
-	a := &addr{}
+	a := &Addr{}
 	network := "testnetwork"
 	ip := uint16(1234)
 	port := uint16(5678)
@@ -16,7 +16,7 @@ func TestAddrStruct(t *testing.T) {
 	a.SetIPPort(ip, port)
 
 	assert.Equal(t, network, a.Network())
-	assert.Equal(t, ip, a.IP())
-	assert.Equal(t, port, a.Port())
+	assert.Equal(t, ip, a.IP)
+	assert.Equal(t, port, a.Port)
 	assert.Equal(t, "1234:5678", a.String())
 }

@@ -20,8 +20,8 @@ func TestPipe(t *testing.T) {
 
 	s1, s2 := Pipe()
 
-	log.Println(s1.State())
-	log.Println(s2.State())
+	log.Println(s1.String(), s1.GetState().String())
+	log.Println(s2.String(), s2.GetState().String())
 
 	var wg sync.WaitGroup
 

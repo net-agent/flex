@@ -94,15 +94,15 @@ func TestStreamList(t *testing.T) {
 	}
 
 	sendWaiter.Wait()
-	list1 := n1.GetDataStreamList()
-	list2 := n2.GetDataStreamList()
+	list1 := n1.GetStreamStateList()
+	list2 := n2.GetStreamStateList()
 	assert.Equal(t, len(list1), len(list2))
 	assert.NotEqual(t, len(list1), 0)
 	log.Println("len(list1)=", len(list1))
 
 	closeWaiter.Wait()
-	list1 = n1.GetDataStreamList()
-	list2 = n2.GetDataStreamList()
+	list1 = n1.GetStreamStateList()
+	list2 = n2.GetStreamStateList()
 	assert.Equal(t, len(list1), len(list2))
 	assert.Equal(t, len(list1), 0)
 	log.Println("len(list1)=", len(list1))

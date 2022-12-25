@@ -27,7 +27,7 @@ func (s *Stream) Read(dist []byte) (int, error) {
 	}
 
 	n := copy(dist, s.currBuf)
-	atomic.AddInt64(&s.counter.ConnReadSize, int64(n))
+	atomic.AddInt64(&s.state.ConnReadSize, int64(n))
 	s.currBuf = s.currBuf[n:]
 	if n > 0 {
 		go func() {
@@ -36,7 +36,7 @@ func (s *Stream) Read(dist []byte) (int, error) {
 				log.Println("SendCmdDataAck failed:", err)
 				return
 			}
-			atomic.AddInt64(&s.counter.SendDataAck, int64(n))
+			atomic.AddInt64(&s.state.SendDataAckSum, int64(n))
 		}()
 	}
 	return n, nil

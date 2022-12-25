@@ -3,6 +3,7 @@ package stream
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/vars"
@@ -21,9 +22,11 @@ type Sender struct {
 	closeAckPbuf *packet.Buffer
 
 	senderMut sync.Mutex
+
+	counter *int32
 }
 
-func NewSender(w packet.Writer) *Sender {
+func NewSender(w packet.Writer, counter *int32) *Sender {
 	s := &Sender{}
 
 	s.Writer = w
@@ -31,6 +34,7 @@ func NewSender(w packet.Writer) *Sender {
 	s.dataAckPbuf = packet.NewBufferWithCmd(packet.CmdPushStreamData | packet.CmdACKFlag)
 	s.closePbuf = packet.NewBufferWithCmd(packet.CmdCloseStream)
 	s.closeAckPbuf = packet.NewBufferWithCmd(packet.CmdCloseStream | packet.CmdACKFlag)
+	s.counter = counter
 
 	return s
 }
@@ -60,6 +64,7 @@ func (s *Sender) SendCmdData(buf []byte) error {
 	s.senderMut.Lock()
 	defer s.senderMut.Unlock()
 	s.dataPbuf.SetPayload(buf)
+	atomic.AddInt32(s.counter, 1)
 	return s.WriteBuffer(s.dataPbuf)
 }
 
@@ -68,17 +73,20 @@ func (s *Sender) SendCmdDataAck(n uint16) error {
 	s.senderMut.Lock()
 	defer s.senderMut.Unlock()
 	s.dataAckPbuf.SetACKInfo(n)
+	atomic.AddInt32(s.counter, 1)
 	return s.WriteBuffer(s.dataAckPbuf)
 }
 
 func (s *Sender) SendCmdClose() error {
 	s.senderMut.Lock()
 	defer s.senderMut.Unlock()
+	atomic.AddInt32(s.counter, 1)
 	return s.WriteBuffer(s.closePbuf)
 }
 
 func (s *Sender) SendCmdCloseAck() error {
 	s.senderMut.Lock()
 	defer s.senderMut.Unlock()
+	atomic.AddInt32(s.counter, 1)
 	return s.WriteBuffer(s.closeAckPbuf)
 }

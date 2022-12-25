@@ -12,8 +12,8 @@ func TestAddr(t *testing.T) {
 	s.SetRemote(9876, 5432)
 	s.SetNetwork("helloworld")
 
-	assert.Equal(t, uint16(1234), s.local.IP())
-	assert.Equal(t, uint16(9876), s.remote.IP())
+	assert.Equal(t, uint16(1234), s.state.LocalAddr.IP)
+	assert.Equal(t, uint16(9876), s.state.RemoteAddr.IP)
 	assert.Equal(t, "1234:5678", s.LocalAddr().String())
 	assert.Equal(t, "9876:5432", s.RemoteAddr().String())
 	assert.Equal(t, "helloworld", s.LocalAddr().Network())

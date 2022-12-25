@@ -26,12 +26,8 @@ const (
 
 type Stream struct {
 	*Sender
-	local        addr
-	remote       addr
-	localDomain  string
-	remoteDomain string
-	direction    int    // 从本地主动发出去的还是被动接受的
-	usedPort     uint16 // 占用的端口。应当在Dial时进行绑定
+	state    *State
+	usedPort uint16 // 占用的端口。应当在Dial时进行绑定
 
 	// for reader
 	rmut           sync.RWMutex
@@ -51,23 +47,29 @@ type Stream struct {
 	closeAckCh      chan struct{}
 	closeAckTimeout time.Duration
 
-	// counter
-	counter Counter
-
 	// variables
 	appendDataTimeout  time.Duration
 	readTimeout        time.Duration
 	waitDataAckTimeout time.Duration
 }
 
-func (s *Stream) String() string {
-	return fmt.Sprintf("[%v][%v,%v]", directionStr(s.direction), s.local.String(), s.remote.String())
+func (s *Stream) GetState() *State {
+	state := &State{}
+	*state = *s.state
+	return state
 }
-func (s *Stream) State() string { return fmt.Sprintf("%v %v", s.String(), s.counter.String()) }
+
+func (s *Stream) String() string {
+	return fmt.Sprintf("[%v][%v,%v]", directionStr(s.state.Direction), s.state.LocalAddr.String(), s.state.RemoteAddr.String())
+}
 
 func New(pwriter packet.Writer) *Stream {
+	state := &State{
+		Created: time.Now(),
+	}
 	return &Stream{
-		Sender:             NewSender(pwriter),
+		state:              state,
+		Sender:             NewSender(pwriter, &state.WritedBufferCount),
 		bytesChan:          make(chan []byte, DefaultBytesChanCap),
 		bucketSz:           DefaultBucketSize,
 		bucketEv:           make(chan struct{}, 16),
@@ -88,9 +90,9 @@ func NewDialStream(w packet.Writer,
 	s.SetLocal(localIP, localPort)
 	s.SetRemote(remoteIP, remotePort) // remoteIP有可能需要在接收到Ack时再补充调用
 	s.SetUsedPort(localPort)
-	s.direction = DIRECTION_LOCAL_TO_REMOTE
-	s.localDomain = localDomain
-	s.remoteDomain = remoteDomain
+	s.state.Direction = DIRECTION_LOCAL_TO_REMOTE
+	s.state.LocalDomain = localDomain
+	s.state.RemoteDomain = remoteDomain
 	return s
 }
 
@@ -100,19 +102,19 @@ func NewAcceptStream(w packet.Writer,
 	s := New(w)
 	s.SetLocal(localIP, localPort)
 	s.SetRemote(remoteIP, remotePort)
-	s.direction = DIRECTION_REMOTE_TO_LOCAL
-	s.localDomain = localDomain
-	s.remoteDomain = remoteDomain
+	s.state.Direction = DIRECTION_REMOTE_TO_LOCAL
+	s.state.LocalDomain = localDomain
+	s.state.RemoteDomain = remoteDomain
 	return s
 }
 
 func (s *Stream) GetReadWriteSize() (int64, int64) {
-	return s.counter.ConnReadSize, s.counter.ConnWriteSize
+	return s.state.ConnReadSize, s.state.ConnWriteSize
 }
 
 func (s *Stream) SetUsedPort(port uint16)       { s.usedPort = port }
 func (s *Stream) GetUsedPort() uint16           { return s.usedPort }
-func (s *Stream) SetRemoteDomain(domain string) { s.remoteDomain = domain }
+func (s *Stream) SetRemoteDomain(domain string) { s.state.RemoteDomain = domain }
 
 func directionStr(d int) string {
 	if d == DIRECTION_LOCAL_TO_REMOTE {

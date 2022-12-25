@@ -10,6 +10,7 @@ import (
 
 // HandleCmdPushStreamData 处理对端发送过来的数据包
 func (s *Stream) HandleCmdPushStreamData(pbuf *packet.Buffer) {
+	atomic.AddInt32(&s.state.HandledBufferCount, 1)
 	s.rmut.RLock()
 	defer s.rmut.RUnlock()
 
@@ -25,7 +26,7 @@ func (s *Stream) HandleCmdPushStreamData(pbuf *packet.Buffer) {
 
 	select {
 	case s.bytesChan <- pbuf.Payload:
-		atomic.AddInt64(&s.counter.HandlePushDataSize, int64(pbuf.PayloadSize()))
+		atomic.AddInt64(&s.state.HandledDataSize, int64(pbuf.PayloadSize()))
 		return
 	case <-time.After(s.appendDataTimeout):
 		log.Println("append data timeout")
@@ -34,9 +35,10 @@ func (s *Stream) HandleCmdPushStreamData(pbuf *packet.Buffer) {
 }
 
 func (s *Stream) HandleCmdPushStreamDataAck(pbuf *packet.Buffer) {
+	atomic.AddInt32(&s.state.HandledBufferCount, 1)
 	size := pbuf.ACKInfo()
 	atomic.AddInt32(&s.bucketSz, int32(size))
-	atomic.AddInt64(&s.counter.HandlePushDataAckSum, int64(size))
+	atomic.AddInt64(&s.state.HandledDataAckSum, int64(size))
 
 	select {
 	case s.bucketEv <- struct{}{}:
@@ -48,6 +50,7 @@ func (s *Stream) HandleCmdPushStreamDataAck(pbuf *packet.Buffer) {
 // * 说明对端已经不会再发送数据，可以安全关闭读状态
 // * 由于对端已经请求关闭，所以本地应该尽快关闭write状态，并告知对面
 func (s *Stream) HandleCmdCloseStream(pbuf *packet.Buffer) {
+	atomic.AddInt32(&s.state.HandledBufferCount, 1)
 	// step1：响应对端的close请求，停止继续读数据
 	s.CloseRead()
 
@@ -61,5 +64,6 @@ func (s *Stream) HandleCmdCloseStream(pbuf *packet.Buffer) {
 // HandleCmdCloseStream 收到对端的closeAck应答
 // * 说明对端已经响应本地发出的close请求，并且停止继续写入数据，所以可以安全关闭读状态
 func (s *Stream) HandleCmdCloseStreamAck(pbuf *packet.Buffer) {
+	atomic.AddInt32(&s.state.HandledBufferCount, 1)
 	s.closeAckCh <- struct{}{}
 }
