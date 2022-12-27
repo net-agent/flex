@@ -18,23 +18,19 @@ var (
 )
 
 type Reader interface {
-	ReadBuffer() (*Buffer, error)
-	SetReadTimeout(time.Duration)
+	ReadBuffer(timeout time.Duration) (*Buffer, error)
 }
 
 // Reader implements with net.Conn
 type connReader struct {
-	conn        net.Conn
-	readTimeout time.Duration
+	conn net.Conn
 }
 
 func NewConnReader(conn net.Conn) Reader {
-	return &connReader{conn, DefaultReadTimeout}
+	return &connReader{conn}
 }
 
-func (reader *connReader) SetReadTimeout(timeout time.Duration) { reader.readTimeout = timeout }
-
-func (reader *connReader) ReadBuffer() (retBuf *Buffer, retErr error) {
+func (reader *connReader) ReadBuffer(timeout time.Duration) (retBuf *Buffer, retErr error) {
 	if LOG_READ_BUFFER_HEADER {
 		defer func() {
 			if retErr == nil {
@@ -46,7 +42,7 @@ func (reader *connReader) ReadBuffer() (retBuf *Buffer, retErr error) {
 	}
 	// 如果30秒读不到任何数据，则会报错关闭
 	// 所以心跳包的时间间隔不应该超过这个数值
-	err := reader.conn.SetReadDeadline(time.Now().Add(reader.readTimeout))
+	err := reader.conn.SetReadDeadline(time.Now().Add(timeout))
 	if err != nil {
 		return nil, ErrSetDeadlineFailed
 	}
@@ -66,7 +62,6 @@ func (reader *connReader) ReadBuffer() (retBuf *Buffer, retErr error) {
 		}
 	}
 
-	reader.conn.SetReadDeadline(time.Time{})
 	return pb, nil
 }
 
@@ -75,17 +70,14 @@ func (reader *connReader) ReadBuffer() (retBuf *Buffer, retErr error) {
 //
 
 type wsReader struct {
-	wsconn      *websocket.Conn
-	readTimeout time.Duration
+	wsconn *websocket.Conn
 }
 
 func NewWsReader(wsconn *websocket.Conn) Reader {
-	return &wsReader{wsconn, DefaultReadTimeout}
+	return &wsReader{wsconn}
 }
 
-func (reader *wsReader) SetReadTimeout(timeout time.Duration) { reader.readTimeout = timeout }
-
-func (reader *wsReader) ReadBuffer() (retBuf *Buffer, retErr error) {
+func (reader *wsReader) ReadBuffer(timeout time.Duration) (retBuf *Buffer, retErr error) {
 	if LOG_READ_BUFFER_HEADER {
 		defer func() {
 			if retErr == nil {
@@ -97,7 +89,7 @@ func (reader *wsReader) ReadBuffer() (retBuf *Buffer, retErr error) {
 	}
 	buf := NewBuffer(nil)
 
-	reader.wsconn.SetReadDeadline(time.Now().Add(reader.readTimeout))
+	reader.wsconn.SetReadDeadline(time.Now().Add(timeout))
 	mtype, data, err := reader.wsconn.ReadMessage()
 	if err != nil {
 		return nil, err
