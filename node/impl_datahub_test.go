@@ -54,6 +54,7 @@ func TestHandleErr_SIDNotFound(t *testing.T) {
 
 func TestStreamList(t *testing.T) {
 	n1, n2 := Pipe("test1", "test2")
+	times := int(10)
 
 	l, err := n2.Listen(80)
 	assert.Nil(t, err)
@@ -68,12 +69,13 @@ func TestStreamList(t *testing.T) {
 		}
 	}()
 
+	var testStep1Done = make(chan struct{}, 1)
 	var closeWaiter sync.WaitGroup
 	var sendWaiter sync.WaitGroup
-	for i := 0; i < 10; i++ {
+	for i := 0; i < times; i++ {
 		sendWaiter.Add(1)
 		closeWaiter.Add(1)
-		go func() {
+		go func(index int) {
 			start := time.Now()
 			payload := make([]byte, 64*1024*1024)
 			c, err := n1.Dial("test2:80")
@@ -84,13 +86,15 @@ func TestStreamList(t *testing.T) {
 			_, err = io.ReadFull(c, buf)
 			assert.Nil(t, err)
 			assert.True(t, bytes.Equal(payload, buf))
+			log.Printf("[%v] send ok: %v\n", index, time.Since(start))
 			sendWaiter.Done()
 
-			<-time.After(time.Millisecond * 100)
+			<-testStep1Done
+
 			c.Close()
-			log.Printf("send data ok: %v\n", time.Since(start))
+			log.Printf("[%v] close ok: %v\n", index, time.Since(start))
 			closeWaiter.Done()
-		}()
+		}(i)
 	}
 
 	sendWaiter.Wait()
@@ -100,10 +104,19 @@ func TestStreamList(t *testing.T) {
 	assert.NotEqual(t, len(list1), 0)
 	log.Println("len(list1)=", len(list1))
 
+	closed1 := n1.GetClosedStreamStateList(0)
+	assert.Equal(t, int(0), len(closed1))
+
+	close(testStep1Done) // 关闭后，所有等待的地方都会收到消息，进入下一阶段
+
 	closeWaiter.Wait()
 	list1 = n1.GetStreamStateList()
 	list2 = n2.GetStreamStateList()
 	assert.Equal(t, len(list1), len(list2))
 	assert.Equal(t, len(list1), 0)
 	log.Println("len(list1)=", len(list1))
+
+	closed1 = n1.GetClosedStreamStateList(0)
+	assert.Equal(t, times, len(closed1))
+
 }

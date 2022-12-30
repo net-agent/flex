@@ -17,8 +17,10 @@ var (
 
 type DataHub struct {
 	// host    *Node
-	portm   *numsrc.Manager
-	streams sync.Map // map[sid]*stream.Conn
+	portm              *numsrc.Manager
+	streams            sync.Map        // map[sid]*stream.Conn
+	closedStreamStates []*stream.State // 保存已经关闭的连接状态
+	closedMut          sync.RWMutex
 }
 
 func (hub *DataHub) Init(portm *numsrc.Manager) {
@@ -53,6 +55,13 @@ func (hub *DataHub) GetStreamBySID(sid uint64, getAndDelete bool) (*stream.Strea
 		return nil, errConvertStreamFailed
 	}
 
+	// 将已关闭的连接存入closedStreamStates中
+	if getAndDelete {
+		hub.closedMut.Lock()
+		hub.closedStreamStates = append(hub.closedStreamStates, c.GetState())
+		hub.closedMut.Unlock()
+	}
+
 	return c, nil
 }
 
@@ -65,6 +74,16 @@ func (hub *DataHub) GetStreamStateList() []*stream.State {
 		}
 		return true
 	})
+	return list
+}
+func (hub *DataHub) GetClosedStreamStateList(pos int) []*stream.State {
+	hub.closedMut.RLock()
+	defer hub.closedMut.RUnlock()
+	if pos >= len(hub.closedStreamStates) {
+		return nil
+	}
+	list := make([]*stream.State, len(hub.closedStreamStates)-pos)
+	copy(list, hub.closedStreamStates[pos:])
 	return list
 }
 
