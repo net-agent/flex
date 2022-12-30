@@ -86,8 +86,9 @@ func TestReadErr_SetDeadline(t *testing.T) {
 	}()
 
 	c1.Close()
-	_, err := r.ReadBuffer()
-	assert.Equal(t, err, ErrSetDeadlineFailed)
+	r.SetReadTimeout(time.Second * 15)
+	err := r.SetReadTimeout(time.Duration(0))
+	assert.NotNil(t, err)
 }
 
 func TestReadErr_Header(t *testing.T) {

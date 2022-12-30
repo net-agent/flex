@@ -3,7 +3,6 @@ package packet
 import (
 	"errors"
 	"io"
-	"log"
 	"net"
 	"time"
 
@@ -19,40 +18,29 @@ var (
 
 type Reader interface {
 	ReadBuffer() (*Buffer, error)
-	SetReadTimeout(time.Duration)
+	SetReadTimeout(time.Duration) error
 }
 
 // Reader implements with net.Conn
 type connReader struct {
-	conn        net.Conn
-	readTimeout time.Duration
+	conn net.Conn
 }
 
 func NewConnReader(conn net.Conn) Reader {
-	return &connReader{conn, DefaultReadTimeout}
+	return &connReader{conn}
 }
 
-func (reader *connReader) SetReadTimeout(timeout time.Duration) { reader.readTimeout = timeout }
+func (reader *connReader) SetReadTimeout(timeout time.Duration) error {
+	if timeout == 0 {
+		return reader.conn.SetReadDeadline(time.Time{})
+	}
+	return reader.conn.SetReadDeadline(time.Now().Add(timeout))
+}
 
 func (reader *connReader) ReadBuffer() (retBuf *Buffer, retErr error) {
-	if LOG_READ_BUFFER_HEADER {
-		defer func() {
-			if retErr == nil {
-				log.Printf("[R]%v\n", retBuf.HeaderString())
-			} else {
-				log.Printf("[R][err=%v]\n", retErr)
-			}
-		}()
-	}
-	// 如果30秒读不到任何数据，则会报错关闭
-	// 所以心跳包的时间间隔不应该超过这个数值
-	err := reader.conn.SetReadDeadline(time.Now().Add(reader.readTimeout))
-	if err != nil {
-		return nil, ErrSetDeadlineFailed
-	}
 	pb := NewBuffer(nil)
 
-	_, err = io.ReadFull(reader.conn, pb.Head[:])
+	_, err := io.ReadFull(reader.conn, pb.Head[:])
 	if err != nil {
 		return nil, ErrReadHeaderFailed
 	}
@@ -66,7 +54,6 @@ func (reader *connReader) ReadBuffer() (retBuf *Buffer, retErr error) {
 		}
 	}
 
-	reader.conn.SetReadDeadline(time.Time{})
 	return pb, nil
 }
 
@@ -75,29 +62,23 @@ func (reader *connReader) ReadBuffer() (retBuf *Buffer, retErr error) {
 //
 
 type wsReader struct {
-	wsconn      *websocket.Conn
-	readTimeout time.Duration
+	wsconn *websocket.Conn
 }
 
 func NewWsReader(wsconn *websocket.Conn) Reader {
-	return &wsReader{wsconn, DefaultReadTimeout}
+	return &wsReader{wsconn}
 }
 
-func (reader *wsReader) SetReadTimeout(timeout time.Duration) { reader.readTimeout = timeout }
+func (reader *wsReader) SetReadTimeout(timeout time.Duration) error {
+	if timeout == 0 {
+		return reader.wsconn.SetReadDeadline(time.Time{})
+	}
+	return reader.wsconn.SetReadDeadline(time.Now().Add(timeout))
+}
 
 func (reader *wsReader) ReadBuffer() (retBuf *Buffer, retErr error) {
-	if LOG_READ_BUFFER_HEADER {
-		defer func() {
-			if retErr == nil {
-				log.Printf("[R]%v\n", retBuf.HeaderString())
-			} else {
-				log.Printf("[R][err=%v]\n", retErr)
-			}
-		}()
-	}
 	buf := NewBuffer(nil)
 
-	reader.wsconn.SetReadDeadline(time.Now().Add(reader.readTimeout))
 	mtype, data, err := reader.wsconn.ReadMessage()
 	if err != nil {
 		return nil, err

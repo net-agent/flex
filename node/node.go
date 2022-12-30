@@ -135,6 +135,7 @@ func (node *Node) WriteBuffer(pbuf *packet.Buffer) error {
 
 func (node *Node) readBufferUntilFailed() {
 	for {
+		node.SetReadTimeout(time.Minute * 15)
 		pbuf, err := node.ReadBuffer()
 		if err != nil {
 			log.Printf("readBufferUntilFailed err=%v\n", err)
@@ -219,15 +220,13 @@ func (node *Node) keepalive(ticker *time.Ticker) {
 			log.Println("keepalive error: alive checker is nil")
 			return
 		}
-		// _, err := node.PingDomain("", time.Second*3)
-		err := node.aliveChecker()
-		if err == nil {
-			continue
-		}
 
-		log.Printf("keepalive error: %v\n", err)
-		node.Close()
-		ticker.Stop()
-		return
+		err := node.aliveChecker()
+		if err != nil {
+			log.Printf("keepalive error: %v\n", err)
+			node.Close()
+			ticker.Stop()
+			return
+		}
 	}
 }

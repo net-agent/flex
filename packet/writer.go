@@ -2,7 +2,6 @@ package packet
 
 import (
 	"errors"
-	"log"
 	"net"
 	"time"
 
@@ -21,59 +20,52 @@ type Writer interface {
 
 // Writer implements with net.Conn
 type connWriter struct {
-	conn         net.Conn
-	writeTimeout time.Duration
+	conn net.Conn
 }
 
 func NewConnWriter(conn net.Conn) Writer {
-	return &connWriter{conn, DefaultWriteTimeout}
+	return &connWriter{conn}
 }
 
-func (w *connWriter) SetWriteTimeout(dur time.Duration) { w.writeTimeout = dur }
+func (w *connWriter) SetWriteTimeout(timeout time.Duration) {
+	if timeout == 0 {
+		w.conn.SetWriteDeadline(time.Time{})
+	} else {
+		w.conn.SetWriteDeadline(time.Now().Add(timeout))
+	}
+}
 
 func (w *connWriter) WriteBuffer(buf *Buffer) (retErr error) {
 	if buf == nil {
 		return nil
 	}
-	if LOG_WRITE_BUFFER_HEADER {
-		start := time.Now()
-		defer func() {
-			log.Printf("[W]%v timeuse=%v\n", buf.HeaderString(), time.Since(start))
-		}()
-	}
-	err := w.conn.SetWriteDeadline(time.Now().Add(w.writeTimeout))
-	if err != nil {
-		return err
-	}
-	_, err = buf.WriteTo(w.conn)
-	w.conn.SetWriteDeadline(time.Time{})
+
+	_, err := buf.WriteTo(w.conn)
 	return err
 }
 
 // Writer implements with websocket.Conn
 type wsWriter struct {
-	wsconn       *websocket.Conn
-	writeTimeout time.Duration
+	wsconn *websocket.Conn
 }
 
 func NewWsWriter(wsconn *websocket.Conn) Writer {
-	return &wsWriter{wsconn, DefaultWriteTimeout}
+	return &wsWriter{wsconn}
 }
 
-func (w *wsWriter) SetWriteTimeout(dur time.Duration) { w.writeTimeout = dur }
+func (w *wsWriter) SetWriteTimeout(timeout time.Duration) {
+	if timeout == 0 {
+		w.wsconn.SetWriteDeadline(time.Time{})
+	} else {
+		w.wsconn.SetWriteDeadline(time.Now().Add(timeout))
+	}
+}
 
 func (w *wsWriter) WriteBuffer(buf *Buffer) (retErr error) {
 	if buf == nil {
 		return nil
 	}
-	if LOG_WRITE_BUFFER_HEADER {
-		start := time.Now()
-		defer func() {
-			log.Printf("[W]%v timeuse=%v\n", buf.HeaderString(), time.Since(start))
-		}()
-	}
 
-	w.wsconn.SetWriteDeadline(time.Now().Add(w.writeTimeout))
 	nw, err := w.wsconn.NextWriter(websocket.BinaryMessage)
 	if err != nil {
 		return err
