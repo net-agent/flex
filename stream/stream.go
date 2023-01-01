@@ -3,6 +3,7 @@ package stream
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/net-agent/flex/v2/packet"
@@ -63,8 +64,11 @@ func (s *Stream) String() string {
 	return fmt.Sprintf("[%v][%v,%v]", directionStr(s.state.Direction), s.state.LocalAddr.String(), s.state.RemoteAddr.String())
 }
 
+var streamIndex int32 = 0
+
 func New(pwriter packet.Writer) *Stream {
 	state := &State{
+		Index:   atomic.AddInt32(&streamIndex, 1),
 		Created: time.Now(),
 	}
 	return &Stream{

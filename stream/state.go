@@ -6,6 +6,7 @@ import (
 )
 
 type State struct {
+	Index    int32
 	IsClosed bool
 	Created  time.Time
 	Closed   time.Time
@@ -31,4 +32,17 @@ func (st *State) String() string {
 	return fmt.Sprintf("HandledDataSize=%v ConnReadSize=%v SendDataAckSum=%v ConnWriteSize=%v HandledDataAckSum=%v",
 		st.HandledDataSize, st.ConnReadSize, st.SendDataAckSum, st.ConnWriteSize, st.HandledDataAckSum,
 	)
+}
+
+func (st *State) Local() string {
+	if st.LocalDomain == "" {
+		return st.LocalAddr.str
+	}
+	return fmt.Sprintf("%v:%v", st.LocalDomain, st.LocalAddr.Port)
+}
+func (st *State) Remote() string {
+	if st.RemoteDomain == "" {
+		return st.RemoteAddr.str
+	}
+	return fmt.Sprintf("%v:%v", st.RemoteDomain, st.RemoteAddr.Port)
 }
