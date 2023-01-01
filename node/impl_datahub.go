@@ -55,13 +55,6 @@ func (hub *DataHub) GetStreamBySID(sid uint64, getAndDelete bool) (*stream.Strea
 		return nil, errConvertStreamFailed
 	}
 
-	// 将已关闭的连接存入closedStreamStates中
-	if getAndDelete {
-		hub.closedMut.Lock()
-		hub.closedStreamStates = append(hub.closedStreamStates, c.GetState())
-		hub.closedMut.Unlock()
-	}
-
 	return c, nil
 }
 
@@ -114,6 +107,10 @@ func (hub *DataHub) HandleCmdCloseStream(pbuf *packet.Buffer) {
 
 	s.HandleCmdCloseStream(pbuf)
 	hub.portm.ReleaseNumberSrc(s.GetUsedPort())
+
+	hub.closedMut.Lock()
+	hub.closedStreamStates = append(hub.closedStreamStates, s.GetState())
+	hub.closedMut.Unlock()
 }
 
 func (hub *DataHub) HandleCmdCloseStreamAck(pbuf *packet.Buffer) {
@@ -124,4 +121,8 @@ func (hub *DataHub) HandleCmdCloseStreamAck(pbuf *packet.Buffer) {
 
 	s.HandleCmdCloseStreamAck(pbuf)
 	hub.portm.ReleaseNumberSrc(s.GetUsedPort())
+
+	hub.closedMut.Lock()
+	hub.closedStreamStates = append(hub.closedStreamStates, s.GetState())
+	hub.closedMut.Unlock()
 }
