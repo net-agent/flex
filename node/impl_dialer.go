@@ -84,7 +84,11 @@ func (d *Dialer) DialIP(ip, port uint16) (*stream.Stream, error) {
 func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 	remoteDomain := string(pbuf.Payload)
 	if remoteDomain == "" {
-		remoteDomain = fmt.Sprintf("%v", pbuf.DistIP())
+		if pbuf.SrcIP() == d.host.ip {
+			remoteDomain = d.host.domain
+		} else {
+			remoteDomain = fmt.Sprintf("%v", pbuf.DistIP())
+		}
 	}
 	// 第一步：选择可用端口。
 	// 如果此函数退出时srcPort非0，需要回收端口
