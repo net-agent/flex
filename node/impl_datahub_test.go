@@ -79,7 +79,12 @@ func TestStreamList(t *testing.T) {
 			start := time.Now()
 			payload := make([]byte, 64*1024*1024)
 			c, err := n1.Dial("test2:80")
-			assert.Nil(t, err)
+			if !assert.Nil(t, err) {
+				panic(err)
+			}
+			if !assert.NotNil(t, c) {
+				panic("nil stream")
+			}
 
 			go c.Write(payload)
 			buf := make([]byte, len(payload))

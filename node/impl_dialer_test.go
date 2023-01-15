@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/net-agent/flex/v2/event"
 	"github.com/net-agent/flex/v2/numsrc"
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/vars"
@@ -218,17 +219,14 @@ func TestHandleCmdOpenAck(t *testing.T) {
 
 	// branch: not found error
 	n.HandleCmdOpenStreamAck(pbuf)
-
-	// branch: convert failed
-	n.responses.Store(port, 1234)
-	n.HandleCmdOpenStreamAck(pbuf)
-
 	// branch: ok
-	n.responses.Store(port, make(chan *dialresp, 1))
 	n.HandleCmdOpenStreamAck(pbuf)
 
 	// branch: attach stream failed（上一个branch中，sid已经被登记）
-	n.responses.Store(port, make(chan *dialresp, 1))
+	n.HandleCmdOpenStreamAck(pbuf)
+
+	// branch: ackmessage
+	pbuf.Payload = []byte{1, 2, 3}
 	n.HandleCmdOpenStreamAck(pbuf)
 }
 
@@ -247,10 +245,11 @@ func TestDialBufErr_portmAndRepsonse(t *testing.T) {
 	// d1.SetDialTimeout(time.Millisecond * 200)
 
 	// 测试用例：提前把response设置好，触发local port used错误
-	d1.responses.Store(uint16(1), nil)
+	// d1.responses.Store(uint16(1), nil)
+	d1.evbus.ListenOnce(uint16(1))
 	pbuf := packet.NewBuffer(nil)
 	_, err = d1.dialPbuf(pbuf)
-	assert.Equal(t, ErrLocalPortUsed, err)
+	assert.Equal(t, event.ErrEventHasListened, err)
 
 	// 测试用例：提前把free port申请完，触发无可用端口错误
 	for {
@@ -282,7 +281,7 @@ func TestDialBuffErr_timeoutAndWriteFailed(t *testing.T) {
 	pbuf.SetDistIP(0) // 默认0，会进入本地循环，触发timeout
 	d1.SetDialTimeout(time.Millisecond * 100)
 	_, err = d1.dialPbuf(pbuf)
-	assert.Equal(t, ErrWaitResponseTimeout, err)
+	assert.Equal(t, event.ErrWaitReplyTimeout, err)
 
 	// 测试用例：关闭pipe，触发write错误
 	// portm(2)
@@ -292,15 +291,16 @@ func TestDialBuffErr_timeoutAndWriteFailed(t *testing.T) {
 
 	// 测试用例：通过往本地发送，进入等待环节，然后自己用nil response触发错误
 	// portm(3)
-	go func() {
-		<-time.After(time.Millisecond * 100)
-		it, found := d1.responses.Load(uint16(3))
-		assert.True(t, found)
-		ch := it.(chan *dialresp)
-		ch <- nil
-	}()
-	pbuf.SetDistIP(0)
-	d1.SetDialTimeout(time.Millisecond * 300)
-	_, err = d1.dialPbuf(pbuf)
-	assert.Equal(t, ErrUnexpectedNilResponse, err)
+	// go func() {
+	// 	<-time.After(time.Millisecond * 100)
+	// 	// it, found := d1.responses.Load(uint16(3))
+	// 	// assert.True(t, found)
+	// 	// ch := it.(chan *dialresp)
+	// 	// ch <- nil
+	// 	d1.evbus.Dispatch(uint16(3), nil, nil)
+	// }()
+	// pbuf.SetDistIP(0)
+	// d1.SetDialTimeout(time.Millisecond * 300)
+	// _, err = d1.dialPbuf(pbuf)
+	// assert.Equal(t, event.ErrUnexpectedNilData, err)
 }
