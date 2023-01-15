@@ -70,7 +70,6 @@ func (d *Dialer) DialDomain(domain string, port uint16) (*stream.Stream, error) 
 
 // DialIP 通过IP信息进行dial
 func (d *Dialer) DialIP(ip, port uint16) (*stream.Stream, error) {
-	// return node.dial("", ip, port)
 	pbuf := packet.NewBuffer(nil)
 	pbuf.SetCmd(packet.CmdOpenStream)
 	pbuf.SetSrc(d.host.GetIP(), 0)
@@ -84,12 +83,14 @@ func (d *Dialer) DialIP(ip, port uint16) (*stream.Stream, error) {
 func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 	remoteDomain := string(pbuf.Payload)
 	if remoteDomain == "" {
-		if pbuf.SrcIP() == d.host.ip {
+		distIP := pbuf.DistIP()
+		if distIP == d.host.ip {
 			remoteDomain = d.host.domain
 		} else {
-			remoteDomain = fmt.Sprintf("%v", pbuf.DistIP())
+			remoteDomain = fmt.Sprintf("%v", distIP)
 		}
 	}
+
 	// 第一步：选择可用端口。
 	// 如果此函数退出时srcPort非0，需要回收端口
 	srcPort, err := d.portm.GetFreeNumberSrc()
@@ -121,12 +122,11 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 	if err != nil {
 		return nil, err
 	}
-	// HandleCmdOpenStreamAck 可以确保不会出现nil resp
-	// if resp == nil {
-	// 	return nil, ErrUnexpectedNilStream
-	// }
+
+	// HandleCmdOpenStreamAck 里面的处理逻辑，确保不会出现nil resp
 	s := resp.(*stream.Stream)
 	s.SetRemoteDomain(remoteDomain)
+
 	return s, nil
 }
 

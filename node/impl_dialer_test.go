@@ -288,19 +288,4 @@ func TestDialBuffErr_timeoutAndWriteFailed(t *testing.T) {
 	pbuf.SetDistIP(1) // 会通过pipe发送，触发writetimeout
 	_, err = d1.dialPbuf(pbuf)
 	assert.Equal(t, ErrWriteDialPbufFailed, err)
-
-	// 测试用例：通过往本地发送，进入等待环节，然后自己用nil response触发错误
-	// portm(3)
-	// go func() {
-	// 	<-time.After(time.Millisecond * 100)
-	// 	// it, found := d1.responses.Load(uint16(3))
-	// 	// assert.True(t, found)
-	// 	// ch := it.(chan *dialresp)
-	// 	// ch <- nil
-	// 	d1.evbus.Dispatch(uint16(3), nil, nil)
-	// }()
-	// pbuf.SetDistIP(0)
-	// d1.SetDialTimeout(time.Millisecond * 300)
-	// _, err = d1.dialPbuf(pbuf)
-	// assert.Equal(t, event.ErrUnexpectedNilData, err)
 }
