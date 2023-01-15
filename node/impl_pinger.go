@@ -75,14 +75,14 @@ func (p *Pinger) HandleCmdPingDomain(pbuf *packet.Buffer) {
 		pbuf.SetPayload(nil)
 	}
 
-	pbuf.SetCmd(packet.CmdPingDomain | packet.CmdACKFlag)
+	pbuf.SetCmd(packet.AckPingDomain)
 	pbuf.SwapSrcDist()
 	pbuf.SetSrc(p.host.GetIP(), 0)
 	p.host.WriteBuffer(pbuf)
 }
 
-// HandleCmdPingDomainAck 处理远端的应答
-func (p *Pinger) HandleCmdPingDomainAck(pbuf *packet.Buffer) {
+// HandleAckPingDomain 处理远端的应答
+func (p *Pinger) HandleAckPingDomain(pbuf *packet.Buffer) {
 	port := pbuf.DistPort()
 	msg := string(pbuf.Payload)
 	if msg != "" {

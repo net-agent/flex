@@ -159,9 +159,9 @@ func (node *Node) handlePbuf(pbuf *packet.Buffer) {
 	case packet.CmdPushStreamData:
 		node.dataChan <- pbuf // PushData是最常见的，设置最短比较路径
 	case packet.CmdOpenStream,
-		packet.CmdPushStreamData | packet.CmdACKFlag,
+		packet.AckPushStreamData,
 		packet.CmdPingDomain,
-		packet.CmdPingDomain | packet.CmdACKFlag:
+		packet.AckPingDomain:
 		node.cmdChan <- pbuf
 	default:
 		node.dataChan <- pbuf
@@ -172,8 +172,8 @@ func (node *Node) handlePbuf(pbuf *packet.Buffer) {
 func (node *Node) routeCmdPbufChan(ch chan *packet.Buffer) {
 	for pbuf := range ch {
 		switch pbuf.Cmd() {
-		case packet.CmdPushStreamData | packet.CmdACKFlag:
-			node.HandleCmdPushStreamDataAck(pbuf)
+		case packet.AckPushStreamData:
+			node.HandleAckPushStreamData(pbuf)
 
 		case packet.CmdOpenStream:
 			node.HandleCmdOpenStream(pbuf)
@@ -181,8 +181,8 @@ func (node *Node) routeCmdPbufChan(ch chan *packet.Buffer) {
 		case packet.CmdPingDomain:
 			node.HandleCmdPingDomain(pbuf)
 
-		case packet.CmdPingDomain | packet.CmdACKFlag:
-			node.HandleCmdPingDomainAck(pbuf)
+		case packet.AckPingDomain:
+			node.HandleAckPingDomain(pbuf)
 
 		default:
 			log.Println("unexpected pbuf cmd:", pbuf.HeaderString())
@@ -195,14 +195,14 @@ func (node *Node) routeDataPbufChan(ch chan *packet.Buffer) {
 		case packet.CmdPushStreamData:
 			node.HandleCmdPushStreamData(pbuf)
 
-		case packet.CmdOpenStream | packet.CmdACKFlag:
-			node.HandleCmdOpenStreamAck(pbuf)
+		case packet.AckOpenStream:
+			node.HandleAckOpenStream(pbuf)
 
 		case packet.CmdCloseStream:
 			node.HandleCmdCloseStream(pbuf)
 
-		case packet.CmdCloseStream | packet.CmdACKFlag:
-			node.HandleCmdCloseStreamAck(pbuf)
+		case packet.AckCloseStream:
+			node.HandleAckCloseStream(pbuf)
 
 		default:
 			log.Println("unexpected pbuf data:", pbuf.HeaderString())

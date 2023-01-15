@@ -91,12 +91,12 @@ func (hub *DataHub) HandleCmdPushStreamData(pbuf *packet.Buffer) {
 }
 
 // 处理数据包已送达的消息
-func (hub *DataHub) HandleCmdPushStreamDataAck(pbuf *packet.Buffer) {
+func (hub *DataHub) HandleAckPushStreamData(pbuf *packet.Buffer) {
 	c, err := hub.GetStreamBySID(pbuf.SID(), false)
 	if err != nil {
 		return
 	}
-	c.HandleCmdPushStreamDataAck(pbuf)
+	c.HandleAckPushStreamData(pbuf)
 }
 
 func (hub *DataHub) HandleCmdCloseStream(pbuf *packet.Buffer) {
@@ -113,13 +113,13 @@ func (hub *DataHub) HandleCmdCloseStream(pbuf *packet.Buffer) {
 	hub.closedMut.Unlock()
 }
 
-func (hub *DataHub) HandleCmdCloseStreamAck(pbuf *packet.Buffer) {
+func (hub *DataHub) HandleAckCloseStream(pbuf *packet.Buffer) {
 	s, err := hub.GetStreamBySID(pbuf.SID(), true)
 	if err != nil {
 		return
 	}
 
-	s.HandleCmdCloseStreamAck(pbuf)
+	s.HandleAckCloseStream(pbuf)
 	hub.portm.ReleaseNumberSrc(s.GetUsedPort())
 
 	hub.closedMut.Lock()

@@ -47,9 +47,9 @@ func TestHandleErr_SIDNotFound(t *testing.T) {
 	pbuf := packet.NewBufferWithCmd(0)
 
 	d.HandleCmdPushStreamData(pbuf)
-	d.HandleCmdPushStreamDataAck(pbuf)
+	d.HandleAckPushStreamData(pbuf)
 	d.HandleCmdCloseStream(pbuf)
-	d.HandleCmdCloseStreamAck(pbuf)
+	d.HandleAckCloseStream(pbuf)
 }
 
 func TestStreamList(t *testing.T) {

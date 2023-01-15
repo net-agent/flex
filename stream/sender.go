@@ -31,9 +31,9 @@ func NewSender(w packet.Writer, counter *int32) *Sender {
 
 	s.Writer = w
 	s.dataPbuf = packet.NewBufferWithCmd(packet.CmdPushStreamData)
-	s.dataAckPbuf = packet.NewBufferWithCmd(packet.CmdPushStreamData | packet.CmdACKFlag)
+	s.dataAckPbuf = packet.NewBufferWithCmd(packet.AckPushStreamData)
 	s.closePbuf = packet.NewBufferWithCmd(packet.CmdCloseStream)
-	s.closeAckPbuf = packet.NewBufferWithCmd(packet.CmdCloseStream | packet.CmdACKFlag)
+	s.closeAckPbuf = packet.NewBufferWithCmd(packet.AckCloseStream)
 	s.counter = counter
 
 	return s

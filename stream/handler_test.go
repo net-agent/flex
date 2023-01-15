@@ -33,14 +33,14 @@ func TestHandleCmdDataErr_timeout(t *testing.T) {
 	s.HandleCmdPushStreamData(pbuf)
 }
 
-func TestHandleCmdDataAck(t *testing.T) {
+func TestHandleAckData(t *testing.T) {
 	s1 := New(nil)
 
 	// cover test: normal branch
-	pbuf := packet.NewBufferWithCmd(packet.CmdPushStreamData | packet.CmdACKFlag)
-	s1.HandleCmdPushStreamDataAck(pbuf)
+	pbuf := packet.NewBufferWithCmd(packet.AckPushStreamData)
+	s1.HandleAckPushStreamData(pbuf)
 
 	// cover test: default branch
 	s1.bucketEv = make(chan struct{})
-	s1.HandleCmdPushStreamDataAck(pbuf)
+	s1.HandleAckPushStreamData(pbuf)
 }

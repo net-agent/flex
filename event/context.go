@@ -2,7 +2,6 @@ package event
 
 import (
 	"errors"
-	"io"
 	"time"
 )
 
@@ -43,9 +42,6 @@ func (ctx *Context) Clean() {
 }
 
 func (ctx *Context) Wait(timeout time.Duration) (interface{}, error) {
-	if ctx.PayloadChan == nil {
-		return nil, io.EOF
-	}
 	select {
 	case payload, ok := <-ctx.PayloadChan:
 		if !ok {

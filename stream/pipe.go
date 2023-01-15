@@ -42,10 +42,10 @@ func routeCmd(s *Stream, ch chan *packet.Buffer) {
 func routeAck(s *Stream, ch chan *packet.Buffer) {
 	for pbuf := range ch {
 		switch pbuf.Cmd() {
-		case packet.CmdPushStreamData | packet.CmdACKFlag:
-			s.HandleCmdPushStreamDataAck(pbuf)
-		case packet.CmdCloseStream | packet.CmdACKFlag:
-			s.HandleCmdCloseStreamAck(pbuf)
+		case packet.AckPushStreamData:
+			s.HandleAckPushStreamData(pbuf)
+		case packet.AckCloseStream:
+			s.HandleAckCloseStream(pbuf)
 		default:
 			log.Println("unexpected pbuf ack", pbuf.HeaderString())
 		}

@@ -38,7 +38,7 @@ func TestSetGet(t *testing.T) {
 }
 
 func TestIsACK(t *testing.T) {
-	pbuf := NewBufferWithCmd(CmdOpenStream | CmdACKFlag)
+	pbuf := NewBufferWithCmd(AckOpenStream)
 	assert.True(t, pbuf.IsACK())
 	pbuf.SetCmd(CmdOpenStream)
 	assert.False(t, pbuf.IsACK())
@@ -70,7 +70,7 @@ func TestPayload(t *testing.T) {
 	assert.Equal(t, uint16(0), pbuf.ACKInfo())
 
 	// test base ack
-	pbuf.SetCmd(CmdPushStreamData | CmdACKFlag)
+	pbuf.SetCmd(AckPushStreamData)
 	pbuf.SetACKInfo(10245)
 	assert.Equal(t, uint16(0), pbuf.PayloadSize())
 	assert.Equal(t, uint16(10245), pbuf.ACKInfo())
@@ -122,11 +122,11 @@ func TestBuffer_CmdName(t *testing.T) {
 		{"push", makebuf(CmdPushMessage), "push"},
 		{"ping", makebuf(CmdPingDomain), "ping"},
 
-		{"open", makebuf(CmdOpenStream | CmdACKFlag), "open.ack"},
-		{"close", makebuf(CmdCloseStream | CmdACKFlag), "close.ack"},
-		{"data", makebuf(CmdPushStreamData | CmdACKFlag), "data.ack"},
-		{"push", makebuf(CmdPushMessage | CmdACKFlag), "push.ack"},
-		{"ping", makebuf(CmdPingDomain | CmdACKFlag), "ping.ack"},
+		{"open", makebuf(AckOpenStream), "open.ack"},
+		{"close", makebuf(AckCloseStream), "close.ack"},
+		{"data", makebuf(AckPushStreamData), "data.ack"},
+		{"push", makebuf(AckPushMessage), "push.ack"},
+		{"ping", makebuf(AckPingDomain), "ping.ack"},
 
 		{"default", makebuf(0xfe), fmt.Sprintf("<%v>", 0xfe)},
 		{"default", makebuf(0xff), fmt.Sprintf("<%v>.ack", 0xfe)},

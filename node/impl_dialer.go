@@ -123,14 +123,14 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 		return nil, err
 	}
 
-	// HandleCmdOpenStreamAck 里面的处理逻辑，确保不会出现nil resp
+	// HandleAckOpenStream 里面的处理逻辑，确保不会出现nil resp
 	s := resp.(*stream.Stream)
 	s.SetRemoteDomain(remoteDomain)
 
 	return s, nil
 }
 
-func (d *Dialer) HandleCmdOpenStreamAck(pbuf *packet.Buffer) {
+func (d *Dialer) HandleAckOpenStream(pbuf *packet.Buffer) {
 	evKey := pbuf.DistPort()
 	ackMessage := string(pbuf.Payload)
 	if ackMessage != "" {

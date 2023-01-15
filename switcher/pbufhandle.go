@@ -82,7 +82,7 @@ func (s *Server) HandleSwitcherPbuf(ctx *Context, pbuf *packet.Buffer) {
 
 	case packet.CmdPingDomain:
 		if pbuf.IsACK() {
-			s.HandleCmdPingDomainAck(ctx, pbuf)
+			s.HandleAckPingDomain(ctx, pbuf)
 		} else {
 			s.HandleCmdPingDomain(ctx, pbuf)
 		}
@@ -113,12 +113,12 @@ func (s *Server) HandleCmdPingDomain(caller *Context, pbuf *packet.Buffer) {
 	dist.WriteBuffer(pbuf)
 }
 
-// HandleCmdPingDomainAck
-func (s *Server) HandleCmdPingDomainAck(caller *Context, pbuf *packet.Buffer) {
+// HandleAckPingDomain
+func (s *Server) HandleAckPingDomain(caller *Context, pbuf *packet.Buffer) {
 	port := pbuf.DistPort()
 	it, found := caller.pingBack.Load(port)
 	if !found {
-		log.Printf("HandleCmdPingDomainAck failed, port='%v' not found\n", port)
+		log.Printf("HandleAckPingDomain failed, port='%v' not found\n", port)
 		return
 	}
 	ch, ok := it.(chan *packet.Buffer)

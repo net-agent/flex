@@ -211,23 +211,23 @@ func Test_parseAddress(t *testing.T) {
 	}
 }
 
-func TestHandleCmdOpenAck(t *testing.T) {
+func TestHandleAckOpen(t *testing.T) {
 	n := New(nil)
 	port := uint16(1234)
-	pbuf := packet.NewBufferWithCmd(packet.CmdOpenStream | packet.CmdACKFlag)
+	pbuf := packet.NewBufferWithCmd(packet.AckOpenStream)
 	pbuf.SetDistPort(port)
 
 	// branch: not found error
-	n.HandleCmdOpenStreamAck(pbuf)
+	n.HandleAckOpenStream(pbuf)
 	// branch: ok
-	n.HandleCmdOpenStreamAck(pbuf)
+	n.HandleAckOpenStream(pbuf)
 
 	// branch: attach stream failed（上一个branch中，sid已经被登记）
-	n.HandleCmdOpenStreamAck(pbuf)
+	n.HandleAckOpenStream(pbuf)
 
 	// branch: ackmessage
 	pbuf.Payload = []byte{1, 2, 3}
-	n.HandleCmdOpenStreamAck(pbuf)
+	n.HandleAckOpenStream(pbuf)
 }
 
 func TestDialBufErr_portmAndRepsonse(t *testing.T) {
