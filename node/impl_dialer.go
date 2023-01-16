@@ -6,9 +6,9 @@ import (
 	"log"
 	"net"
 	"strconv"
-	"sync"
 	"time"
 
+	"github.com/net-agent/flex/v2/event"
 	"github.com/net-agent/flex/v2/numsrc"
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/stream"
@@ -24,16 +24,12 @@ var (
 	ErrUnexpectedNilResponse = errors.New("unexpected nil response")
 )
 
-type dialresp struct {
-	err    error
-	stream *stream.Stream
-}
-
 type Dialer struct {
-	host      *Node
-	portm     *numsrc.Manager
-	timeout   time.Duration
-	responses sync.Map // map[uint16]chan *dialresp
+	host    *Node
+	portm   *numsrc.Manager
+	timeout time.Duration
+	// responses sync.Map // map[uint16]chan *dialresp
+	evbus event.Bus
 }
 
 func (d *Dialer) Init(host *Node, portm *numsrc.Manager) {
@@ -74,7 +70,6 @@ func (d *Dialer) DialDomain(domain string, port uint16) (*stream.Stream, error) 
 
 // DialIP 通过IP信息进行dial
 func (d *Dialer) DialIP(ip, port uint16) (*stream.Stream, error) {
-	// return node.dial("", ip, port)
 	pbuf := packet.NewBuffer(nil)
 	pbuf.SetCmd(packet.CmdOpenStream)
 	pbuf.SetSrc(d.host.GetIP(), 0)
@@ -88,8 +83,14 @@ func (d *Dialer) DialIP(ip, port uint16) (*stream.Stream, error) {
 func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 	remoteDomain := string(pbuf.Payload)
 	if remoteDomain == "" {
-		remoteDomain = fmt.Sprintf("%v", pbuf.DistIP())
+		distIP := pbuf.DistIP()
+		if distIP == d.host.ip {
+			remoteDomain = d.host.domain
+		} else {
+			remoteDomain = fmt.Sprintf("%v", distIP)
+		}
 	}
+
 	// 第一步：选择可用端口。
 	// 如果此函数退出时srcPort非0，需要回收端口
 	srcPort, err := d.portm.GetFreeNumberSrc()
@@ -104,13 +105,10 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 
 	// 第二步：创建一个用于接收stream的chan
 	// 这个stream会在ack到达时创建并绑定sid
-	ch := make(chan *dialresp)
-	defer close(ch)
-	_, loaded := d.responses.LoadOrStore(srcPort, ch)
-	if loaded {
-		return nil, ErrLocalPortUsed
+	ev, err := d.evbus.ListenOnce(srcPort)
+	if err != nil {
+		return nil, err
 	}
-	defer d.responses.Delete(srcPort)
 
 	// 第三步：补齐pbuf的srcPort参数，向服务端发送open命令
 	pbuf.SetSrcPort(srcPort)
@@ -120,37 +118,26 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 	}
 
 	// 第四步：等待ack返回（设置超时时间）
-	select {
-	case resp := <-ch:
-		if resp == nil {
-			return nil, ErrUnexpectedNilResponse
-		}
-		if resp.err != nil {
-			return nil, resp.err
-		}
-		srcPort = 0
-		resp.stream.SetRemoteDomain(remoteDomain)
-		return resp.stream, nil
-	case <-time.After(d.timeout):
-		return nil, ErrWaitResponseTimeout
+	resp, err := ev.Wait(d.timeout)
+	if err != nil {
+		return nil, err
 	}
+
+	// HandleAckOpenStream 里面的处理逻辑，确保不会出现nil resp
+	s := resp.(*stream.Stream)
+	s.SetRemoteDomain(remoteDomain)
+
+	return s, nil
 }
 
-func (d *Dialer) HandleCmdOpenStreamAck(pbuf *packet.Buffer) {
-	it, found := d.responses.LoadAndDelete(pbuf.DistPort())
-	if !found {
-		log.Printf("open ack response chan not found, port=%v\n", pbuf.DistPort())
-		return
-	}
-	ch, ok := it.(chan *dialresp)
-	if !ok {
-		log.Printf("convert response chan failed")
-		return
-	}
-
+func (d *Dialer) HandleAckOpenStream(pbuf *packet.Buffer) {
+	evKey := pbuf.DistPort()
 	ackMessage := string(pbuf.Payload)
 	if ackMessage != "" {
-		ch <- &dialresp{errors.New(ackMessage), nil}
+		err := d.evbus.Dispatch(evKey, errors.New(ackMessage), nil)
+		if err != nil {
+			log.Println("Dispatch OpenAck failed:", err)
+		}
 		return
 	}
 
@@ -162,21 +149,21 @@ func (d *Dialer) HandleCmdOpenStreamAck(pbuf *packet.Buffer) {
 		d.host.domain, pbuf.DistIP(), pbuf.DistPort(),
 		"", pbuf.SrcIP(), pbuf.SrcPort(),
 	)
-	// defer func() {
-	// 	if s != nil {
-	// 		s.Close()
-	// 	}
-	// }()
 
 	err := d.host.AttachStream(s, pbuf.SID())
 	if err != nil {
 		log.Printf("attach stream to node failed, err=%v\n", err)
-		ch <- &dialresp{err, nil}
+		err = d.evbus.Dispatch(evKey, err, nil)
+		if err != nil {
+			log.Println("Dispatch OpenAck failed:", err)
+		}
 		return
 	}
 
-	ch <- &dialresp{nil, s}
-	s = nil
+	err = d.evbus.Dispatch(evKey, nil, s)
+	if err != nil {
+		log.Println("Dispatch OpenAck failed:", err)
+	}
 }
 
 // parseAddress 对字符串地址进行解析

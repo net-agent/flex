@@ -198,9 +198,9 @@ func TestHandlePingDomainAck(t *testing.T) {
 	pbuf := packet.NewBuffer(nil)
 
 	// 分支覆盖：找不到port
-	s.HandleCmdPingDomainAck(caller, pbuf)
+	s.HandleAckPingDomain(caller, pbuf)
 
 	// 分支覆盖：错误的类型
 	caller.pingBack.Store(uint16(0), 100)
-	s.HandleCmdPingDomainAck(caller, pbuf)
+	s.HandleAckPingDomain(caller, pbuf)
 }

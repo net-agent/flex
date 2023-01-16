@@ -2,11 +2,10 @@ package node
 
 import (
 	"errors"
-	"fmt"
 	"log"
-	"sync"
 	"time"
 
+	"github.com/net-agent/flex/v2/event"
 	"github.com/net-agent/flex/v2/numsrc"
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/vars"
@@ -17,10 +16,11 @@ var (
 )
 
 type Pinger struct {
-	host       *Node
-	portm      *numsrc.Manager
-	ackwaiter  sync.Map // map[srcport]chan string
-	ignorePing bool     // 是否相应ping请求
+	host  *Node
+	portm *numsrc.Manager
+	evbus event.Bus
+	// ackwaiter  sync.Map // map[srcport]chan string
+	ignorePing bool // 是否相应ping请求
 }
 
 func (p *Pinger) Init(host *Node) {
@@ -39,13 +39,10 @@ func (p *Pinger) PingDomain(domain string, timeout time.Duration) (time.Duration
 	}
 	defer p.portm.ReleaseNumberSrc(port)
 
-	ch := make(chan string) // for response
-	p.ackwaiter.Store(port, ch)
-	defer func() {
-		// 此处先delete，然后再close，可以确保ack时不会panic
-		p.ackwaiter.Delete(port)
-		close(ch)
-	}()
+	w, err := p.evbus.ListenOnce(port)
+	if err != nil {
+		return 0, err
+	}
 
 	pingStart := time.Now()
 
@@ -59,15 +56,10 @@ func (p *Pinger) PingDomain(domain string, timeout time.Duration) (time.Duration
 		return 0, err
 	}
 
-	select {
-	case info := <-ch:
-		if info != "" {
-			return 0, fmt.Errorf("ping response: %v", info)
-		}
-	case <-time.After(timeout):
-		return 0, ErrPingDomainTimeout
+	_, err = w.Wait(timeout)
+	if err != nil {
+		return 0, err
 	}
-
 	return time.Since(pingStart), nil
 }
 
@@ -83,27 +75,19 @@ func (p *Pinger) HandleCmdPingDomain(pbuf *packet.Buffer) {
 		pbuf.SetPayload(nil)
 	}
 
-	pbuf.SetCmd(packet.CmdPingDomain | packet.CmdACKFlag)
+	pbuf.SetCmd(packet.AckPingDomain)
 	pbuf.SwapSrcDist()
 	pbuf.SetSrc(p.host.GetIP(), 0)
 	p.host.WriteBuffer(pbuf)
 }
 
-// HandleCmdPingDomainAck 处理远端的应答
-func (p *Pinger) HandleCmdPingDomainAck(pbuf *packet.Buffer) {
-	it, found := p.ackwaiter.Load(pbuf.DistPort())
-	if !found {
-		log.Printf("HandleCmdPingDomainAck failed, port='%v' not found\n", pbuf.DistPort())
-		return
+// HandleAckPingDomain 处理远端的应答
+func (p *Pinger) HandleAckPingDomain(pbuf *packet.Buffer) {
+	port := pbuf.DistPort()
+	msg := string(pbuf.Payload)
+	if msg != "" {
+		p.evbus.Dispatch(port, errors.New(msg), nil)
+	} else {
+		p.evbus.Dispatch(port, nil, nil)
 	}
-	ch, ok := it.(chan string)
-	if !ok {
-		log.Printf("HandleCmdPingDomainAck failed, convert pbuf chan failed\n")
-		return
-	}
-
-	// note1: 此处可能会panic，需要确保ch是未closed状态
-	// note2: 由于在PingDomain处是先delete sync.map，然后再close chan，所以此处是安全的？？
-	// note3: delete和close是非原子操作，会有问题（todo）
-	ch <- string(pbuf.Payload)
 }

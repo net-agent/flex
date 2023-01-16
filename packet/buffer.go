@@ -20,6 +20,14 @@ const (
 	CmdPingDomain
 )
 
+const (
+	AckOpenStream     = CmdOpenStream | CmdACKFlag
+	AckCloseStream    = CmdCloseStream | CmdACKFlag
+	AckPushStreamData = CmdPushStreamData | CmdACKFlag
+	AckPushMessage    = CmdPushMessage | CmdACKFlag
+	AckPingDomain     = CmdPingDomain | CmdACKFlag
+)
+
 // Header
 // +-------+------+--------+----------+--------+---------+-------------+
 // | Field | Cmd  | DistIP | DistPort | SrcIP  | SrcPort | PayloadSize |
