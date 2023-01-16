@@ -44,10 +44,10 @@ func testPipeConn(t *testing.T, conn1, conn2 net.Conn) {
 	for {
 		rn, err := conn1.Read(buf)
 		readed += rn
+		readBuf = append(readBuf, buf[:rn]...)
 		if !assert.Nil(t, err) {
 			return
 		}
-		readBuf = append(readBuf, buf[:rn]...)
 		if readed >= size {
 			break
 		}
