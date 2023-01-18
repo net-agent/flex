@@ -17,6 +17,9 @@ func TestWriteFailed(t *testing.T) {
 
 	pc.SetWriteTimeout(timeout)
 
-	_, err := s.write([]byte{1, 2, 3, 4, 5})
+	_, err := s.Write(nil)
+	assert.Nil(t, err)
+
+	_, err = s.write([]byte{1, 2, 3, 4, 5})
 	assert.NotNil(t, err)
 }
