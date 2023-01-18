@@ -3,6 +3,7 @@ package stream
 import (
 	"bytes"
 	"io"
+	"log"
 	"math/rand"
 	"net"
 	"testing"
@@ -19,9 +20,9 @@ func TestGetReadWriteSize(t *testing.T) {
 
 	s1Read, s1Write := s1.GetReadWriteSize()
 	s2Read, s2Write := s2.GetReadWriteSize()
-	assert.Equal(t, s1Read, s2Write)
-	assert.Equal(t, s2Read, s1Write)
 	assert.Equal(t, s1Read, s1Write)
+	assert.Equal(t, s2Read, s2Write)
+	assert.Equal(t, s1Read, s2Read)
 }
 
 func testPipeConn(t *testing.T, conn1, conn2 net.Conn) {
@@ -46,6 +47,7 @@ func testPipeConn(t *testing.T, conn1, conn2 net.Conn) {
 		readed += rn
 		readBuf = append(readBuf, buf[:rn]...)
 		if !assert.Nil(t, err) {
+			log.Printf("test pipe conn: read err=%v\n", err)
 			return
 		}
 		if readed >= size {

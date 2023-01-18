@@ -79,10 +79,14 @@ func (hub *ListenHub) HandleCmdOpenStream(pbuf *packet.Buffer) {
 	}
 
 	// 根据OpenCmd的信息创建stream
+	remoteDomain := string(pbuf.Payload)
+	if remoteDomain == "" && pbuf.SrcIP() == hub.host.ip {
+		remoteDomain = hub.host.domain
+	}
 	s := stream.NewAcceptStream(
 		hub.host,
 		hub.host.domain, pbuf.DistIP(), pbuf.DistPort(),
-		string(pbuf.Payload), pbuf.SrcIP(), pbuf.SrcPort(),
+		remoteDomain, pbuf.SrcIP(), pbuf.SrcPort(),
 	)
 	defer func() {
 		if s != nil {
