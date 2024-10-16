@@ -78,15 +78,11 @@ func (node *Node) GetDomain() string       { return node.domain }
 func (node *Node) SetIP(ip uint16)         { node.ip = ip }
 func (node *Node) GetIP() uint16           { return node.ip }
 
-func (node *Node) Run() {
-	if node.running {
-		return
+func (node *Node) Run() error {
+	err := node.initRun()
+	if err != nil {
+		return err
 	}
-	node.running = true
-	// 创建不同的缓存队列，避免不同功能的数据包相互影响
-	// 根据是否需要有序分为：Cmd和Data两种类型
-	node.cmdChan = make(chan *packet.Buffer, 1024)  // 用于缓存OpenStream、PushDataAck的队列，这两个无需保证顺序
-	node.dataChan = make(chan *packet.Buffer, 1024) // 与数据传输有关的包，OpenStreamAck、PushData、Close、CloseAck，需要保证顺序
 
 	// 从pbuf channel中消费数据
 	// 不断路由收到的pbuf
@@ -99,18 +95,42 @@ func (node *Node) Run() {
 	go node.keepalive(ticker)
 
 	// 不断读取pbuf直到底层网络通信失败为止
+	// 正常情况下阻塞于此
 	node.readBufferUntilFailed()
 
-	// 安全清理相关资源
+	// 调用关闭方法，清理系统资源
+	return node.Close()
+}
+
+// Run之前的资源创建工作
+func (node *Node) initRun() error {
 	node.chanMut.Lock()
-	node.running = false
-	close(node.cmdChan)
-	close(node.dataChan)
-	node.chanMut.Unlock()
+	defer node.chanMut.Unlock()
+
+	if node.running {
+		return errors.New("repeat run detected")
+	}
+	node.running = true
+
+	// 创建不同的缓存队列，避免不同功能的数据包相互影响
+	// 根据是否需要有序分为：Cmd和Data两种类型
+	node.cmdChan = make(chan *packet.Buffer, 1024)  // 用于缓存OpenStream、PushDataAck的队列，这两个无需保证顺序
+	node.dataChan = make(chan *packet.Buffer, 1024) // 与数据传输有关的包，OpenStreamAck、PushData、Close、CloseAck，需要保证顺序
+
+	return nil
 }
 
 func (node *Node) Close() error {
 	node.onceClose.Do(func() {
+		// 安全清理相关资源
+		node.chanMut.Lock()
+		if node.running {
+			node.running = false
+			close(node.cmdChan)
+			close(node.dataChan)
+		}
+		node.chanMut.Unlock()
+
 		node.Conn.Close()
 	})
 	return nil
