@@ -13,12 +13,12 @@ import (
 
 func initTestEnv(domain1, domain2 string) (*Server, *node.Node, *node.Node) {
 	pswd := "testpswd"
-	s := NewServer(pswd)
+	s := NewServer(pswd, nil)
 	pc1, pc2 := packet.Pipe()
 	pc3, pc4 := packet.Pipe()
 
-	go s.HandlePacketConn(pc2)
-	go s.HandlePacketConn(pc4)
+	go s.HandlePacketConn(pc2, nil, nil)
+	go s.HandlePacketConn(pc4, nil, nil)
 
 	ip1, _ := handshake.UpgradeRequest(pc1, domain1, "", pswd)
 	node1 := node.New(pc1)
@@ -39,7 +39,7 @@ func initTestEnv(domain1, domain2 string) (*Server, *node.Node, *node.Node) {
 
 func TestGetContextByDomain(t *testing.T) {
 	var err error
-	s := NewServer("")
+	s := NewServer("", nil)
 
 	// 错误分支：domain不正确
 	_, err = s.GetContextByDomain("")
@@ -79,7 +79,7 @@ func TestGetContextByDomain(t *testing.T) {
 
 func TestGetContextByIP(t *testing.T) {
 	var err error
-	s := NewServer("")
+	s := NewServer("", nil)
 
 	// 错误分支：invalid context ip
 	_, err = s.GetContextByIP(vars.LocalIP)
@@ -161,7 +161,7 @@ func TestHandleDefaultPbufWithPing(t *testing.T) {
 }
 
 func TestHandleDefaultPbufErr_Write(t *testing.T) {
-	s := NewServer("")
+	s := NewServer("", nil)
 	ctx := NewContext(nil, "test", "")
 	ctx.IP = 2
 	s.nodeIps.Store(ctx.IP, ctx)
@@ -193,7 +193,7 @@ func TestHandleCmdOpenStream(t *testing.T) {
 }
 
 func TestHandlePingDomainAck(t *testing.T) {
-	s := NewServer("")
+	s := NewServer("", nil)
 	caller := NewContext(nil, "test", "")
 	pbuf := packet.NewBuffer(nil)
 

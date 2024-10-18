@@ -2,7 +2,9 @@ package switcher
 
 import (
 	"log"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/net-agent/flex/v2/handshake"
 	"github.com/net-agent/flex/v2/node"
@@ -11,7 +13,7 @@ import (
 
 func TestHandlePacketConn(t *testing.T) {
 	pswd := "testpswd"
-	s := NewServer(pswd)
+	s := NewServer(pswd, nil)
 	pc1, pc2 := packet.Pipe()
 
 	// 模拟客户端请求
@@ -20,19 +22,27 @@ func TestHandlePacketConn(t *testing.T) {
 		pc1.Close()
 	}()
 
-	s.HandlePacketConn(pc2)
+	s.HandlePacketConn(pc2, nil, nil)
 }
 
 // 模拟domain重复的场景
 func TestHandlePCErr_DomainExist(t *testing.T) {
 	pswd := "testpswd"
-	s := NewServer(pswd)
+	s := NewServer(pswd, nil)
 	pc1, pc2 := packet.Pipe()
 	pc3, pc4 := packet.Pipe()
 
-	go s.HandlePacketConn(pc2)
-	go s.HandlePacketConn(pc4)
+	onStart := func(ctx *Context) {
+		log.Printf("pbuf loop start, domain='%v' ip='%v'", ctx.Domain, ctx.IP)
+	}
+	onStop := func(ctx *Context, duration time.Duration) {
+		log.Printf("pbuf loop stopped, dur=%v\n", duration)
+	}
 
+	go s.HandlePacketConn(pc2, onStart, onStop)
+	go s.HandlePacketConn(pc4, onStart, onStop)
+
+	// 先正常接入一个domain=test的连接
 	ip, err := handshake.UpgradeRequest(pc1, "test", "", pswd)
 	if err != nil {
 		t.Errorf("unexpected err=%v\n", err)
@@ -41,20 +51,28 @@ func TestHandlePCErr_DomainExist(t *testing.T) {
 	node := node.New(pc1)
 	node.SetIP(ip)
 	node.SetDomain("test")
-	go node.Run()
+	var waitNodeRun sync.WaitGroup
+	waitNodeRun.Add(1)
+	go func() {
+		node.Run()
+		waitNodeRun.Done()
+	}()
 
+	// 模拟重复接入一个domain=test的连接
 	_, err = handshake.UpgradeRequest(pc3, "test", "", pswd)
 	if err == nil {
 		t.Error("unexpected nil err")
 		return
 	}
 	log.Printf("expected err=%v\n", err)
+	pc1.Close()
+	waitNodeRun.Wait()
 }
 
 // 模拟domain重复的场景
 func TestHandlePCErr_Password(t *testing.T) {
 	pswd := "testpswd"
-	s := NewServer(pswd)
+	s := NewServer(pswd, nil)
 	pc1, pc2 := packet.Pipe()
 
 	go func() {
@@ -70,7 +88,7 @@ func TestHandlePCErr_Password(t *testing.T) {
 		pc1.ReadBuffer()
 	}()
 
-	err := s.HandlePacketConn(pc2)
+	err := s.HandlePacketConn(pc2, nil, nil)
 	if err != handshake.ErrInvalidPassword {
 		t.Errorf("unexpected err=%v\n", err)
 		return
@@ -81,7 +99,7 @@ func TestHandlePCErr_Password(t *testing.T) {
 // 模拟服务端在应答UpgradeRequest之前连接断开的情况
 func TestHandlePCErr_WriteResponse(t *testing.T) {
 	pswd := "testpswd"
-	s := NewServer(pswd)
+	s := NewServer(pswd, nil)
 	pc1, pc2 := packet.Pipe()
 
 	go func() {
@@ -97,7 +115,7 @@ func TestHandlePCErr_WriteResponse(t *testing.T) {
 		pc1.Close()
 	}()
 
-	err := s.HandlePacketConn(pc2)
+	err := s.HandlePacketConn(pc2, nil, nil)
 	if err != errHandlePCWriteFailed {
 		t.Errorf("unexpected err=%v\n", err)
 		return

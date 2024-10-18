@@ -2,7 +2,7 @@ package switcher
 
 import (
 	"errors"
-	"log"
+	"fmt"
 	"strings"
 
 	"github.com/net-agent/flex/v2/handshake"
@@ -58,14 +58,14 @@ func (s *Server) GetContextByIP(ip uint16) (*Context, error) {
 func (s *Server) HandleDefaultPbuf(pbuf *packet.Buffer) {
 	dist, err := s.GetContextByIP(pbuf.DistIP())
 	if err != nil {
-		log.Printf("route pbuf failed: %v\n", err)
+		s.PopupWarning("route pbuf failed", err.Error())
 		return
 	}
 
 	// 有一定的失败可能，但对于服务端的状态来说不关键
 	err = dist.WriteBuffer(pbuf)
 	if err != nil {
-		log.Printf("handleDefaultPbuf failed, write to dist err='%v'\n", err)
+		s.PopupWarning("write to dist failed", err.Error())
 	}
 }
 
@@ -118,7 +118,7 @@ func (s *Server) HandleAckPingDomain(caller *Context, pbuf *packet.Buffer) {
 	port := pbuf.DistPort()
 	it, found := caller.pingBack.Load(port)
 	if !found {
-		log.Printf("HandleAckPingDomain failed, port='%v' not found\n", port)
+		s.PopupWarning("port not found", fmt.Sprintf("port=%v", port))
 		return
 	}
 	ch, ok := it.(chan *packet.Buffer)
@@ -135,7 +135,7 @@ func (s *Server) HandleCmdOpenStream(caller *Context, pbuf *packet.Buffer) {
 
 	distCtx, err := s.GetContextByDomain(distDomain)
 	if err != nil {
-		log.Printf("%v. domain='%v'\n", errResolveDomainFailed, distDomain)
+		s.PopupWarning(fmt.Sprintf("resove domain='%v' failed", distDomain), err.Error())
 		pbuf.SetOpenACK(errResolveDomainFailed.Error())
 		pbuf.SetSrcIP(0)
 		caller.WriteBuffer(pbuf)

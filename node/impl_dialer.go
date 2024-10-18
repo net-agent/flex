@@ -3,7 +3,6 @@ package node
 import (
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"strconv"
 	"time"
@@ -136,7 +135,10 @@ func (d *Dialer) HandleAckOpenStream(pbuf *packet.Buffer) {
 	if ackMessage != "" {
 		err := d.evbus.Dispatch(evKey, errors.New(ackMessage), nil)
 		if err != nil {
-			log.Println("Dispatch OpenAck failed:", err)
+			d.host.PopupWarning(
+				"dispatch ack-msg failed",
+				err.Error(),
+			)
 		}
 		return
 	}
@@ -152,17 +154,17 @@ func (d *Dialer) HandleAckOpenStream(pbuf *packet.Buffer) {
 
 	err := d.host.AttachStream(s, pbuf.SID())
 	if err != nil {
-		log.Printf("attach stream to node failed, err=%v\n", err)
+		d.host.PopupWarning("attach stream to node failed", err.Error())
 		err = d.evbus.Dispatch(evKey, err, nil)
 		if err != nil {
-			log.Println("Dispatch OpenAck failed:", err)
+			d.host.PopupWarning("dispatch ack-err failed", err.Error())
 		}
 		return
 	}
 
 	err = d.evbus.Dispatch(evKey, nil, s)
 	if err != nil {
-		log.Println("Dispatch OpenAck failed:", err)
+		d.host.PopupWarning("dispatch ack failed", err.Error())
 	}
 }
 

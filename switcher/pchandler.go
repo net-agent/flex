@@ -2,7 +2,6 @@ package switcher
 
 import (
 	"errors"
-	"log"
 	"time"
 
 	"github.com/net-agent/flex/v2/handshake"
@@ -13,8 +12,11 @@ var (
 	errHandlePCWriteFailed = errors.New("write to packet.Conn failed")
 )
 
+type OnLoopStartHandler func(ctx *Context)
+type OnLoopStopHandler func(ctx *Context, duration time.Duration)
+
 // HandlePacketConn
-func (s *Server) HandlePacketConn(pc packet.Conn) error {
+func (s *Server) HandlePacketConn(pc packet.Conn, onStart OnLoopStartHandler, onStop OnLoopStopHandler) error {
 	defer pc.Close()
 
 	var resp handshake.Response
@@ -45,19 +47,23 @@ func (s *Server) HandlePacketConn(pc packet.Conn) error {
 	resp.Version = packet.VERSION
 	err = resp.WriteToPacketConn(pc)
 	if err != nil {
-		log.Printf("resp.WriteToPacketConn failed: %v\n", err)
+		s.PopupWarning("response client failed", err.Error())
 		return errHandlePCWriteFailed
 	}
 
 	// 记录服务时长
 	start := time.Now()
-	log.Printf("context loop start. domain='%v' id='%v'\n", ctx.Domain, ctx.id)
+	if onStart != nil {
+		onStart(ctx)
+	}
 
 	err = RunPbufLoopService(s, ctx)
 
 	// 计算并打印时长
 	dur := time.Since(start).Round(time.Second)
-	log.Printf("context loop stop. domain='%v' id='%v' dur='%v'\n", ctx.Domain, ctx.id, dur)
+	if onStop != nil {
+		onStop(ctx, dur)
+	}
 
 	return err
 }

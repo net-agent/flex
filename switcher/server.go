@@ -10,6 +10,7 @@ import (
 	"github.com/net-agent/flex/v2/numsrc"
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/vars"
+	"github.com/net-agent/flex/v2/warning"
 )
 
 var (
@@ -26,9 +27,15 @@ type Server struct {
 	nodeIps       sync.Map   // map[uint16]*Context
 	ctxRecords    []*Context // 不断自增（todo：fix memory leak）
 	ctxRecordsMut sync.Mutex
+	warning.Guard
 }
 
-func NewServer(password string) *Server {
+type ServerError struct {
+	Message  string // 错误描述信息
+	RawError string // 产生的原始错误
+}
+
+func NewServer(password string, errChan chan<- *warning.Message) *Server {
 	ipm, _ := numsrc.NewManager(1, 1, vars.MaxIP-1)
 
 	return &Server{
@@ -49,7 +56,7 @@ func (s *Server) Run(l net.Listener) {
 			return
 		}
 
-		go s.HandlePacketConn(packet.NewWithConn(conn))
+		go s.HandlePacketConn(packet.NewWithConn(conn), nil, nil)
 	}
 }
 

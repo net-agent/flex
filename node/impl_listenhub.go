@@ -3,7 +3,6 @@ package node
 import (
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"sync"
 
@@ -67,7 +66,10 @@ func (hub *ListenHub) HandleCmdOpenStream(pbuf *packet.Buffer) {
 	defer func() {
 		err := hub.host.WriteBuffer(pbuf.SetOpenACK(ackMessage))
 		if err != nil {
-			log.Printf("HandleCmdOpenStream write ackMessage failed, err=%v\n", err)
+			hub.host.PopupWarning(
+				"write ack-msg failed",
+				err.Error(),
+			)
 		}
 	}()
 

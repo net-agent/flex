@@ -2,17 +2,18 @@ package node
 
 import (
 	"errors"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/net-agent/flex/v2/numsrc"
 	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v2/warning"
 )
 
 var (
 	ErrSidIsAttached = errors.New("sid is attached")
 	ErrWriterIsNil   = errors.New("writer is nil")
+	ErrNodeIsStopped = errors.New("node is stopped")
 )
 
 var (
@@ -32,10 +33,11 @@ type Node struct {
 	running  bool
 	chanMut  sync.RWMutex
 
-	ListenHub // 提供Listen实现
-	Dialer    // 提供Dial、DialDomain、DialIP实现
-	Pinger    // 提供PingDomain实现
-	DataHub   // 处理Data、DataAck、Close、CloseAck
+	ListenHub     // 提供Listen实现
+	Dialer        // 提供Dial、DialDomain、DialIP实现
+	Pinger        // 提供PingDomain实现
+	DataHub       // 处理Data、DataAck、Close、CloseAck
+	warning.Guard // 处理后台任务的异常信息
 
 	network string
 	domain  string
@@ -83,6 +85,7 @@ func (node *Node) Run() error {
 	if err != nil {
 		return err
 	}
+	defer node.Close()
 
 	// 从pbuf channel中消费数据
 	// 不断路由收到的pbuf
@@ -96,10 +99,7 @@ func (node *Node) Run() error {
 
 	// 不断读取pbuf直到底层网络通信失败为止
 	// 正常情况下阻塞于此
-	node.readBufferUntilFailed()
-
-	// 调用关闭方法，清理系统资源
-	return node.Close()
+	return node.readBufferUntilFailed()
 }
 
 // Run之前的资源创建工作
@@ -153,26 +153,28 @@ func (node *Node) WriteBuffer(pbuf *packet.Buffer) error {
 	return node.Conn.WriteBuffer(pbuf)
 }
 
-func (node *Node) readBufferUntilFailed() {
+func (node *Node) readBufferUntilFailed() error {
 	for {
 		node.SetReadTimeout(time.Minute * 15)
 		pbuf, err := node.ReadBuffer()
 		if err != nil {
-			log.Printf("readBufferUntilFailed err=%v\n", err)
-			return
+			return err
 		}
 
-		node.handlePbuf(pbuf)
+		err = node.handlePbuf(pbuf)
+		if err != nil {
+			return err
+		}
 	}
+
 }
 
-func (node *Node) handlePbuf(pbuf *packet.Buffer) {
+func (node *Node) handlePbuf(pbuf *packet.Buffer) error {
 	node.chanMut.RLock()
 	defer node.chanMut.RUnlock()
 
 	if !node.running {
-		log.Println("handlePbuf failed: node is stopped")
-		return
+		return ErrNodeIsStopped
 	}
 
 	switch pbuf.Cmd() {
@@ -186,6 +188,8 @@ func (node *Node) handlePbuf(pbuf *packet.Buffer) {
 	default:
 		node.dataChan <- pbuf
 	}
+
+	return nil
 }
 
 // pbufRouteLoop 处理流数据传输的逻辑（open-ack -> push -> push-ack -> close -> close-ack）
@@ -205,7 +209,7 @@ func (node *Node) routeCmdPbufChan(ch chan *packet.Buffer) {
 			node.HandleAckPingDomain(pbuf)
 
 		default:
-			log.Println("unexpected pbuf cmd:", pbuf.HeaderString())
+			node.PopupWarning("unknown cmd", pbuf.HeaderString())
 		}
 	}
 }
@@ -225,7 +229,7 @@ func (node *Node) routeDataPbufChan(ch chan *packet.Buffer) {
 			node.HandleAckCloseStream(pbuf)
 
 		default:
-			log.Println("unexpected pbuf data:", pbuf.HeaderString())
+			node.PopupWarning("unknown cmd", pbuf.HeaderString())
 		}
 	}
 }
@@ -237,13 +241,13 @@ func (node *Node) keepalive(ticker *time.Ticker) {
 		}
 
 		if node.aliveChecker == nil {
-			log.Println("keepalive error: alive checker is nil")
+			node.PopupWarning("aliveChecker is nil", "")
 			return
 		}
 
 		err := node.aliveChecker()
 		if err != nil {
-			log.Printf("keepalive error: %v\n", err)
+			node.PopupWarning("check alive failed", err.Error())
 			node.Close()
 			ticker.Stop()
 			return

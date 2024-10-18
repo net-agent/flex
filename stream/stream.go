@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v2/warning"
 )
 
 const (
@@ -52,6 +53,8 @@ type Stream struct {
 	appendDataTimeout  time.Duration
 	readTimeout        time.Duration
 	waitDataAckTimeout time.Duration
+
+	warning.Guard
 }
 
 func (s *Stream) GetState() *State {

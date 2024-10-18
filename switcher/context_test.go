@@ -50,12 +50,12 @@ func TestContextPing(t *testing.T) {
 
 func TestPingErr_Timeout(t *testing.T) {
 	pswd := "testpswd"
-	s := NewServer(pswd)
+	s := NewServer(pswd, nil)
 	pc1, pc2 := packet.Pipe()
 	pc3, pc4 := packet.Pipe()
 
-	go s.HandlePacketConn(pc2)
-	go s.HandlePacketConn(pc4)
+	go s.HandlePacketConn(pc2, nil, nil)
+	go s.HandlePacketConn(pc4, nil, nil)
 
 	var waitUpgradeReady sync.WaitGroup
 
