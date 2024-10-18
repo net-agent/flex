@@ -22,23 +22,23 @@ func TestGetStreamBySID(t *testing.T) {
 	assert.Equal(t, err, errStreamNotFound, "cover test: errStreamNotFound")
 
 	// 测试分支：convert failed
-	hub.streams.Store(uint64(100), 1234)
+	hub.streamSidMap.Store(uint64(100), 1234)
 	loadAndDelete := true
 	_, err = hub.GetStreamBySID(100, loadAndDelete)
 	assert.Equal(t, err, errConvertStreamFailed, "cover test: errConvertStreamFailed")
 
-	_, loaded := hub.streams.Load(uint64(100))
+	_, loaded := hub.streamSidMap.Load(uint64(100))
 	assert.False(t, loaded, "test loadAndDelete flag")
 
 	// 测试分支：正常通过
 	s := stream.New(nil)
-	hub.streams.Store(uint64(200), s)
+	hub.streamSidMap.Store(uint64(200), s)
 	loadAndDelete = false
 	retStream, err := hub.GetStreamBySID(uint64(200), loadAndDelete)
 	assert.Nil(t, err, "test loadAndDelete flag")
 	assert.Equal(t, retStream, s, "retStream should equal to s")
 
-	_, loaded = hub.streams.Load(uint64(200))
+	_, loaded = hub.streamSidMap.Load(uint64(200))
 	assert.True(t, loaded, "test loadAndDelete flag")
 }
 

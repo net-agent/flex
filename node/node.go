@@ -3,6 +3,7 @@ package node
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/net-agent/flex/v2/numsrc"
@@ -45,6 +46,9 @@ type Node struct {
 
 	onceClose    sync.Once
 	aliveChecker func() error
+
+	writtenDataSize int64
+	readedDataSize  int64
 }
 
 func New(conn packet.Conn) *Node {
@@ -79,6 +83,9 @@ func (node *Node) SetDomain(domain string) { node.domain = domain }
 func (node *Node) GetDomain() string       { return node.domain }
 func (node *Node) SetIP(ip uint16)         { node.ip = ip }
 func (node *Node) GetIP() uint16           { return node.ip }
+func (node *Node) GetReadWriteSize() (readed, written int64) {
+	return node.readedDataSize, node.writtenDataSize
+}
 
 func (node *Node) Run() error {
 	err := node.initRun()
@@ -150,6 +157,7 @@ func (node *Node) WriteBuffer(pbuf *packet.Buffer) error {
 	defer node.writeMut.Unlock()
 
 	node.lastWriteTime = time.Now()
+	atomic.AddInt64(&node.writtenDataSize, int64(pbuf.PayloadSize()))
 	return node.Conn.WriteBuffer(pbuf)
 }
 
@@ -160,6 +168,8 @@ func (node *Node) readBufferUntilFailed() error {
 		if err != nil {
 			return err
 		}
+
+		atomic.AddInt64(&node.readedDataSize, int64(pbuf.PayloadSize()))
 
 		err = node.handlePbuf(pbuf)
 		if err != nil {

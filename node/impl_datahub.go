@@ -18,7 +18,7 @@ var (
 type DataHub struct {
 	// host    *Node
 	portm              *numsrc.Manager
-	streams            sync.Map        // map[sid]*stream.Conn
+	streamSidMap       sync.Map        // map[sid]*stream.Conn
 	closedStreamStates []*stream.State // 保存已经关闭的连接状态
 	closedMut          sync.RWMutex
 }
@@ -28,7 +28,7 @@ func (hub *DataHub) Init(portm *numsrc.Manager) {
 }
 
 func (hub *DataHub) AttachStream(s *stream.Stream, sid uint64) error {
-	_, loaded := hub.streams.LoadOrStore(sid, s)
+	_, loaded := hub.streamSidMap.LoadOrStore(sid, s)
 	if loaded {
 		// 已经存在还未释放的stream
 		return ErrSidIsAttached
@@ -42,9 +42,9 @@ func (hub *DataHub) GetStreamBySID(sid uint64, getAndDelete bool) (*stream.Strea
 	var found bool
 
 	if getAndDelete {
-		it, found = hub.streams.LoadAndDelete(sid)
+		it, found = hub.streamSidMap.LoadAndDelete(sid)
 	} else {
-		it, found = hub.streams.Load(sid)
+		it, found = hub.streamSidMap.Load(sid)
 	}
 	if !found {
 		return nil, errStreamNotFound
@@ -60,7 +60,7 @@ func (hub *DataHub) GetStreamBySID(sid uint64, getAndDelete bool) (*stream.Strea
 
 func (hub *DataHub) GetStreamStateList() []*stream.State {
 	list := []*stream.State{}
-	hub.streams.Range(func(key, value interface{}) bool {
+	hub.streamSidMap.Range(func(key, value interface{}) bool {
 		s, ok := value.(*stream.Stream)
 		if ok {
 			list = append(list, s.GetState())
