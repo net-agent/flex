@@ -13,7 +13,7 @@ import (
 
 func TestHandlePacketConn(t *testing.T) {
 	pswd := "testpswd"
-	s := NewServer(pswd, nil)
+	s := NewServer(pswd)
 	pc1, pc2 := packet.Pipe()
 
 	// 模拟客户端请求
@@ -28,7 +28,7 @@ func TestHandlePacketConn(t *testing.T) {
 // 模拟domain重复的场景
 func TestHandlePCErr_DomainExist(t *testing.T) {
 	pswd := "testpswd"
-	s := NewServer(pswd, nil)
+	s := NewServer(pswd)
 	pc1, pc2 := packet.Pipe()
 	pc3, pc4 := packet.Pipe()
 
@@ -72,7 +72,7 @@ func TestHandlePCErr_DomainExist(t *testing.T) {
 // 模拟domain重复的场景
 func TestHandlePCErr_Password(t *testing.T) {
 	pswd := "testpswd"
-	s := NewServer(pswd, nil)
+	s := NewServer(pswd)
 	pc1, pc2 := packet.Pipe()
 
 	go func() {
@@ -99,7 +99,7 @@ func TestHandlePCErr_Password(t *testing.T) {
 // 模拟服务端在应答UpgradeRequest之前连接断开的情况
 func TestHandlePCErr_WriteResponse(t *testing.T) {
 	pswd := "testpswd"
-	s := NewServer(pswd, nil)
+	s := NewServer(pswd)
 	pc1, pc2 := packet.Pipe()
 
 	go func() {

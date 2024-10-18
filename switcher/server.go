@@ -35,7 +35,7 @@ type ServerError struct {
 	RawError string // 产生的原始错误
 }
 
-func NewServer(password string, errChan chan<- *warning.Message) *Server {
+func NewServer(password string) *Server {
 	ipm, _ := numsrc.NewManager(1, 1, vars.MaxIP-1)
 
 	return &Server{

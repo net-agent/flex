@@ -3,18 +3,16 @@ package switcher
 import (
 	"log"
 	"net"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/net-agent/flex/v2/handshake"
 	"github.com/net-agent/flex/v2/numsrc"
 	"github.com/net-agent/flex/v2/packet"
-	"github.com/net-agent/flex/v2/warning"
 )
 
 func TestAttachCtx(t *testing.T) {
-	s := NewServer("", nil)
+	s := NewServer("")
 	ctx := NewContext(nil, "test1", "")
 
 	// 测试分支：正确处理
@@ -59,7 +57,7 @@ func TestAttachCtx(t *testing.T) {
 }
 
 func TestAttachErr_GetIP(t *testing.T) {
-	s := NewServer("", nil)
+	s := NewServer("")
 	s.ipm, _ = numsrc.NewManager(0, 9, 10)
 	var err error
 
@@ -78,19 +76,8 @@ func TestAttachErr_GetIP(t *testing.T) {
 func TestServerRun(t *testing.T) {
 	addr := "localhost:39603"
 	pswd := "testpswd"
-	errChan := make(chan *warning.Message, 10)
-	s := NewServer(pswd, errChan)
+	s := NewServer(pswd)
 	s.Close() // 提高代码覆盖度
-
-	// test popupError
-	var waitErrChanClose sync.WaitGroup
-	waitErrChanClose.Add(1)
-	go func() {
-		for err := range errChan {
-			log.Printf("popupError: %v\n", err)
-		}
-		waitErrChanClose.Done()
-	}()
 
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
@@ -110,6 +97,4 @@ func TestServerRun(t *testing.T) {
 
 	s.PopupWarning("test popupwarning", "reason")
 	s.Close()
-	close(errChan)
-	waitErrChanClose.Wait()
 }

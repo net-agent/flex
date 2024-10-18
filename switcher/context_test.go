@@ -50,7 +50,7 @@ func TestContextPing(t *testing.T) {
 
 func TestPingErr_Timeout(t *testing.T) {
 	pswd := "testpswd"
-	s := NewServer(pswd, nil)
+	s := NewServer(pswd)
 	pc1, pc2 := packet.Pipe()
 	pc3, pc4 := packet.Pipe()
 
