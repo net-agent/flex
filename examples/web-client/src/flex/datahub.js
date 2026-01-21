@@ -61,6 +61,13 @@ export class DataHub {
         }
     }
 
+    handleAckPushData(pbuf) {
+        const s = this.getStream(pbuf.getDistPort(), pbuf.getSrcIP(), pbuf.getSrcPort());
+        if (s) {
+            s.handleAckPushData(pbuf);
+        }
+    }
+
     handleCloseStream(pbuf) {
         const s = this.getStream(pbuf.getDistPort(), pbuf.getSrcIP(), pbuf.getSrcPort());
         if (s) {

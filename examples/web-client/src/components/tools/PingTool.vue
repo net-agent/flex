@@ -142,6 +142,12 @@
   </ToolLayout>
 </template>
 
+<script>
+export default {
+    name: 'PingTool'
+}
+</script>
+
 <script setup>
 import { ref, onUnmounted, computed } from 'vue';
 import { flexService } from '../../services/flex.js';

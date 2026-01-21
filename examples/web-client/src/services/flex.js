@@ -11,6 +11,7 @@ class FlexService {
             ip: 0,
             domain: '',
             logs: [],
+            connectedSince: null,
             theme: localStorage.getItem('flex_theme') || 'dark', // 'light' | 'dark'
         });
 
@@ -24,8 +25,10 @@ class FlexService {
             if (newState === 'ready') {
                 this.state.ip = this.node.ip;
                 this.state.domain = this.node.domain;
+                this.state.connectedSince = Date.now();
             } else if (newState === 'disconnected') {
                 this.state.ip = 0;
+                this.state.connectedSince = null;
             }
         };
 

@@ -4,6 +4,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/net-agent/flex/v2/packet"
@@ -43,7 +44,11 @@ func main() {
 
 		// Handover to switcher
 		// Note: The third argument is 'authInfo', which we can leave nil for now or parse from URL/headers
-		go s.HandlePacketConn(pConn, nil, nil)
+		go s.HandlePacketConn(pConn, func(ctx *switcher.Context) {
+			log.Printf("context loop start. domain=%s, id=%v", ctx.Domain, ctx.GetID())
+		}, func(ctx *switcher.Context, duration time.Duration) {
+			log.Printf("context loop stop. domain=%s, id=%v, dur=%v", ctx.Domain, ctx.GetID(), duration)
+		})
 	})
 
 	// Serve static files for the web client

@@ -70,11 +70,48 @@ export class Packet {
     }
 
     setPayload(buffer) {
-        this.payload = buffer;
-        this.view.setUint16(9, buffer.byteLength);
+        if (!buffer) {
+            this.payload = new ArrayBuffer(0);
+            this.view.setUint16(9, 0);
+            return;
+        }
+
+        // Convert string to Uint8Array? No, caller should do encoding usually, 
+        // but let's be robust for ArrayBuffer vs Uint8Array
+        if (buffer instanceof Uint8Array) {
+            this.payload = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+        } else if (buffer instanceof ArrayBuffer) {
+            this.payload = buffer;
+        } else {
+            // Fallback or error?
+            // Maybe it's a view?
+            if (ArrayBuffer.isView(buffer)) {
+                this.payload = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+            } else {
+                throw new Error("Payload must be ArrayBuffer or TypedArray");
+            }
+        }
+
+        if (this.payload.byteLength > 2048 * 1024) { // Hardcoded var from go vars.MaxPayloadSize logic?
+            // Actually vars.MaxPayloadSize is 0xFFFF (65535) for basic packet len field limit?
+            // Packet header uses uint16 for payload size, so max 65535.
+            if (this.payload.byteLength > 65535) {
+                throw new Error("Payload too large (>65535)");
+            }
+        }
+
+        this.view.setUint16(9, this.payload.byteLength);
     }
 
     getPayloadSize() {
+        return this.view.getUint16(9);
+    }
+
+    setACKInfo(n) {
+        this.view.setUint16(9, n);
+    }
+
+    getACKInfo() {
         return this.view.getUint16(9);
     }
 

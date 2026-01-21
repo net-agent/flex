@@ -1,4 +1,4 @@
-import { Packet, CMD_OPEN_STREAM, ACK_OPEN_STREAM, CMD_PING_DOMAIN, CMD_ACK_FLAG, CMD_PUSH_MESSAGE, ACK_PUSH_MESSAGE, CMD_CLOSE_STREAM, ACK_CLOSE_STREAM, SWITCHER_IP } from './packet.js';
+import { Packet, CMD_OPEN_STREAM, ACK_OPEN_STREAM, CMD_PING_DOMAIN, CMD_ACK_FLAG, CMD_PUSH_MESSAGE, ACK_PUSH_MESSAGE, CMD_CLOSE_STREAM, ACK_CLOSE_STREAM, CMD_PUSH_STREAM_DATA, ACK_PUSH_STREAM_DATA, SWITCHER_IP } from './packet.js';
 import { Pinger } from './pinger.js';
 import { PortManager } from './port_manager.js';
 import { DataHub } from './datahub.js';
@@ -170,13 +170,17 @@ export class FlexNode {
                 else this.listenhub.handleCmdOpenStream(p);
                 break;
 
-            case CMD_PUSH_MESSAGE:
+            case CMD_PUSH_STREAM_DATA:
                 if (!isAck) {
                     this.datahub.handlePushData(p);
                 } else {
-                    // ACK_PUSH_MESSAGE ? maybe not vital for now since using TCP underlying (websocket)?
-                    // Actually Flow control might use it.
+                    this.datahub.handleAckPushData(p);
                 }
+                break;
+
+            case CMD_PUSH_MESSAGE:
+                // Deprecated or different use?
+                // For now, if we receive it, ignore or log
                 break;
 
             case CMD_CLOSE_STREAM:

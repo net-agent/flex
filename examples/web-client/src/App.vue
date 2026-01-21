@@ -18,6 +18,14 @@
         </a>
         <a 
           href="#" 
+          :class="{ active: currentView === 'stream' }" 
+          @click.prevent="currentView = 'stream'"
+        >
+          <Radio :size="18" />
+          <span>Stream Tool</span>
+        </a>
+        <a 
+          href="#" 
           :class="{ active: currentView === 'logs' }" 
           @click.prevent="currentView = 'logs'"
         >
@@ -35,20 +43,19 @@
       </nav>
 
       <div class="sidebar-footer">
-        <div class="connection-badge" @click="showConnectionModal = true" :class="connectionState">
-             <div class="indicator"></div>
-             <div class="status-content">
-                <span class="status-text">{{ connectionState }}</span>
-                <span v-if="activeDomain && connectionState === 'ready'" class="domain-info">{{ activeDomain }}</span>
-             </div>
-             <Wifi :size="14" v-if="connectionState === 'ready'" />
-             <WifiOff :size="14" v-else />
-        </div>
-        
-        <div class="theme-toggle">
-            <button @click="toggleTheme" title="Toggle Theme" class="icon-btn">
-                <Sun v-if="currentTheme === 'light'" :size="20" />
-                <Moon v-else :size="20" />
+        <div class="status-bar-minimal" @click="showConnectionModal = true">
+            <div class="status-left">
+                <div class="status-indicator" :class="connectionState"></div>
+                <div class="status-info">
+                    <span class="domain-text">{{ connectionState === 'ready' ? activeDomain : 'Offline' }}</span>
+                    <span v-if="connectionState === 'ready'" class="uptime-text">{{ uptime }}</span>
+                    <span v-else class="uptime-text">{{ connectionState }}</span>
+                </div>
+            </div>
+            
+            <button @click.stop="toggleTheme" class="theme-btn-minimal" title="Toggle Theme">
+                <Sun v-if="currentTheme === 'light'" :size="18" />
+                <Moon v-else :size="18" />
             </button>
         </div>
       </div>
@@ -69,15 +76,16 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue';
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import { flexService } from './services/flex.js';
 import { 
-    Network, Activity, ScrollText, Settings, 
+    Network, Activity, ScrollText, Settings, Radio,
     Wifi, WifiOff, Sun, Moon 
 } from 'lucide-vue-next';
 
 import ConnectionModal from './components/ConnectionModal.vue';
 import PingTool from './components/tools/PingTool.vue';
+import StreamTool from './components/tools/StreamTool.vue';
 import LogPanel from './components/LogPanel.vue';
 
 // State
@@ -92,6 +100,7 @@ const activeDomain = computed(() => flexService.state.domain);
 const activeComponent = computed(() => {
     switch (currentView.value) {
         case 'ping': return PingTool;
+        case 'stream': return StreamTool;
         case 'logs': return LogPanel;
         case 'settings': return { template: '<div style="padding:40px; text-align:center; color: var(--text-muted);"><h3>Settings</h3><p>Coming Soon...</p></div>' }; 
         default: return PingTool;
@@ -102,10 +111,31 @@ const activeComponent = computed(() => {
 const toggleTheme = () => flexService.toggleTheme();
 
 // Auto-show modal on disconnect
+// Uptime Timer
+const uptime = ref('');
+let timer = null;
+
+const updateTimer = () => {
+    if (flexService.state.connectedSince && flexService.state.connectionState === 'ready') {
+        const diff = Math.floor((Date.now() - flexService.state.connectedSince) / 1000);
+        const h = Math.floor(diff / 3600).toString().padStart(2, '0');
+        const m = Math.floor((diff % 3600) / 60).toString().padStart(2, '0');
+        const s = (diff % 60).toString().padStart(2, '0');
+        uptime.value = `${h}:${m}:${s}`;
+    } else {
+        uptime.value = '';
+    }
+};
+
 onMounted(() => {
+    timer = setInterval(updateTimer, 1000);
     if (connectionState.value === 'disconnected') {
         showConnectionModal.value = true;
     }
+});
+
+onUnmounted(() => {
+    if (timer) clearInterval(timer);
 });
 
 watch(connectionState, (newState) => {
@@ -185,62 +215,102 @@ watch(connectionState, (newState) => {
     color: var(--accent-color);
 }
 
+
+
+/* ... existing styles ... */
+
 .sidebar-footer {
-    padding: 16px;
-    border-top: 1px solid var(--border-color);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 10px;
-}
-
-.connection-badge {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 12px;
-    background: var(--bg-color);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    user-select: none;
-    transition: all 0.2s;
-}
-
-.connection-badge:hover {
-    border-color: var(--accent-color);
-    box-shadow: var(--shadow-sm);
-}
-
-.status-content {
+    padding: 0;
+    margin-top: auto; /* Push to bottom */
     display: flex;
     flex-direction: column;
-    font-size: 0.8em;
 }
 
-.status-text {
-    text-transform: capitalize;
-    font-weight: 600;
+.status-bar-minimal {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    background: var(--status-bar-bg);
+    border-top: 1px solid var(--status-bar-border);
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.status-bar-minimal:hover {
+    background: var(--status-bar-hover);
+}
+
+.status-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.status-indicator {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.05);
+}
+
+.status-indicator.ready {
+    background: var(--success-color);
+    box-shadow: 0 0 8px var(--success-color);
+    animation: pulse 2s infinite;
+}
+
+.status-indicator.connecting {
+    background: var(--accent-color);
+    animation: pulse 1s infinite;
+}
+
+.status-info {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
     line-height: 1.2;
 }
 
-.domain-info {
-    color: var(--text-muted);
+.domain-text {
+    font-weight: 600;
     font-size: 0.9em;
+    color: var(--text-primary);
 }
 
-.connection-badge.ready {
-    border-color: var(--success-color);
-    background: rgba(34, 197, 94, 0.05);
+.uptime-text {
+    font-size: 0.75em;
+    color: var(--text-muted);
+    font-family: 'JetBrains Mono', monospace;
 }
-.connection-badge.ready .status-text { color: var(--success-color); }
 
-.connection-badge.disconnected { border-color: var(--border-color); }
-.connection-badge.disconnected .status-text { color: var(--text-muted); }
+.theme-btn-minimal {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 8px;
+    border-radius: var(--radius-md);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
 
-.connection-badge.connecting { border-color: var(--accent-color); }
-.connection-badge.connecting .status-text { color: var(--accent-color); }
+.theme-btn-minimal:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.1);
+}
+
+@keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4); }
+    70% { box-shadow: 0 0 0 6px rgba(34, 197, 94, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
+}
+
+/* ... REMOVE OLD BADGE STYLES ... */
+
 
 
 .icon-btn {
