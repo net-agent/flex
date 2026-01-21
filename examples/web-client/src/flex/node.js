@@ -1,25 +1,34 @@
-import { Packet, CMD_OPEN_STREAM, CMD_PING_DOMAIN, CMD_ACK_FLAG, CMD_PUSH_MESSAGE } from './packet.js';
+import { Packet, CMD_OPEN_STREAM, ACK_OPEN_STREAM, CMD_PING_DOMAIN, CMD_ACK_FLAG, CMD_PUSH_MESSAGE, ACK_PUSH_MESSAGE, CMD_CLOSE_STREAM, ACK_CLOSE_STREAM, SWITCHER_IP } from './packet.js';
+import { Pinger } from './pinger.js';
+import { PortManager } from './port_manager.js';
+import { DataHub } from './datahub.js';
+import { Dialer } from './dialer.js';
+import { ListenHub } from './listenhub.js';
 
 const PACKET_VERSION = 20221204;
 
 export class FlexNode {
-    constructor() {
+    constructor(domain = "") {
         this.ws = null;
         this.ip = 0;
-        this.domain = "";
+        this.domain = domain;
+
+        // Core Components
+        this.portm = new PortManager();
+        this.datahub = new DataHub(this.portm);
+        this.dialer = new Dialer(this, this.portm, this.datahub);
+        this.listenhub = new ListenHub(this, this.portm, this.datahub);
+
+        this.pinger = new Pinger(this);
 
         // State callbacks
         this.onLog = (msg) => console.log("[FlexNode]", msg);
-        this.onStateChange = (state) => { }; // 'disconnected', 'connecting', 'handshaking', 'connected', 'ready'
-        this.onLatencyUpdate = (domain, ms) => { };
+        this.onStateChange = (state) => { };
+        this.onDomainChange = (domain) => { };
 
         // Heartbeat
         this.heartbeatInterval = null;
-        this.HEARTBEAT_PERIOD = 15000; // 15s
-
-        // Ping tracking
-        this.pingMap = new Map(); // port -> startTime
-        this.pingIndex = 0;
+        this.HEARTBEAT_PERIOD = 15000;
     }
 
     connect(url, password) {
@@ -68,20 +77,21 @@ export class FlexNode {
     }
 
     changeState(newState) {
-        // Simple state machine
         this.state = newState;
         if (this.onStateChange) this.onStateChange(newState);
     }
 
     async sendHandshake(password) {
-        // Generate random domain suffix or just use a random string for domain if not specified
-        // For web client, let's generate a random ID
         const mac = "web-" + Math.random().toString(36).substr(2, 6);
-        const domain = "web-" + Math.random().toString(36).substr(2, 6);
-        this.domain = domain;
-        const timestamp = Date.now() * 1000000; // Go uses UnixNano, let's try to match or use Unix*1000? 
-        // Go: time.Now().UnixNano()
 
+        let domain = this.domain;
+        if (!domain) {
+            domain = "web-" + Math.random().toString(36).substr(2, 6);
+            this.domain = domain;
+            if (this.onDomainChange) this.onDomainChange(domain);
+        }
+
+        const timestamp = Date.now() * 1000000;
         const sum = await this.calcSum(domain, mac, password, timestamp);
 
         const req = {
@@ -96,15 +106,13 @@ export class FlexNode {
         const encoder = new TextEncoder();
         const payload = encoder.encode(jsonStr);
 
-        const p = new Packet(0); // Cmd 0 for upgrade/handshake
+        const p = new Packet(0);
         p.setPayload(payload);
 
         this.send(p);
     }
 
     async calcSum(domain, mac, password, timestamp) {
-        // Go: sha256 new, write string...
-        // fmt.Sprintf("CalcSumStart,%v,%v,%v,%v,CalcSumEnd", req.Domain, req.Mac, password, req.Timestamp)
         const str = `CalcSumStart,${domain},${mac},${password},${timestamp},CalcSumEnd`;
         const encoder = new TextEncoder();
         const data = encoder.encode(str);
@@ -127,7 +135,7 @@ export class FlexNode {
         this.stopHeartbeat();
         this.heartbeatInterval = setInterval(() => {
             if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                this.ping("keepalive", true);
+                this.pinger.pingDomain("keepalive", 5000).catch(e => { });
             }
         }, this.HEARTBEAT_PERIOD);
     }
@@ -142,67 +150,74 @@ export class FlexNode {
     handlePacket(p) {
         // Handshake Response
         if (this.state === 'handshaking') {
-            const decoder = new TextDecoder();
-            const jsonStr = decoder.decode(p.payload);
-            try {
-                const resp = JSON.parse(jsonStr);
-                if (resp.ErrCode === 0) {
-                    this.ip = resp.IP;
-                    this.onLog(`Handshake Success. IP=${this.ip}, Ver=${resp.Version}`);
-                    this.changeState('ready');
-                    this.startHeartbeat();
-                } else {
-                    this.onLog(`Handshake Failed: ${resp.ErrMsg}`);
-                    this.disconnect();
-                }
-            } catch (e) {
-                this.onLog(`Handshake Parse Error: ${e}`);
-                this.disconnect();
-            }
+            this.handleHandshakeResponse(p);
             return;
         }
 
         const cmd = p.getCmd();
-        const distIP = p.getDistIP();
         const isAck = (cmd & CMD_ACK_FLAG) > 0;
         const rawCmd = cmd & ~CMD_ACK_FLAG;
 
-        // Handle Ping Ack (Latency measurement)
-        if (rawCmd === CMD_PING_DOMAIN && isAck) {
-            const pingId = p.getDistPort();
-            if (this.pingMap.has(pingId)) {
-                const start = this.pingMap.get(pingId);
-                const latency = Date.now() - start;
-                this.pingMap.delete(pingId);
+        // Route Packet
+        switch (rawCmd) {
+            case CMD_PING_DOMAIN:
+                if (isAck) this.pinger.handleAck(p);
+                else this.pinger.handleRequest(p);
+                break;
 
-                const domain = new TextDecoder().decode(p.payload);
-                this.onLog(`Ping Reply from '${domain || 'unknown'}': time=${latency}ms`);
-                if (this.onLatencyUpdate) this.onLatencyUpdate(domain, latency);
-            }
-            return;
+            case CMD_OPEN_STREAM:
+                if (isAck) this.dialer.handleAckOpenStream(p);
+                else this.listenhub.handleCmdOpenStream(p);
+                break;
+
+            case CMD_PUSH_MESSAGE:
+                if (!isAck) {
+                    this.datahub.handlePushData(p);
+                } else {
+                    // ACK_PUSH_MESSAGE ? maybe not vital for now since using TCP underlying (websocket)?
+                    // Actually Flow control might use it.
+                }
+                break;
+
+            case CMD_CLOSE_STREAM:
+                if (!isAck) {
+                    this.datahub.handleCloseStream(p);
+                }
+                break;
+
+            default:
+                // console.warn("Unknown CMD:", cmd);
+                break;
         }
     }
 
-    ping(domain, isKeepalive = false) {
-        if (!isKeepalive) this.onLog(`Pinging ${domain}...`);
-
-        // Use existing connection logic
-        const p = new Packet(CMD_PING_DOMAIN);
-        const pingId = this.nextPingId();
-        p.setSrc(this.ip, pingId);
-        p.setDist(0, 0);
-
-        const encoder = new TextEncoder();
-        p.setPayload(encoder.encode(domain));
-
-        this.pingMap.set(pingId, Date.now());
-        this.send(p);
+    handleHandshakeResponse(p) {
+        const decoder = new TextDecoder();
+        const jsonStr = decoder.decode(p.payload);
+        try {
+            const resp = JSON.parse(jsonStr);
+            if (resp.ErrCode === 0) {
+                this.ip = resp.IP;
+                this.onLog(`Handshake Success. IP=${this.ip}, Ver=${resp.Version}`);
+                this.changeState('ready');
+                this.startHeartbeat();
+            } else {
+                this.onLog(`Handshake Failed: ${resp.ErrMsg}`);
+                this.disconnect();
+            }
+        } catch (e) {
+            this.onLog(`Handshake Parse Error: ${e}`);
+            this.disconnect();
+        }
     }
 
-    nextPingId() {
-        this.pingIndex = (this.pingIndex + 1) % 0xFFFF;
-        if (this.pingIndex === 0) this.pingIndex = 1;
-        return this.pingIndex;
+    // Public API
+    async dial(domain, port) {
+        return this.dialer.dial(domain, port);
+    }
+
+    listen(port, callback) {
+        return this.listenhub.listen(port, callback);
     }
 
     send(packet) {
@@ -211,3 +226,4 @@ export class FlexNode {
         }
     }
 }
+

@@ -1,12 +1,24 @@
 export const CMD_ACK_FLAG = 1;
+
 export const CMD_OPEN_STREAM = 2; // iota << 1
+export const ACK_OPEN_STREAM = CMD_OPEN_STREAM | CMD_ACK_FLAG;
+
 export const CMD_CLOSE_STREAM = 4;
+export const ACK_CLOSE_STREAM = CMD_CLOSE_STREAM | CMD_ACK_FLAG;
+
 export const CMD_PUSH_STREAM_DATA = 6;
+export const ACK_PUSH_STREAM_DATA = CMD_PUSH_STREAM_DATA | CMD_ACK_FLAG;
+
 export const CMD_PUSH_MESSAGE = 8;
+export const ACK_PUSH_MESSAGE = CMD_PUSH_MESSAGE | CMD_ACK_FLAG;
+
 export const CMD_PING_DOMAIN = 10;
+export const ACK_PING_DOMAIN = CMD_PING_DOMAIN | CMD_ACK_FLAG;
 
 // Protocol Header Size: 1 + 2 + 2 + 2 + 2 + 2 = 11 bytes
 export const HEADER_SZ = 11;
+export const SWITCHER_IP = 0xFFFF;
+export const LOCAL_IP = 0;
 
 export class Packet {
     constructor(cmd = 0) {
