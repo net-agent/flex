@@ -1,14 +1,19 @@
 
 export class PortManager {
-    constructor(min = 100, max = 65535) {
+    constructor(min = 1, max = 65535) {
         this.min = min;
         this.max = max;
+
+        // IANA Dynamic Ports range (49152 to 65535)
+        this.ephemeralMin = 49152;
+        this.ephemeralMax = 65535;
+
         this.used = new Set();
-        this.current = min; // Simple round-robin strategy
+        this.current = this.ephemeralMin; // Start allocation from Ephemeral range
     }
 
     /**
-     * Get a free port number.
+     * Get a free port number from the ephemeral range.
      * @returns {number} The allocated port number.
      * @throws {Error} If no ports are available.
      */
@@ -19,8 +24,8 @@ export class PortManager {
             const port = this.current;
             // Move to next for subsequent calls
             this.current++;
-            if (this.current > this.max) {
-                this.current = this.min;
+            if (this.current > this.ephemeralMax) {
+                this.current = this.ephemeralMin;
             }
 
             if (!this.used.has(port)) {
@@ -29,11 +34,12 @@ export class PortManager {
             }
         } while (this.current !== start);
 
-        throw new Error("no free ports available");
+        throw new Error("no free ephemeral ports available");
     }
 
     /**
      * Mark a specific port as used.
+     * Allows binding to ANY valid port (1-65535) if free.
      * @param {number} port 
      */
     usePort(port) {

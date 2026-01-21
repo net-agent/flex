@@ -73,9 +73,10 @@
 import { ref, onUnmounted, nextTick } from 'vue';
 import { flexService } from '../../services/flex.js';
 import { Send, Trash2, ArrowRight, ArrowLeft, Plug, XCircle, Info, ArrowDownLeft } from 'lucide-vue-next';
+import { FLEX_STREAM_PORT } from '../../flex/core/constants.js';
 
 // --- Server State ---
-const listenPort = ref(8080);
+const listenPort = ref(FLEX_STREAM_PORT);
 const isListening = ref(false);
 const serverSessions = ref([]); // Array of { id, stream, label }
 const selectedSessionId = ref('');

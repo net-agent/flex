@@ -26,6 +26,9 @@ export class FlexNode {
         this.onStateChange = (state) => { };
         this.onDomainChange = (domain) => { };
 
+        // Debug/Monitor
+        this.monitorCallback = null; // (direction, packet) => {}
+
         // Heartbeat
         this.heartbeatInterval = null;
         this.HEARTBEAT_PERIOD = 15000;
@@ -148,6 +151,10 @@ export class FlexNode {
     }
 
     handlePacket(p) {
+        if (this.monitorCallback) {
+            this.monitorCallback('rx', p); // RX = Receive
+        }
+
         // Handshake Response
         if (this.state === 'handshaking') {
             this.handleHandshakeResponse(p);
@@ -226,6 +233,9 @@ export class FlexNode {
 
     send(packet) {
         if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+            if (this.monitorCallback) {
+                this.monitorCallback('tx', packet); // TX = Transmit
+            }
             this.ws.send(packet.toBytes());
         }
     }

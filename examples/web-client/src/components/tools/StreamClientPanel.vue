@@ -67,10 +67,11 @@
 import { ref, onUnmounted, nextTick } from 'vue';
 import { flexService } from '../../services/flex.js';
 import { Loader2, Send, Trash2, ArrowRight, ArrowLeft, Plug, XCircle, Info, ArrowUpRight } from 'lucide-vue-next';
+import { FLEX_STREAM_PORT } from '../../flex/core/constants.js';
 
 // --- Client State ---
 const targetDomain = ref('localhost');
-const targetPort = ref(8080);
+const targetPort = ref(FLEX_STREAM_PORT);
 const isConnecting = ref(false);
 const isConnected = ref(false);
 const clientStream = ref(null);

@@ -1,4 +1,5 @@
 import { Packet, CMD_PING_DOMAIN, CMD_ACK_FLAG, SWITCHER_IP } from './packet.js';
+import { FLEX_PING_PORT } from './constants.js';
 
 export class Pinger {
     constructor(node) {
@@ -48,7 +49,7 @@ export class Pinger {
     sendPing(port, domain) {
         const p = new Packet(CMD_PING_DOMAIN);
         p.setSrc(this.node.ip, port);
-        p.setDist(SWITCHER_IP, 0);
+        p.setDist(SWITCHER_IP, FLEX_PING_PORT); // Use Constant
 
         const encoder = new TextEncoder();
         p.setPayload(encoder.encode(domain));
@@ -83,7 +84,7 @@ export class Pinger {
         // The incoming packet has Src=Sender, Dist=Me
         // Response should have Src=Me, Dist=Sender
         resp.setDist(packet.getSrcIP(), packet.getSrcPort());
-        resp.setSrc(this.node.ip, 0); // SrcPort 0 for pings usually? Go impl uses 0 for Ack.
+        resp.setSrc(this.node.ip, FLEX_PING_PORT); // Use Constant
 
         this.node.send(resp);
     }

@@ -1,5 +1,5 @@
 import { reactive, ref } from 'vue';
-import { FlexNode } from '../flex/node.js';
+import { FlexNode } from '../flex/core/node.js';
 
 class FlexService {
     constructor() {
