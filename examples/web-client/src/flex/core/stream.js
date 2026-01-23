@@ -48,8 +48,19 @@ export class Stream {
     on(event, handler) {
         if (this.handlers[event]) {
             this.handlers[event].push(handler);
+
+            // Flush buffer if data listener added
+            if (event === 'data' && this.readBuffer.length > 0) {
+                setTimeout(() => {
+                    while (this.readBuffer.length > 0) {
+                        const chunk = this.readBuffer.shift();
+                        this.emit('data', chunk);
+                    }
+                }, 0);
+            }
         }
     }
+
 
     emit(event, ...args) {
         if (this.handlers[event]) {
@@ -70,10 +81,18 @@ export class Stream {
 
         const payloadLen = pbuf.payload.byteLength;
         if (payloadLen > 0) {
-            // Emit data event
-            // Payload is Uint8Array or ArrayBuffer
-            this.emit('data', pbuf.payload);
+            // Emit data event or buffer
+            if (this.handlers['data'].length > 0) {
+                this.emit('data', pbuf.payload);
+            } else {
+                // Buffer if no listeners yet (e.g. SecretStream not attached yet)
+                // We clone the payload because pbuf might be reused? 
+                // Packet.fromBytes creates new view/buffer usually.
+                // But safer to keep it as is.
+                this.readBuffer.push(pbuf.payload);
+            }
         }
+
 
         // Send ACK with consumed size
         // ACK_PUSH_STREAM_DATA (7)

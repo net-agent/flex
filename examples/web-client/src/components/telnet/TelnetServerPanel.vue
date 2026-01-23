@@ -11,8 +11,14 @@
                 <div class="input-wrapper">
                     <label>Listen Port</label>
                     <input v-model.number="listenPort" type="number" placeholder="8080" class="flex-input" :disabled="isListening" />
+
+                </div>
+                 <div class="input-wrapper">
+                    <label>Secret (Optional)</label>
+                    <input v-model="listenSecret" type="password" placeholder="Encryption Key" class="flex-input" :disabled="isListening" />
                 </div>
                 <button @click="toggleListen" :class="['flex-btn', isListening ? 'danger' : 'primary']">
+
                     {{ isListening ? 'Stop Listening' : 'Start Listening' }}
                 </button>
             </div>
@@ -73,11 +79,15 @@
 import { ref, onUnmounted, nextTick } from 'vue';
 import { flexService } from '../../services/flex.js';
 import { Send, Trash2, ArrowRight, ArrowLeft, Plug, XCircle, Info, ArrowDownLeft } from 'lucide-vue-next';
+
 import { FLEX_STREAM_PORT } from '../../flex/core/constants.js';
+
 
 // --- Server State ---
 const listenPort = ref(FLEX_STREAM_PORT);
+const listenSecret = ref('');
 const isListening = ref(false);
+
 const serverSessions = ref([]); // Array of { id, stream, label }
 const selectedSessionId = ref('');
 const serverMessage = ref('');
@@ -130,11 +140,13 @@ const startListening = () => {
     }
 
     const port = listenPort.value;
-    const success = flexService.node.listen(port, (stream) => {
+    const secret = listenSecret.value;
+    
+    const onStream = (stream) => {
         const label = `${stream.remoteDomain}:${stream.remotePort}`;
         const sid = Math.random().toString(36).substr(2, 9);
         
-        addLog('connect', `Accept: ${label}`);
+        addLog('connect', `Accept: ${label} ${secret ? '(Secure)' : ''}`);
         
         const session = { id: sid, stream, label };
         serverSessions.value.push(session);
@@ -162,7 +174,11 @@ const startListening = () => {
         });
         
         stream.on('error', (e) => addLog('error', `[${label}] Err: ${e}`));
-    });
+    };
+
+    const success = flexService.node.listen(port, secret, onStream);
+
+
 
     if (success) {
         isListening.value = true;

@@ -4,6 +4,9 @@ import { PortManager } from './port_manager.js';
 import { DataHub } from './datahub.js';
 import { Dialer } from './dialer.js';
 import { ListenHub } from './listenhub.js';
+import { SecretStream } from './secret_stream.js';
+import { ListenSecret } from './secret_listener.js';
+
 
 const PACKET_VERSION = 20221204;
 
@@ -223,12 +226,37 @@ export class FlexNode {
     }
 
     // Public API
-    async dial(domain, port) {
-        return this.dialer.dial(domain, port);
+    async dial(domain, port, secret = "") {
+        let stream = await this.dialer.dial(domain, port);
+
+        if (secret && typeof secret === 'string' && secret.length > 0) {
+            this.onLog(`[Secret] Securing connection to ${domain}:${port}...`);
+            const ss = new SecretStream(stream, secret);
+            try {
+                await ss.init();
+                this.onLog(`[Secret] Handshake success with ${domain}:${port}`);
+                return ss;
+            } catch (err) {
+                stream.close();
+                throw new Error("Secret Handshake failed: " + err.message);
+            }
+        }
+
+        return stream;
     }
 
-    listen(port, callback) {
-        return this.listenhub.listen(port, callback);
+    listen(port, secret, callback) {
+        // Overload: listen(port, callback)
+        if (typeof secret === 'function') {
+            callback = secret;
+            secret = "";
+        }
+
+        if (secret && typeof secret === 'string' && secret.length > 0) {
+            return ListenSecret(this, port, secret, callback);
+        } else {
+            return this.listenhub.listen(port, callback);
+        }
     }
 
     send(packet) {

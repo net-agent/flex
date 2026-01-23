@@ -12,11 +12,17 @@
                     <label>Target</label>
                     <input v-model="targetDomain" type="text" placeholder="Domain" class="flex-input" />
                 </div>
+
                 <div class="input-wrapper sm">
                     <label>Port</label>
                     <input v-model.number="targetPort" type="number" placeholder="80" class="flex-input" />
                 </div>
+                 <div class="input-wrapper">
+                    <label>Secret (Optional)</label>
+                    <input v-model="targetSecret" type="password" placeholder="Encryption Key" class="flex-input" />
+                </div>
             </div>
+
             <button @click="toggleConnection" :class="['flex-btn', isConnected ? 'danger' : 'primary']">
                 {{ isConnected ? 'Disconnect' : 'Connect' }}
                 <Loader2 v-if="isConnecting" class="spin ml-2" :size="16" />
@@ -67,12 +73,16 @@
 import { ref, onUnmounted, nextTick } from 'vue';
 import { flexService } from '../../services/flex.js';
 import { Loader2, Send, Trash2, ArrowRight, ArrowLeft, Plug, XCircle, Info, ArrowUpRight } from 'lucide-vue-next';
+
 import { FLEX_STREAM_PORT } from '../../flex/core/constants.js';
+
 
 // --- Client State ---
 const targetDomain = ref('localhost');
 const targetPort = ref(FLEX_STREAM_PORT);
+const targetSecret = ref('');
 const isConnecting = ref(false);
+
 const isConnected = ref(false);
 const clientStream = ref(null);
 const clientMessage = ref('');
@@ -133,11 +143,16 @@ const connectStream = async () => {
     isConnecting.value = true;
     try {
         addLog('info', `Dialing ${targetDomain.value}:${targetPort.value}...`);
-        const s = await flexService.node.dial(targetDomain.value, targetPort.value);
         
+        // Supports optional secret
+        const s = await flexService.node.dial(targetDomain.value, targetPort.value, targetSecret.value);
+        
+        addLog('connect', targetSecret.value ? 'Connected (Secure)!' : 'Connected!');
+
+
         clientStream.value = s;
         isConnected.value = true;
-        addLog('connect', 'Connected!');
+
 
         // Bind Events
         s.on('data', (data) => {
