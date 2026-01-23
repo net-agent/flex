@@ -18,6 +18,7 @@ const (
 	CmdPushStreamData
 	CmdPushMessage
 	CmdPingDomain
+	CmdReset
 )
 
 const (
@@ -130,6 +131,12 @@ func (buf *Buffer) IsACK() bool {
 // SID 获取SID（用于标识唯一stream）
 func (buf *Buffer) SID() uint64 {
 	return binary.BigEndian.Uint64(buf.Head[1:9])
+}
+func (buf *Buffer) SIDPeer() uint64 {
+	high := binary.BigEndian.Uint32(buf.Head[5:9])
+	low := binary.BigEndian.Uint32(buf.Head[1:5])
+
+	return (uint64(high) << 32) | uint64(low)
 }
 
 // SIDStr 获取SID的字符串表示

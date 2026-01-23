@@ -20,6 +20,7 @@ type Sender struct {
 	dataAckPbuf  *packet.Buffer
 	closePbuf    *packet.Buffer
 	closeAckPbuf *packet.Buffer
+	resetPbuf    *packet.Buffer
 
 	senderMut sync.Mutex
 
@@ -34,6 +35,7 @@ func NewSender(w packet.Writer, counter *int32) *Sender {
 	s.dataAckPbuf = packet.NewBufferWithCmd(packet.AckPushStreamData)
 	s.closePbuf = packet.NewBufferWithCmd(packet.CmdCloseStream)
 	s.closeAckPbuf = packet.NewBufferWithCmd(packet.AckCloseStream)
+	s.resetPbuf = packet.NewBufferWithCmd(packet.CmdReset)
 	s.counter = counter
 
 	return s
@@ -44,6 +46,7 @@ func (s *Sender) SetSrc(ip, port uint16) {
 	s.dataAckPbuf.SetSrc(ip, port)
 	s.closePbuf.SetSrc(ip, port)
 	s.closeAckPbuf.SetSrc(ip, port)
+	s.resetPbuf.SetSrc(ip, port)
 }
 
 func (s *Sender) SetDist(ip, port uint16) {
@@ -51,6 +54,7 @@ func (s *Sender) SetDist(ip, port uint16) {
 	s.dataAckPbuf.SetDist(ip, port)
 	s.closePbuf.SetDist(ip, port)
 	s.closeAckPbuf.SetDist(ip, port)
+	s.resetPbuf.SetDist(ip, port)
 }
 
 func (s *Sender) SendCmdData(buf []byte) error {
@@ -89,4 +93,11 @@ func (s *Sender) SendCmdCloseAck() error {
 	defer s.senderMut.Unlock()
 	atomic.AddInt32(s.counter, 1)
 	return s.WriteBuffer(s.closeAckPbuf)
+}
+
+func (s *Sender) SendCmdReset() error {
+	s.senderMut.Lock()
+	defer s.senderMut.Unlock()
+	atomic.AddInt32(s.counter, 1)
+	return s.WriteBuffer(s.resetPbuf)
 }

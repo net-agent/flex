@@ -163,3 +163,74 @@ func TestBuffer_HeaderString(t *testing.T) {
 		})
 	}
 }
+
+// TestBufferSIDMethods 包含了单元测试，用于验证逻辑的正确性
+func TestBufferSIDMethods(t *testing.T) {
+	// 定义一个测试用例结构体
+	tests := []struct {
+		name        string
+		head        []byte // 输入的 Head 切片
+		wantSID     uint64 // SID() 的期望输出
+		wantSIDPeer uint64 // SIDPeer() 的期望输出
+	}{
+		{
+			name: "简单顺序字节",
+			//         0  1  2  3  4  5  6  7  8  9 (索引)
+			head: []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			// SID() 应该读取 [1:9] -> [1, 2, 3, 4, 5, 6, 7, 8]
+			wantSID: 0x0102030405060708,
+			// SIDPeer() 应该读取 [5:9] (高位) -> [5, 6, 7, 8]
+			// 和 [1:5] (低位) -> [1, 2, 3, 4]
+			// 组合为 [5, 6, 7, 8, 1, 2, 3, 4]
+			wantSIDPeer: 0x0506070801020304,
+		},
+		{
+			name: "全部为零",
+			//         0  1  2  3  4  5  6  7  8  9
+			head: []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+			// SID() 应该读取 [0, 0, 0, 0, 0, 0, 0, 0]
+			wantSID: 0x00,
+			// SIDPeer() 应该读取 [0, 0, 0, 0] (高位) 和 [0, 0, 0, 0] (低位)
+			wantSIDPeer: 0x00,
+		},
+		{
+			name: "全部为0xFF",
+			//         0    1    2    3    4    5    6    7    8    9
+			head: []byte{0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0},
+			// SID() 应该读取 8个 0xFF
+			wantSID: 0xFFFFFFFFFFFFFFFF, // ^uint64(0)
+			// SIDPeer() 应该读取 4个 0xFF (高位) 和 4个 0xFF (低位)
+			wantSIDPeer: 0xFFFFFFFFFFFFFFFF,
+		},
+		{
+			name: "高低位反转",
+			//         0    1    2    3    4    5    6    7    8    9
+			head: []byte{0, 0xAA, 0xAA, 0xAA, 0xAA, 0xBB, 0xBB, 0xBB, 0xBB, 0},
+			// SID() 应该读取 [0xAA, 0xAA, 0xAA, 0xAA, 0xBB, 0xBB, 0xBB, 0xBB]
+			wantSID: 0xAAAAAAAABBBBBBBB,
+			// SIDPeer() 应该读取 [0xBB, 0xBB, 0xBB, 0xBB] (高位)
+			// 和 [0xAA, 0xAA, 0xAA, 0xAA] (低位)
+			// 组合为 [0xBB, 0xBB, 0xBB, 0xBB, 0xAA, 0xAA, 0xAA, 0xAA]
+			wantSIDPeer: 0xBBBBBBBBAAAAAAAA,
+		},
+	}
+
+	// 遍历所有测试用例
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := NewBuffer(nil)
+			copy(buf.Head[:], tt.head)
+
+			// 测试 SID()
+			if got := buf.SID(); got != tt.wantSID {
+				// 使用 %#x 以十六进制格式打印，更易于调试
+				t.Errorf("SID() = %#x, want %#x", got, tt.wantSID)
+			}
+
+			// 测试 SIDPeer()
+			if got := buf.SIDPeer(); got != tt.wantSIDPeer {
+				t.Errorf("SIDPeer() = %#x, want %#x", got, tt.wantSIDPeer)
+			}
+		})
+	}
+}

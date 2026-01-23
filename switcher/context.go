@@ -34,10 +34,12 @@ type Context struct {
 	pingIndex int32
 	pingBack  sync.Map
 	attached  bool
+
+	resetSidMap sync.Map
 }
 
 func NewContext(conn packet.Conn, domain, mac string) *Context {
-	return &Context{
+	ctx := &Context{
 		id:           int(atomic.AddInt32(&ctxindex, 1)),
 		Domain:       domain,
 		Mac:          mac,
@@ -46,12 +48,26 @@ func NewContext(conn packet.Conn, domain, mac string) *Context {
 		LastReadTime: time.Now(),
 		AttachTime:   time.Now(),
 	}
+
+	//
+	// todo: reset janitor
+	//
+
+	return ctx
+}
+
+func (ctx *Context) GetID() int {
+	return ctx.id
 }
 
 func (ctx *Context) WriteBuffer(buf *packet.Buffer) error {
 	if ctx.Conn == nil {
 		return errNilContextConn
 	}
+	if buf.Cmd() == packet.CmdReset {
+		ctx.SetResetSID(buf.SIDPeer())
+	}
+
 	ctx.writeMut.Lock()
 	defer ctx.writeMut.Unlock()
 	return ctx.Conn.WriteBuffer(buf)
@@ -90,4 +106,13 @@ func (ctx *Context) Ping(timeout time.Duration) (dur time.Duration, retErr error
 	}
 
 	return time.Since(pingStart), nil
+}
+
+func (ctx *Context) IsResetSID(sid uint64) bool {
+	_, loaded := ctx.resetSidMap.Load(sid)
+	return loaded
+}
+
+func (ctx *Context) SetResetSID(sid uint64) {
+	ctx.resetSidMap.Store(sid, time.Now())
 }

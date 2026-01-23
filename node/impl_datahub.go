@@ -3,6 +3,7 @@ package node
 import (
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/net-agent/flex/v2/numsrc"
 	"github.com/net-agent/flex/v2/packet"
@@ -21,13 +22,30 @@ type DataHub struct {
 	streamSidMap       sync.Map        // map[sid]*stream.Conn
 	closedStreamStates []*stream.State // 保存已经关闭的连接状态
 	closedMut          sync.RWMutex
+
+	resetSidMap     sync.Map
+	closeOnce       sync.Once
+	stopJanitorChan chan struct{}
 }
 
 func (hub *DataHub) Init(portm *numsrc.Manager) {
 	hub.portm = portm
+
+	go hub.resetSidJanitor()
+}
+
+func (hub *DataHub) Close() {
+	hub.closeOnce.Do(func() {
+		close(hub.stopJanitorChan)
+	})
 }
 
 func (hub *DataHub) AttachStream(s *stream.Stream, sid uint64) error {
+	_, found := hub.resetSidMap.Load(sid)
+	if found {
+		return ErrSidIsResetState
+	}
+
 	_, loaded := hub.streamSidMap.LoadOrStore(sid, s)
 	if loaded {
 		// 已经存在还未释放的stream
@@ -82,12 +100,26 @@ func (hub *DataHub) GetClosedStreamStateList(pos int) []*stream.State {
 
 // 处理数据包
 func (hub *DataHub) HandleCmdPushStreamData(pbuf *packet.Buffer) {
-	c, err := hub.GetStreamBySID(pbuf.SID(), false)
+	sid := pbuf.SID()
+	c, err := hub.GetStreamBySID(sid, false)
 	if err != nil {
 		return
 	}
 
-	c.HandleCmdPushStreamData(pbuf)
+	err = c.HandleCmdPushStreamData(pbuf)
+
+	if err != nil {
+		c.PopupWarning("push data failed.", err.Error())
+
+		if err == stream.ErrPushToByteChanTimeout {
+			hub.streamSidMap.Delete(sid) // 清理掉这个stream，未来不再接收任何新的包
+			hub.resetSidMap.Store(sid, time.Now())
+			go c.SendCmdReset()
+
+			// 在2分钟后将resetSidMap的记录去掉，即reset状态只有2分钟
+			// 这个动作由resetJanitor来定期执行
+		}
+	}
 }
 
 // 处理数据包已送达的消息

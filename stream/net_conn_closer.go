@@ -6,9 +6,10 @@ import (
 )
 
 var (
-	ErrWriterIsClosed      = errors.New("writer is closed")
-	ErrReaderIsClosed      = errors.New("reader is closed")
-	ErrWaitCloseAckTimeout = errors.New("wait close ack timeout")
+	ErrWriterIsClosed        = errors.New("writer is closed")
+	ErrReaderIsClosed        = errors.New("reader is closed")
+	ErrWaitCloseAckTimeout   = errors.New("wait close ack timeout")
+	ErrPushToByteChanTimeout = errors.New("push to byte-chan timeout")
 )
 
 func (s *Stream) Close() error {

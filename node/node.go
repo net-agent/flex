@@ -12,9 +12,10 @@ import (
 )
 
 var (
-	ErrSidIsAttached = errors.New("sid is attached")
-	ErrWriterIsNil   = errors.New("writer is nil")
-	ErrNodeIsStopped = errors.New("node is stopped")
+	ErrSidIsResetState = errors.New("sid is reset state")
+	ErrSidIsAttached   = errors.New("sid is attached")
+	ErrWriterIsNil     = errors.New("writer is nil")
+	ErrNodeIsStopped   = errors.New("node is stopped")
 )
 
 var (
@@ -138,6 +139,7 @@ func (node *Node) Close() error {
 		}
 		node.chanMut.Unlock()
 
+		node.DataHub.Close()
 		node.Conn.Close()
 	})
 	return nil

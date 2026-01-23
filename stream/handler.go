@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -8,28 +9,33 @@ import (
 )
 
 // HandleCmdPushStreamData 处理对端发送过来的数据包
-func (s *Stream) HandleCmdPushStreamData(pbuf *packet.Buffer) {
+func (s *Stream) HandleCmdPushStreamData(pbuf *packet.Buffer) error {
 	atomic.AddInt32(&s.state.HandledBufferCount, 1)
 	s.rmut.RLock()
 	defer s.rmut.RUnlock()
 
 	if s.rclosed {
-		s.PopupInfo("stream closed")
-		return
+		return ErrReaderIsClosed
 	}
 
 	if pbuf.PayloadSize() <= 0 {
 		s.PopupInfo("payload is empty")
-		return
+		return nil
 	}
+
+	timeoutTick := time.NewTicker(s.appendDataTimeout)
+	defer timeoutTick.Stop()
 
 	select {
 	case s.bytesChan <- pbuf.Payload:
 		atomic.AddInt64(&s.state.HandledDataSize, int64(pbuf.PayloadSize()))
-		return
-	case <-time.After(s.appendDataTimeout):
-		s.PopupInfo("append data timeout")
-		return
+		return nil
+	case <-timeoutTick.C:
+		s.PopupInfo(fmt.Sprintf("append data timeout. index=%v rclosed=%v wclosed=%v",
+			s.state.Index, s.rclosed, s.wclosed))
+		// 这里实际代表了严重的数据拥塞，需要告诉发送方停止发送，并且关闭连接
+		// 因为运行到此处代码即代表数据包存在丢失，继续维持连接已无意义
+		return ErrPushToByteChanTimeout
 	}
 }
 

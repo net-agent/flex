@@ -22,6 +22,11 @@ const (
 	DefaultReadTimeout        = time.Minute * 10 // 此参数设置过小会导致长连接容易断开
 	DefaultWaitDataAckTimeout = DefaultReadTimeout
 
+	// sid被重置后，多久恢复可用
+	// 时间过短的时间可能会导致失效状态包清理不干净
+	// 时间过长则容易引起正常连接复用端口失败
+	DefaultResetSIDKeepTime = time.Minute * 3
+
 	DIRECTION_LOCAL_TO_REMOTE = int(1)
 	DIRECTION_REMOTE_TO_LOCAL = int(2)
 )
