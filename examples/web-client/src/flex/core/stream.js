@@ -1,4 +1,6 @@
 import { Packet, CMD_PUSH_STREAM_DATA, ACK_PUSH_STREAM_DATA, CMD_CLOSE_STREAM, ACK_CLOSE_STREAM } from './packet.js';
+import { EventEmitter } from './event_emitter.js';
+
 
 export const StreamState = {
     Closed: 0,
@@ -13,7 +15,7 @@ export const StreamState = {
  * Stream mimics a net.Conn.
  * Events: 'data', 'close', 'error'
  */
-export class Stream {
+export class Stream extends EventEmitter {
     /**
      * @param {Node} host - The main FlexNode instance
      * @param {string} localDomain
@@ -24,6 +26,8 @@ export class Stream {
      * @param {number} localPort
      */
     constructor(host, localDomain, remoteIP, remotePort, remoteDomain, localIP, localPort) {
+        super();
+
         this.host = host;
         this.localDomain = localDomain;
         this.remoteIP = remoteIP;
@@ -34,39 +38,31 @@ export class Stream {
 
         this.state = StreamState.Establish;
         this.readBuffer = [];
-        this.handlers = {
-            data: [],
-            close: [],
-            error: []
-        };
+        this.readBuffer = [];
+        // this.handlers removed, using super
+
 
         // Flow Control
         this.bucketSz = 2 * 1024 * 1024; // 2MB Initial Window
         this.writeQueue = []; // Array of { resolve, reject, data }
     }
 
+    // Override on to handle buffering
     on(event, handler) {
-        if (this.handlers[event]) {
-            this.handlers[event].push(handler);
+        super.on(event, handler);
 
-            // Flush buffer if data listener added
-            if (event === 'data' && this.readBuffer.length > 0) {
-                setTimeout(() => {
-                    while (this.readBuffer.length > 0) {
-                        const chunk = this.readBuffer.shift();
-                        this.emit('data', chunk);
-                    }
-                }, 0);
-            }
+        // Flush buffer if data listener added
+        if (event === 'data' && this.readBuffer.length > 0) {
+            setTimeout(() => {
+                while (this.readBuffer.length > 0) {
+                    const chunk = this.readBuffer.shift();
+                    this.emit('data', chunk);
+                }
+            }, 0);
         }
+        return this;
     }
 
-
-    emit(event, ...args) {
-        if (this.handlers[event]) {
-            this.handlers[event].forEach(h => h(...args));
-        }
-    }
 
     /**
      * Handle incoming data packet (CMD_PUSH_STREAM_DATA)
@@ -82,8 +78,9 @@ export class Stream {
         const payloadLen = pbuf.payload.byteLength;
         if (payloadLen > 0) {
             // Emit data event or buffer
-            if (this.handlers['data'].length > 0) {
+            if (this.handlers['data'] && this.handlers['data'].length > 0) {
                 this.emit('data', pbuf.payload);
+
             } else {
                 // Buffer if no listeners yet (e.g. SecretStream not attached yet)
                 // We clone the payload because pbuf might be reused? 
