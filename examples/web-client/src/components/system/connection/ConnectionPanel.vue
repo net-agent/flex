@@ -2,36 +2,17 @@
   <div class="panel connection-panel">
     <h3>Connection</h3>
     
-    <div class="form-group">
-      <label>Gateway URL:</label>
-      <input v-model="gatewayUrl" type="text" placeholder="ws://localhost:9090/flex/ws" :disabled="isConnected" />
-    </div>
-
-    <div class="form-group">
-      <label>Domain (Optional):</label>
-      <div class="input-row">
-        <input v-model="domain" type="text" placeholder="auto-generated" :disabled="isConnected" />
-        <button class="small-btn" @click="generateDomain" :disabled="isConnected">🎲</button>
-      </div>
-    </div>
-
-    <div class="form-group">
-      <label>Password:</label>
-      <input v-model="password" type="password" placeholder="Gateway Password" :disabled="isConnected" />
-    </div>
-
-    <div class="actions">
-      <button v-if="!isConnected" @click="handleConnect" class="btn-primary" :disabled="isConnecting">
-        {{ isConnecting ? 'Connecting...' : 'Connect' }}
-      </button>
-      <button v-else @click="handleDisconnect" class="btn-danger">
-        Disconnect
-      </button>
-    </div>
-
-    <div class="status-indicator">
-      Status: <span :class="['status-tag', connectionState]">{{ connectionState }}</span>
-    </div>
+    <ConnectionForm
+        v-model:gatewayUrl="gatewayUrl"
+        v-model:domain="domain"
+        v-model:password="password"
+        :isConnected="isConnected"
+        :isBusy="isConnecting"
+        :status="connectionState"
+        @generate="generateDomain"
+        @connect="handleConnect"
+        @disconnect="handleDisconnect"
+    />
     
     <div v-if="isConnected" class="info-block">
         <div><strong>IP:</strong> {{ ip }}</div>
@@ -42,7 +23,8 @@
 
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue';
-import { flexService } from '../services/flex.js';
+import { flexService } from '../../../services/flex.js'; // Updated path
+import ConnectionForm from './ConnectionForm.vue';
 
 // Local State
 const gatewayUrl = ref('ws://localhost:9090/flex/ws');
@@ -62,29 +44,15 @@ const isConnecting = computed(() => connectionState.value === 'connecting' || co
 const STORAGE_KEY_DOMAIN = 'flex_client_domain';
 
 onMounted(() => {
-    // Load persisted domain preference
     const savedDomain = localStorage.getItem(STORAGE_KEY_DOMAIN);
     if (savedDomain) {
         domain.value = savedDomain;
     }
-    // Update service domain immediately if we have one, so generated domain logic works if empty logic is applied there?
-    // Actually service handles logic. But if we want to pass a stored domain, we should align.
 });
 
 watch(domain, (newVal) => {
     if (newVal) {
         localStorage.setItem(STORAGE_KEY_DOMAIN, newVal);
-    }
-});
-
-watch(activeDomain, (newVal) => {
-    // If service updates domain (e.g. auto-generated), Sync back to UI if strictly needed,
-    // or just let the info-block show it.
-    // If user didn't type anything, maybe we want to show it in the input? 
-    // Let's keep input for "Requesting" and info-block for "Actual".
-    if (!domain.value && newVal) {
-        // If user input was empty, maybe we don't auto-fill to avoid confusion between "I typed this" vs "It was assigned".
-        // functionality-wise, we persist what user *intends*. 
     }
 });
 

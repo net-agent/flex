@@ -33,12 +33,12 @@
                 </a>
                 <a 
                   href="#" 
-                  :class="{ active: currentView === 'stream' }" 
-                  @click.prevent="currentView = 'stream'"
-                  title="Stream Tool"
+                  :class="{ active: currentView === 'telnet' }" 
+                  @click.prevent="currentView = 'telnet'"
+                  title="Telnet Tool"
                 >
-                  <Radio :size="22" />
-                  <span class="nav-label">Stream</span>
+                  <Terminal :size="22" />
+                  <span class="nav-label">Telnet</span>
                 </a>
             </div>
 
@@ -90,13 +90,14 @@
             <div class="gsb-item clickable connection-pill" :class="connectionState">
                 <div class="status-icon">
                      <Wifi v-if="connectionState === 'ready'" :size="14" />
-                     <WifiOff v-else :size="14" />
+                     <AlertTriangle v-else-if="connectionState === 'disconnected'" :size="14" />
+                     <Loader2 v-else class="spin" :size="14" />
                 </div>
                 <!-- Shorten text for cleaner bar -->
-                <span>{{ connectionState === 'ready' ? activeDomain : 'Disconnected' }}</span>
+                <span>{{ connectionState === 'ready' ? activeDomain : (connectionState === 'disconnected' ? 'NOT CONNECTED' : connectionState) }}</span>
             </div>
             
-             <div class="gsb-item" v-if="connectionState === 'ready'">
+             <div class="gsb-item clickable" v-if="connectionState === 'ready'" title="Uptime">
                 <Clock :size="14" />
                 <span>{{ uptime }}</span>
             </div>
@@ -122,17 +123,17 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue';
 import { flexService } from './services/flex.js';
 import { 
-    Network, Activity, ScrollText, Settings, Radio,
+    Network, Activity, ScrollText, Settings, Radio, Terminal,
     Wifi, WifiOff, Sun, Moon, MessageSquare, Binary,
-    Clock 
+    Clock, AlertTriangle, Loader2 
 } from 'lucide-vue-next';
 
-import ConnectionModal from './components/ConnectionModal.vue';
-import PingTool from './components/tools/PingTool.vue';
-import StreamTool from './components/tools/StreamTool.vue';
-import ChatTool from './components/tools/ChatTool.vue';
-import PacketTool from './components/tools/PacketTool.vue';
-import LogPanel from './components/LogPanel.vue';
+import ConnectionModal from './components/system/connection/ConnectionModal.vue';
+import PingView from './components/network/PingView.vue';
+import TelnetView from './components/telnet/TelnetView.vue';
+import ChatView from './components/chat/ChatView.vue';
+import PacketView from './components/network/PacketView.vue';
+import LogView from './components/system/log/LogView.vue';
 
 // State
 const currentView = ref(localStorage.getItem('flex_last_view') || 'ping');
@@ -149,13 +150,13 @@ const activeDomain = computed(() => flexService.state.domain);
 // Component Mapping
 const activeComponent = computed(() => {
     switch (currentView.value) {
-        case 'ping': return PingTool;
-        case 'stream': return StreamTool;
-        case 'chat': return ChatTool;
-        case 'packets': return PacketTool;
-        case 'logs': return LogPanel;
+        case 'ping': return PingView;
+        case 'telnet': return TelnetView;
+        case 'chat': return ChatView;
+        case 'packets': return PacketView;
+        case 'logs': return LogView;
         case 'settings': return { template: '<div style="padding:40px; text-align:center; color: var(--text-muted);"><h3>Settings</h3><p>Coming Soon...</p></div>' }; 
-        default: return PingTool;
+        default: return PingView;
     }
 });
 
@@ -343,9 +344,12 @@ watch(connectionState, (newState) => {
     background: var(--success-color);
 }
 .connection-pill.disconnected {
-    background: var(--error-color);
+    background: #ef4444; /* Force Red */
+    box-shadow: 0 0 8px rgba(239, 68, 68, 0.4);
+    font-weight: 700;
+    animation: pulse-red 2s infinite;
 }
-.connection-pill.connecting {
+.connection-pill.connecting, .connection-pill.handshaking {
     background: var(--accent-color);
     animation: pulse 1s infinite;
 }
@@ -355,16 +359,25 @@ watch(connectionState, (newState) => {
     cursor: pointer;
 }
 
-
 .status-icon {
     display: flex;
     align-items: center;
 }
 
+.spin { animation: spin 1s linear infinite; }
+
 /* Animations */
+@keyframes spin { 100% { transform: rotate(360deg); } }
+
 @keyframes pulse {
     0% { opacity: 0.8; }
     50% { opacity: 1; }
     100% { opacity: 0.8; }
+}
+
+@keyframes pulse-red {
+    0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+    70% { box-shadow: 0 0 0 6px rgba(239, 68, 68, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
 }
 </style>

@@ -5,56 +5,24 @@
       <div class="modal-header">
         <div class="title-group">
             <Network :size="24" class="icon" />
-            <h3>Connect to Gateway</h3>
+            <h3>Enter Flex Network</h3>
         </div>
-        <button class="close-btn" @click="close" v-if="isConnected">
+        <button class="close-btn" @click="close">
             <X :size="20" />
         </button>
       </div>
       
-      <div class="form-group">
-        <label>Gateway URL</label>
-        <div class="input-wrapper">
-            <Server :size="16" class="input-icon" />
-            <input v-model="gatewayUrl" type="text" placeholder="ws://localhost:9090/flex/ws" :disabled="isConnected" />
-        </div>
-      </div>
-
-      <div class="form-group">
-        <label>Domain</label>
-        <div class="input-row">
-            <div class="input-wrapper flex-1">
-                <Globe :size="16" class="input-icon" />
-                <input v-model="domain" type="text" placeholder="auto-generated" :disabled="isConnected" />
-            </div>
-            <button class="icon-btn-secondary" @click="generateDomain" :disabled="isConnected" title="Generate Random">
-                <Dices :size="18" />
-            </button>
-        </div>
-      </div>
-
-      <div class="form-group">
-        <label>Password</label>
-        <div class="input-wrapper">
-            <Lock :size="16" class="input-icon" />
-            <input v-model="password" type="password" :disabled="isConnected" />
-        </div>
-      </div>
-
-      <div class="modal-actions">
-        <button v-if="!isConnected" @click="handleConnect" class="btn-primary" :disabled="isConnecting">
-          <Loader2 v-if="isConnecting" class="spin" :size="18" />
-          <span v-else>Connect</span>
-        </button>
-        <button v-else @click="handleDisconnect" class="btn-danger">
-          Disconnect
-        </button>
-      </div>
-      
-      <div class="status-msg" v-if="connectionState !== 'disconnected'">
-        <Activity :size="14" />
-        <span>{{ connectionState }}</span>
-      </div>
+      <ConnectionForm
+          v-model:gatewayUrl="gatewayUrl"
+          v-model:domain="domain"
+          v-model:password="password"
+          :isConnected="isConnected"
+          :isBusy="isConnecting"
+          :status="connectionState"
+          @generate="generateDomain"
+          @connect="handleConnect"
+          @disconnect="handleDisconnect"
+      />
     </div>
   </div>
   </Transition>
@@ -62,8 +30,9 @@
 
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue';
-import { flexService } from '../services/flex.js';
-import { Network, Server, Globe, Lock, Dices, X, Loader2, Activity } from 'lucide-vue-next';
+import { flexService } from '../../../services/flex.js'; // Updated path
+import { Network, X } from 'lucide-vue-next';
+import ConnectionForm from './ConnectionForm.vue';
 
 const props = defineProps({
     modelValue: Boolean

@@ -2,7 +2,7 @@
     <div class="panel-column server-column">
         <div class="column-header">
             <ArrowDownLeft :size="18" />
-            <span>Server (Listener)</span>
+            <span>Server</span>
         </div>
 
         <!-- Server Controls -->

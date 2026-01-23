@@ -1,14 +1,14 @@
 <template>
     <ToolLayout>
         <template #icon>
-            <Radio :size="20" />
+            <Terminal :size="20" />
         </template>
-        <template #title>Stream Verification</template>
+        <template #title>Telnet Tool</template>
         
         <div class="stream-container">
             <div class="split-layout">
-                <StreamClientPanel />
-                <StreamServerPanel />
+                <TelnetClientPanel />
+                <TelnetServerPanel />
             </div>
         </div>
     </ToolLayout>
@@ -16,15 +16,15 @@
 
 <script>
 export default {
-  name: 'StreamTool'
+  name: 'TelnetView'
 }
 </script>
 
 <script setup>
 import ToolLayout from '../common/ToolLayout.vue';
-import StreamClientPanel from './StreamClientPanel.vue';
-import StreamServerPanel from './StreamServerPanel.vue';
-import { Radio } from 'lucide-vue-next';
+import TelnetClientPanel from './TelnetClientPanel.vue';
+import TelnetServerPanel from './TelnetServerPanel.vue';
+import { Terminal } from 'lucide-vue-next';
 </script>
 
 <style scoped>

@@ -24,9 +24,9 @@
 
 <script setup>
 import { computed, ref, watch, nextTick } from 'vue';
-import { flexService } from '../services/flex.js';
+import { flexService } from '../../../services/flex.js';
 import { ScrollText, Trash2, Ghost } from 'lucide-vue-next';
-import ToolLayout from './common/ToolLayout.vue';
+import ToolLayout from '../../common/ToolLayout.vue';
 
 const logs = computed(() => flexService.state.logs);
 const containerRef = ref(null);

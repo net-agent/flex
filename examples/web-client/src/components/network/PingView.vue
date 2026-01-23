@@ -21,7 +21,16 @@
                 >
                     Batch Ping
                 </button>
+                <button 
+                    :class="['tab-btn', currentTab === 'monitor' ? 'active' : '']" 
+                    @click="currentTab = 'monitor'"
+                >
+                    Monitor
+                </button>
             </div>
+
+            <!-- Monitor Mode (v-show to keep running in background) -->
+            <AliveMonitorPanel v-show="currentTab === 'monitor'" />
 
             <!-- Single Mode -->
             <div v-if="currentTab === 'single'" class="mode-panel">
@@ -144,7 +153,7 @@
 
 <script>
 export default {
-    name: 'PingTool'
+    name: 'PingView'
 }
 </script>
 
@@ -153,6 +162,7 @@ import { ref, onUnmounted, computed } from 'vue';
 import { flexService } from '../../services/flex.js';
 import { Activity, Globe, Loader2, CheckCircle2, AlertCircle, MousePointerClick, ChevronRight, ChevronDown, Layers } from 'lucide-vue-next';
 import ToolLayout from '../common/ToolLayout.vue';
+import AliveMonitorPanel from './AliveMonitorPanel.vue';
 
 // State
 const currentTab = ref('single'); // 'single' | 'batch'

@@ -2,7 +2,7 @@
     <div class="panel-column client-column">
         <div class="column-header">
             <ArrowUpRight :size="18" />
-            <span>Client (Dialer)</span>
+            <span>Client</span>
         </div>
 
         <!-- Client Controls -->
@@ -78,6 +78,15 @@ const clientStream = ref(null);
 const clientMessage = ref('');
 const clientLogs = ref([]);
 const clientLogsRef = ref(null);
+
+// Auto-fill domain
+import { watch, onMounted } from 'vue';
+watch(() => flexService.state.domain, (newVal) => {
+    if (newVal && (targetDomain.value === 'localhost' || !targetDomain.value)) {
+        targetDomain.value = newVal;
+    }
+}, { immediate: true });
+
 
 // --- Helpers ---
 const addLog = (type, message) => {
