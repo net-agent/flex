@@ -7,7 +7,7 @@ import (
 )
 
 func TestAddr(t *testing.T) {
-	s := New(nil)
+	s := New(nil, 0)
 	s.SetLocal(1234, 5678)
 	s.SetRemote(9876, 5432)
 	s.SetNetwork("helloworld")
@@ -20,7 +20,7 @@ func TestAddr(t *testing.T) {
 }
 
 func TestUsedPort(t *testing.T) {
-	s1 := New(nil)
+	s1 := New(nil, 0)
 	s1.SetUsedPort(1234)
 	port := s1.GetUsedPort()
 	assert.Equal(t, uint16(1234), port)

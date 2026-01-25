@@ -21,7 +21,8 @@ type Sender struct {
 	closePbuf    *packet.Buffer
 	closeAckPbuf *packet.Buffer
 
-	senderMut sync.Mutex
+	dataMut sync.Mutex
+	ackMut  sync.Mutex
 
 	counter *int32
 }
@@ -61,8 +62,8 @@ func (s *Sender) SendCmdData(buf []byte) error {
 		return ErrSendDataOversize
 	}
 
-	s.senderMut.Lock()
-	defer s.senderMut.Unlock()
+	s.dataMut.Lock()
+	defer s.dataMut.Unlock()
 	s.dataPbuf.SetPayload(buf)
 	atomic.AddInt32(s.counter, 1)
 	return s.WriteBuffer(s.dataPbuf)
@@ -70,23 +71,23 @@ func (s *Sender) SendCmdData(buf []byte) error {
 
 // SendCmdDataAck 回复dataAck，调用频率很高，且需要保证线程安全
 func (s *Sender) SendCmdDataAck(n uint16) error {
-	s.senderMut.Lock()
-	defer s.senderMut.Unlock()
+	s.ackMut.Lock()
+	defer s.ackMut.Unlock()
 	s.dataAckPbuf.SetACKInfo(n)
 	atomic.AddInt32(s.counter, 1)
 	return s.WriteBuffer(s.dataAckPbuf)
 }
 
 func (s *Sender) SendCmdClose() error {
-	s.senderMut.Lock()
-	defer s.senderMut.Unlock()
+	s.dataMut.Lock()
+	defer s.dataMut.Unlock()
 	atomic.AddInt32(s.counter, 1)
 	return s.WriteBuffer(s.closePbuf)
 }
 
 func (s *Sender) SendCmdCloseAck() error {
-	s.senderMut.Lock()
-	defer s.senderMut.Unlock()
+	s.ackMut.Lock()
+	defer s.ackMut.Unlock()
 	atomic.AddInt32(s.counter, 1)
 	return s.WriteBuffer(s.closeAckPbuf)
 }

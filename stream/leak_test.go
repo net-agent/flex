@@ -13,7 +13,7 @@ func (m *MockWriter) WriteBuffer(buf *packet.Buffer) error { return nil }
 func (m *MockWriter) SetWriteTimeout(dur time.Duration)    {}
 
 func TestCloseLeakOnTimeout(t *testing.T) {
-	s := New(&MockWriter{})
+	s := New(&MockWriter{}, 0)
 	// Reduce timeout for testing
 	s.closeAckTimeout = time.Millisecond * 100
 
@@ -56,7 +56,7 @@ func TestCloseLeakOnTimeout(t *testing.T) {
 }
 
 func TestConcurrentClose(t *testing.T) {
-	s := New(&MockWriter{})
+	s := New(&MockWriter{}, 0)
 	s.closeAckTimeout = time.Millisecond * 50
 
 	// Simulate concurrent close

@@ -30,7 +30,7 @@ func TestCloseErr_SendCloseFailed(t *testing.T) {
 	pc := packet.NewWithConn(c)
 	pc.SetWriteTimeout(time.Millisecond * 100)
 
-	s := New(pc)
+	s := New(pc, 0)
 	err := s.Close()
 	assert.NotNil(t, err)
 	log.Println(err)
@@ -39,7 +39,7 @@ func TestCloseErr_SendCloseFailed(t *testing.T) {
 func TestCloseErr_WaitAckTimeout(t *testing.T) {
 	c1, c2 := net.Pipe()
 	pc := packet.NewWithConn(c1)
-	s := New(pc)
+	s := New(pc, 0)
 
 	go func() {
 		buf := make([]byte, 1000)

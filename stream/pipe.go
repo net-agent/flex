@@ -18,10 +18,10 @@ func Pipe() (*Stream, *Stream) {
 		readAndRoutePbuf(cmdCh, ackCh, pc)
 	}
 
-	s1 := NewDialStream(pc1, "test1", 1, 1, "test2", 2, 2)
+	s1 := NewDialStream(pc1, "test1", 1, 1, "test2", 2, 2, 0)
 	go copybuf(s1, pc1)
 
-	s2 := NewAcceptStream(pc2, "test2", 2, 2, "test1", 1, 1)
+	s2 := NewAcceptStream(pc2, "test2", 2, 2, "test1", 1, 1, 0)
 	go copybuf(s2, pc2)
 
 	return s1, s2

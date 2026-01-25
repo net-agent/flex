@@ -23,7 +23,7 @@ func TestHandleCmdData(t *testing.T) {
 }
 
 func TestHandleCmdDataErr_timeout(t *testing.T) {
-	s := New(nil)
+	s := New(nil, 0)
 	pbuf := packet.NewBufferWithCmd(packet.CmdPushStreamData)
 	pbuf.SetPayload([]byte("hello"))
 
@@ -34,7 +34,7 @@ func TestHandleCmdDataErr_timeout(t *testing.T) {
 }
 
 func TestHandleAckData(t *testing.T) {
-	s1 := New(nil)
+	s1 := New(nil, 0)
 
 	// cover test: normal branch
 	pbuf := packet.NewBufferWithCmd(packet.AckPushStreamData)

@@ -11,19 +11,23 @@ import (
 )
 
 const (
-	KB                  = 1024
-	MB                  = 1024 * KB
-	DefaultBucketSize   = 2 * MB
-	DefaultSplitSize    = 63 * KB
-	DefaultBytesChanCap = 4 * DefaultBucketSize / DefaultSplitSize
+	KB = 1024
+	MB = 1024 * KB
 
-	DefaultCloseAckTimeout    = time.Second * 2
-	DefaultAppendDataTimeout  = time.Second * 2  // 此参数设置过小会导致丢包。过大会导致全局阻塞
-	DefaultReadTimeout        = time.Minute * 10 // 此参数设置过小会导致长连接容易断开
-	DefaultWaitDataAckTimeout = DefaultReadTimeout
+	DefaultSplitSize = 63 * KB
 
 	DIRECTION_LOCAL_TO_REMOTE = int(1)
 	DIRECTION_REMOTE_TO_LOCAL = int(2)
+)
+
+var (
+	// Flow Control Parameters (Global Defaults)
+	DefaultBucketSize         int32         = 2 * MB
+	DefaultBytesChanCap       int           = 4 * int(DefaultBucketSize) / DefaultSplitSize
+	DefaultCloseAckTimeout    time.Duration = time.Second * 2
+	DefaultAppendDataTimeout  time.Duration = time.Second * 2
+	DefaultReadTimeout        time.Duration = time.Minute * 10
+	DefaultWaitDataAckTimeout time.Duration = DefaultReadTimeout
 )
 
 type Stream struct {
@@ -69,7 +73,17 @@ func (s *Stream) String() string {
 
 var streamIndex int32 = 0
 
-func New(pwriter packet.Writer) *Stream {
+func New(pwriter packet.Writer, initialWindowSize int32) *Stream {
+	if initialWindowSize <= 0 {
+		initialWindowSize = DefaultBucketSize
+	}
+
+	// Calculate chan cap based on window size
+	chanCap := int(initialWindowSize) / DefaultSplitSize * 4
+	if chanCap < 16 {
+		chanCap = 16
+	}
+
 	state := &State{
 		Index:   atomic.AddInt32(&streamIndex, 1),
 		Created: time.Now(),
@@ -77,8 +91,8 @@ func New(pwriter packet.Writer) *Stream {
 	return &Stream{
 		state:              state,
 		Sender:             NewSender(pwriter, &state.WritedBufferCount),
-		bytesChan:          make(chan []byte, DefaultBytesChanCap),
-		bucketSz:           DefaultBucketSize,
+		bytesChan:          make(chan []byte, chanCap),
+		bucketSz:           initialWindowSize,
 		bucketEv:           make(chan struct{}, 16),
 		rDeadlineGuard:     &DeadlineGuard{},
 		wDeadlineGuard:     &DeadlineGuard{},
@@ -92,8 +106,9 @@ func New(pwriter packet.Writer) *Stream {
 
 func NewDialStream(w packet.Writer,
 	localDomain string, localIP, localPort uint16,
-	remoteDomain string, remoteIP, remotePort uint16) *Stream {
-	s := New(w)
+	remoteDomain string, remoteIP, remotePort uint16,
+	initialWindowSize int32) *Stream {
+	s := New(w, initialWindowSize)
 	s.SetLocal(localIP, localPort)
 	s.SetRemote(remoteIP, remotePort) // remoteIP有可能需要在接收到Ack时再补充调用
 	s.SetUsedPort(localPort)
@@ -105,8 +120,9 @@ func NewDialStream(w packet.Writer,
 
 func NewAcceptStream(w packet.Writer,
 	localDomain string, localIP, localPort uint16,
-	remoteDomain string, remoteIP, remotePort uint16) *Stream {
-	s := New(w)
+	remoteDomain string, remoteIP, remotePort uint16,
+	initialWindowSize int32) *Stream {
+	s := New(w, initialWindowSize)
 	s.SetLocal(localIP, localPort)
 	s.SetRemote(remoteIP, remotePort)
 	s.state.Direction = DIRECTION_REMOTE_TO_LOCAL

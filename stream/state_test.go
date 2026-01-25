@@ -17,7 +17,7 @@ func TestStateMarshal(t *testing.T) {
 }
 
 func TestStateMethods(t *testing.T) {
-	s := New(nil)
+	s := New(nil, 0)
 
 	s.SetLocal(10, 20)
 	s.SetRemote(30, 40)

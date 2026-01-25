@@ -22,6 +22,12 @@ var (
 	DefaultWriteLocalTimeout = time.Second * 15
 )
 
+type FlowConfig struct {
+	Bandwidth     int64 // bytes per second
+	RTT           time.Duration
+	MaxWindowSize int32
+}
+
 type Node struct {
 	packet.Conn
 	// lastWriteTime int64 // atomic unix nano
@@ -49,6 +55,8 @@ type Node struct {
 
 	writtenDataSize int64
 	readedDataSize  int64
+
+	flowConfig FlowConfig
 }
 
 func New(conn packet.Conn) *Node {
@@ -87,6 +95,21 @@ func (node *Node) GetReadWriteSize() (readed, written int64) {
 	return node.readedDataSize, node.writtenDataSize
 }
 
+func (node *Node) SetFlowConfig(cfg FlowConfig) {
+	node.flowConfig = cfg
+}
+
+func (node *Node) GetWindowSize() int32 {
+	if node.flowConfig.MaxWindowSize > 0 {
+		return node.flowConfig.MaxWindowSize
+	}
+	if node.flowConfig.Bandwidth > 0 && node.flowConfig.RTT > 0 {
+		bdp := node.flowConfig.Bandwidth * int64(node.flowConfig.RTT) / int64(time.Second)
+		return int32(bdp)
+	}
+	return 0 // uses default in stream package
+}
+
 func (node *Node) Run() error {
 	err := node.initRun()
 	if err != nil {
@@ -121,7 +144,7 @@ func (node *Node) initRun() error {
 
 	// 创建不同的缓存队列，避免不同功能的数据包相互影响
 	// 根据是否需要有序分为：Cmd和Data两种类型
-	node.cmdChan = make(chan *packet.Buffer, 1024)  // 用于缓存OpenStream、PushDataAck的队列，这两个无需保证顺序
+	node.cmdChan = make(chan *packet.Buffer, 4096)  // 用于缓存OpenStream、PushDataAck的队列，这两个无需保证顺序
 	node.dataChan = make(chan *packet.Buffer, 1024) // 与数据传输有关的包，OpenStreamAck、PushData、Close、CloseAck，需要保证顺序
 
 	return nil

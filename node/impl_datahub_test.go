@@ -31,7 +31,7 @@ func TestGetStreamBySID(t *testing.T) {
 	assert.False(t, loaded, "test loadAndDelete flag")
 
 	// 测试分支：正常通过
-	s := stream.New(nil)
+	s := stream.New(nil, 0)
 	hub.streamSidMap.Store(uint64(200), s)
 	loadAndDelete = false
 	retStream, err := hub.GetStreamBySID(uint64(200), loadAndDelete)

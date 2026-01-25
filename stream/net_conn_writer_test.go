@@ -12,7 +12,7 @@ import (
 func TestWriteFailed(t *testing.T) {
 	c, _ := net.Pipe()
 	pc := packet.NewConnWriter(c)
-	s := New(pc)
+	s := New(pc, 0)
 	timeout := time.Millisecond * 100
 
 	pc.SetWriteTimeout(timeout)

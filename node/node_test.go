@@ -54,7 +54,7 @@ func TestAttachStream(t *testing.T) {
 	_, err = n.GetStreamBySID(sid, false)
 	assert.Equal(t, err, errStreamNotFound, "test not found case")
 
-	ctx := stream.New(nil)
+	ctx := stream.New(nil, 0)
 	err = n.AttachStream(ctx, sid)
 	assert.Nil(t, err, "want nil err")
 

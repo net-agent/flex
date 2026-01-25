@@ -59,7 +59,7 @@ func testPipeConn(t *testing.T, conn1, conn2 net.Conn) {
 }
 
 func TestSetRemoteDomain(t *testing.T) {
-	s := New(nil)
+	s := New(nil, 0)
 	domain := "testdomain"
 
 	s.SetRemoteDomain(domain)
@@ -90,7 +90,7 @@ func Test_directionStr(t *testing.T) {
 }
 
 func TestGetState(t *testing.T) {
-	s := New(nil)
+	s := New(nil, 0)
 
 	st1 := s.GetState()
 	st2 := s.GetState()

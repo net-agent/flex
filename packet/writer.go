@@ -3,6 +3,7 @@ package packet
 import (
 	"errors"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -21,10 +22,13 @@ type Writer interface {
 // Writer implements with net.Conn
 type connWriter struct {
 	conn net.Conn
+	mu   sync.Mutex
 }
 
 func NewConnWriter(conn net.Conn) Writer {
-	return &connWriter{conn}
+	return &connWriter{
+		conn: conn,
+	}
 }
 
 func (w *connWriter) SetWriteTimeout(timeout time.Duration) {
@@ -40,6 +44,8 @@ func (w *connWriter) WriteBuffer(buf *Buffer) (retErr error) {
 		return nil
 	}
 
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	_, err := buf.WriteTo(w.conn)
 	return err
 }
@@ -47,10 +53,13 @@ func (w *connWriter) WriteBuffer(buf *Buffer) (retErr error) {
 // Writer implements with websocket.Conn
 type wsWriter struct {
 	wsconn *websocket.Conn
+	mu     sync.Mutex
 }
 
 func NewWsWriter(wsconn *websocket.Conn) Writer {
-	return &wsWriter{wsconn}
+	return &wsWriter{
+		wsconn: wsconn,
+	}
 }
 
 func (w *wsWriter) SetWriteTimeout(timeout time.Duration) {
@@ -66,6 +75,8 @@ func (w *wsWriter) WriteBuffer(buf *Buffer) (retErr error) {
 		return nil
 	}
 
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	nw, err := w.wsconn.NextWriter(websocket.BinaryMessage)
 	if err != nil {
 		return err

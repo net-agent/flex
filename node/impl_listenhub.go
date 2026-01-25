@@ -73,9 +73,30 @@ func (hub *ListenHub) GetActiveListeners() []*Listener {
 
 // 处理对端发送过来的OpenStream请求
 func (hub *ListenHub) HandleCmdOpenStream(pbuf *packet.Buffer) {
-	ackMessage := ""
+	var negotiatedWindowSize int32
+	var ackPayload []byte
+	var ackMessage string
+
 	defer func() {
-		err := hub.host.WriteBuffer(pbuf.SetOpenACK(ackMessage))
+		// Construct ACK payload: [0x00] + [negotiatedWindowSize] if success
+		if ackMessage == "" {
+			ackPayload = make([]byte, 5)
+			ackPayload[0] = 0
+			writeUint32(ackPayload[1:], uint32(negotiatedWindowSize))
+		} else {
+			ackPayload = []byte(ackMessage)
+		}
+
+		pbuf.SetPayload(ackPayload)
+		pbuf.SetCmd(packet.AckOpenStream) // Re-use buffer, set Ack Cmd
+
+		// Swap Addresses to reply
+		srcIP, srcPort := pbuf.SrcIP(), pbuf.SrcPort()
+		distIP, distPort := pbuf.DistIP(), pbuf.DistPort()
+		pbuf.SetSrc(distIP, distPort)
+		pbuf.SetDist(srcIP, srcPort)
+
+		err := hub.host.WriteBuffer(pbuf) // pbuf is modified in place
 		if err != nil {
 			hub.host.PopupWarning(
 				"write ack-msg failed",
@@ -91,15 +112,48 @@ func (hub *ListenHub) HandleCmdOpenStream(pbuf *packet.Buffer) {
 		return
 	}
 
-	// 根据OpenCmd的信息创建stream
-	remoteDomain := string(pbuf.Payload)
+	// Parse Payload
+	// [domain] + [0x00] + [windowSize]
+	var remoteDomain string
+	var remoteWindowSize int32
+
+	payload := pbuf.Payload
+	nullByteIdx := -1
+	for i, b := range payload {
+		if b == 0 {
+			nullByteIdx = i
+			break
+		}
+	}
+
+	if nullByteIdx >= 0 {
+		remoteDomain = string(payload[:nullByteIdx])
+		if len(payload) >= nullByteIdx+5 {
+			remoteWindowSize = int32(readUint32(payload[nullByteIdx+1:]))
+		}
+	} else {
+		remoteDomain = string(payload)
+	}
+
 	if remoteDomain == "" && pbuf.SrcIP() == hub.host.ip {
 		remoteDomain = hub.host.domain
 	}
+
+	// Negotiate Window Size
+	localWindowSize := hub.host.GetWindowSize()
+	negotiatedWindowSize = localWindowSize // Default to local
+	if remoteWindowSize > 0 {
+		if localWindowSize <= 0 || remoteWindowSize < localWindowSize {
+			negotiatedWindowSize = remoteWindowSize
+		}
+	}
+	// If both are 0, NewAcceptStream will handle default
+
 	s := stream.NewAcceptStream(
 		hub.host,
 		hub.host.domain, pbuf.DistIP(), pbuf.DistPort(),
 		remoteDomain, pbuf.SrcIP(), pbuf.SrcPort(),
+		negotiatedWindowSize,
 	)
 	defer func() {
 		if s != nil {
