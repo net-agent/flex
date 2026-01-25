@@ -25,7 +25,6 @@ type Context struct {
 	Mac          string
 	IP           uint16
 	Conn         packet.Conn
-	writeMut     sync.Mutex
 	LastReadTime time.Time
 
 	AttachTime time.Time
@@ -52,8 +51,6 @@ func (ctx *Context) WriteBuffer(buf *packet.Buffer) error {
 	if ctx.Conn == nil {
 		return errNilContextConn
 	}
-	ctx.writeMut.Lock()
-	defer ctx.writeMut.Unlock()
 	return ctx.Conn.WriteBuffer(buf)
 }
 

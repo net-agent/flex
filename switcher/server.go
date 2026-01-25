@@ -9,6 +9,7 @@ import (
 
 	"github.com/net-agent/flex/v2/numsrc"
 	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v2/packet/sched"
 	"github.com/net-agent/flex/v2/vars"
 	"github.com/net-agent/flex/v2/warning"
 )
@@ -56,7 +57,9 @@ func (s *Server) Run(l net.Listener) {
 			return
 		}
 
-		go s.HandlePacketConn(packet.NewWithConn(conn), nil, nil)
+		// Wrap accepted connection with FairConn to ensure fair write scheduling
+		pconn := sched.NewFairConn(packet.NewWithConn(conn))
+		go s.HandlePacketConn(pconn, nil, nil)
 	}
 }
 

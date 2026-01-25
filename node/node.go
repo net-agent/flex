@@ -24,8 +24,8 @@ var (
 
 type Node struct {
 	packet.Conn
-	writeMut             sync.Mutex
-	lastWriteTime        time.Time
+	// lastWriteTime int64 // atomic unix nano
+	lastWriteTime        int64
 	heartbeatInterval    time.Duration // 探活的时间间隔
 	writePbufChanTimeout time.Duration // 读取数据包的超时时间
 
@@ -59,7 +59,7 @@ func New(conn packet.Conn) *Node {
 func NewWithOptions(conn packet.Conn, portm *numsrc.Manager, heartbeatInterval, writePbufChanTimeout time.Duration) *Node {
 	node := &Node{
 		Conn:                 conn,
-		lastWriteTime:        time.Now(),
+		lastWriteTime:        time.Now().UnixNano(),
 		running:              false,
 		heartbeatInterval:    heartbeatInterval,
 		writePbufChanTimeout: writePbufChanTimeout,
@@ -153,11 +153,14 @@ func (node *Node) WriteBuffer(pbuf *packet.Buffer) error {
 	if node.Conn == nil {
 		return ErrWriterIsNil
 	}
-	node.writeMut.Lock()
-	defer node.writeMut.Unlock()
 
-	node.lastWriteTime = time.Now()
+	// Update timestamp atomically
+	atomic.StoreInt64(&node.lastWriteTime, time.Now().UnixNano())
+
+	// Atomic Add stats
 	atomic.AddInt64(&node.writtenDataSize, int64(pbuf.PayloadSize()))
+
+	// Direct write without lock (assumes underlying Conn is thread-safe, e.g. FairConn)
 	return node.Conn.WriteBuffer(pbuf)
 }
 
@@ -246,7 +249,8 @@ func (node *Node) routeDataPbufChan(ch chan *packet.Buffer) {
 
 func (node *Node) keepalive(ticker *time.Ticker) {
 	for range ticker.C {
-		if time.Since(node.lastWriteTime) < node.heartbeatInterval {
+		last := atomic.LoadInt64(&node.lastWriteTime)
+		if time.Since(time.Unix(0, last)) < node.heartbeatInterval {
 			continue
 		}
 
