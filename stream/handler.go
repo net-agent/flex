@@ -60,9 +60,11 @@ func (s *Stream) HandleCmdCloseStream(pbuf *packet.Buffer) {
 	s.SendCmdCloseAck()
 }
 
-// HandleCmdCloseStream 收到对端的closeAck应答
-// * 说明对端已经响应本地发出的close请求，并且停止继续写入数据，所以可以安全关闭读状态
 func (s *Stream) HandleAckCloseStream(pbuf *packet.Buffer) {
 	atomic.AddInt32(&s.state.HandledBufferCount, 1)
-	s.closeAckCh <- struct{}{}
+	select {
+	case s.closeAckCh <- struct{}{}:
+	default:
+		// Already signaled or full, ignore duplicate ACKs
+	}
 }

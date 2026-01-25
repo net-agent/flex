@@ -12,23 +12,25 @@ var (
 )
 
 func (s *Stream) Close() error {
-	var err error
+	// 1. Ensure absolute resource cleanup locally
+	defer s.CloseRead()
 
-	err = s.CloseWrite()
-	if err != nil {
-		return err
+	// 2. Mark Write as closed locally
+	if err := s.CloseWrite(); err != nil {
+		return err // defer will run CloseRead
 	}
 
-	err = s.SendCmdClose()
-	if err != nil {
-		return err
+	// 3. Notify Remote
+	if err := s.SendCmdClose(); err != nil {
+		return err // defer will run CloseRead
 	}
 
+	// 4. Wait for confirmation (Graceful period)
 	select {
 	case <-s.closeAckCh:
-		return s.CloseRead()
+		return nil
 	case <-time.After(s.closeAckTimeout):
-		return ErrWaitCloseAckTimeout
+		return ErrWaitCloseAckTimeout // defer will run CloseRead
 	}
 }
 
