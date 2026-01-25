@@ -12,8 +12,9 @@ import (
 )
 
 var (
-	addr     = flag.String("addr", ":8080", "http service address")
-	password = flag.String("password", "test-pwd", "password for switcher")
+	addr      = flag.String("addr", ":8080", "http service address")
+	adminAddr = flag.String("admin-addr", ":9090", "admin http service address")
+	password  = flag.String("password", "test-pwd", "password for switcher")
 )
 
 var upgrader = websocket.Upgrader{
@@ -58,6 +59,15 @@ func main() {
 
 	log.Printf("Server starting on %s...", *addr)
 	log.Printf("WebSocket endpoint: ws://localhost%s/flex/ws", *addr)
+
+	// Start Admin Server
+	admin := switcher.NewAdminServer(s, *adminAddr)
+	go func() {
+		log.Printf("Admin Server starting on %s...", *adminAddr)
+		if err := admin.Start(); err != nil {
+			log.Printf("Admin Server failed: %v", err)
+		}
+	}()
 
 	// Start a background server to handle logic if needed, but here we just need the HTTP server
 	// The switcher itself doesn't need a separate Run() call if we are injecting connections manually,

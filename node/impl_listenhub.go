@@ -60,6 +60,17 @@ func (hub *ListenHub) GetListenerByPort(port uint16) (*Listener, error) {
 	return l, nil
 }
 
+func (hub *ListenHub) GetActiveListeners() []*Listener {
+	list := make([]*Listener, 0)
+	hub.listeners.Range(func(key, value interface{}) bool {
+		if l, ok := value.(*Listener); ok {
+			list = append(list, l)
+		}
+		return true
+	})
+	return list
+}
+
 // 处理对端发送过来的OpenStream请求
 func (hub *ListenHub) HandleCmdOpenStream(pbuf *packet.Buffer) {
 	ackMessage := ""

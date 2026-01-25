@@ -172,6 +172,18 @@ func (s *Server) GetCtxRecords() [][]string {
 	return ret
 }
 
+// GetActiveContexts returns a snapshot of all active contexts
+func (s *Server) GetActiveContexts() []*Context {
+	ctxs := make([]*Context, 0)
+	s.nodeIps.Range(func(key, value interface{}) bool {
+		if ctx, ok := value.(*Context); ok {
+			ctxs = append(ctxs, ctx)
+		}
+		return true
+	})
+	return ctxs
+}
+
 // DetachCtx 分离上下文
 func (s *Server) DetachCtx(ctx *Context) {
 	if ctx.attached {

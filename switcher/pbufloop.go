@@ -1,8 +1,10 @@
 package switcher
 
 import (
+	"sync/atomic"
 	"time"
 
+	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/vars"
 )
 
@@ -13,6 +15,17 @@ func RunPbufLoopService(s *Server, ctx *Context) error {
 		ctx.LastReadTime = time.Now()
 		if err != nil {
 			return err
+		}
+
+		// Stats: Bytes Received
+		atomic.AddInt64(&ctx.Stats.BytesReceived, int64(pbuf.PayloadSize()+packet.HeaderSz))
+
+		// Stats: Stream Count (Approximate, based on Open/Close commands)
+		cmd := pbuf.Cmd()
+		if cmd == packet.CmdOpenStream {
+			atomic.AddInt32(&ctx.Stats.StreamCount, 1)
+		} else if cmd == packet.CmdCloseStream {
+			atomic.AddInt32(&ctx.Stats.StreamCount, -1)
 		}
 
 		// 目标IP不是Switcher的，直接进入转发流程

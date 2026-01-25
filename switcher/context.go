@@ -33,6 +33,14 @@ type Context struct {
 	pingIndex int32
 	pingBack  sync.Map
 	attached  bool
+	Stats     ContextStats
+}
+
+type ContextStats struct {
+	StreamCount   int32
+	BytesReceived int64
+	BytesSent     int64
+	LastRTT       time.Duration
 }
 
 func NewContext(conn packet.Conn, domain, mac string) *Context {
@@ -47,10 +55,18 @@ func NewContext(conn packet.Conn, domain, mac string) *Context {
 	}
 }
 
+func (ctx *Context) GetID() int {
+	return ctx.id
+}
+
 func (ctx *Context) WriteBuffer(buf *packet.Buffer) error {
 	if ctx.Conn == nil {
 		return errNilContextConn
 	}
+
+	// Update stats
+	atomic.AddInt64(&ctx.Stats.BytesSent, int64(buf.PayloadSize()+packet.HeaderSz))
+
 	return ctx.Conn.WriteBuffer(buf)
 }
 
@@ -86,5 +102,7 @@ func (ctx *Context) Ping(timeout time.Duration) (dur time.Duration, retErr error
 		return 0, errPingTimeout
 	}
 
-	return time.Since(pingStart), nil
+	dur = time.Since(pingStart)
+	ctx.Stats.LastRTT = dur
+	return dur, nil
 }
