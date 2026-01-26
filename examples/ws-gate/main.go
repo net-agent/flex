@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"log"
 	"net/http"
@@ -12,9 +13,8 @@ import (
 )
 
 var (
-	addr      = flag.String("addr", ":8080", "http service address")
-	adminAddr = flag.String("admin-addr", ":9090", "admin http service address")
-	password  = flag.String("password", "test-pwd", "password for switcher")
+	addr     = flag.String("addr", ":8080", "http service address")
+	password = flag.String("password", "test-pwd", "password for switcher")
 )
 
 var upgrader = websocket.Upgrader{
@@ -30,8 +30,43 @@ func main() {
 	s := switcher.NewServer(*password)
 	defer s.Close()
 
-	// Handle WebSocket endpoint
-	http.HandleFunc("/flex/ws", func(w http.ResponseWriter, r *http.Request) {
+	// Create Handler
+	handler := newHandler(s)
+
+	log.Printf("Server starting on %s...", *addr)
+	log.Printf("WebSocket endpoint: ws://localhost%s/flex/ws", *addr)
+	log.Printf("Admin stats: http://localhost%s/api/stats", *addr)
+
+	if err := http.ListenAndServe(*addr, handler); err != nil {
+		log.Fatal("ListenAndServe: ", err)
+	}
+}
+
+func newHandler(s *switcher.Server) http.Handler {
+	mux := http.NewServeMux()
+
+	// Static Files
+	fs := http.FileServer(http.Dir("./examples/web-client/dist"))
+	mux.Handle("/", fs)
+
+	// WebSocket
+	mux.HandleFunc("/flex/ws", handleWS(s))
+
+	// Admin API
+	mux.HandleFunc("GET /api/stats", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(s.GetStats())
+	})
+	mux.HandleFunc("GET /api/clients", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(s.GetClients())
+	})
+
+	return mux
+}
+
+func handleWS(s *switcher.Server) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			log.Print("upgrade:", err)
@@ -44,37 +79,10 @@ func main() {
 		pConn := packet.NewWithWs(c)
 
 		// Handover to switcher
-		// Note: The third argument is 'authInfo', which we can leave nil for now or parse from URL/headers
 		go s.HandlePacketConn(pConn, func(ctx *switcher.Context) {
 			log.Printf("context loop start. domain=%s, id=%v", ctx.Domain, ctx.GetID())
 		}, func(ctx *switcher.Context, duration time.Duration) {
 			log.Printf("context loop stop. domain=%s, id=%v, dur=%v", ctx.Domain, ctx.GetID(), duration)
 		})
-	})
-
-	// Serve static files for the web client
-	// Assuming running from the root of the repo or where examples/web-client exists
-	fs := http.FileServer(http.Dir("./examples/web-client/dist"))
-	http.Handle("/", fs)
-
-	log.Printf("Server starting on %s...", *addr)
-	log.Printf("WebSocket endpoint: ws://localhost%s/flex/ws", *addr)
-
-	// Start Admin Server
-	admin := switcher.NewAdminServer(s, *adminAddr)
-	go func() {
-		log.Printf("Admin Server starting on %s...", *adminAddr)
-		if err := admin.Start(); err != nil {
-			log.Printf("Admin Server failed: %v", err)
-		}
-	}()
-
-	// Start a background server to handle logic if needed, but here we just need the HTTP server
-	// The switcher itself doesn't need a separate Run() call if we are injecting connections manually,
-	// BUT switcher.Run(listener) is for TCP listener. We are bringing our own connections.
-
-	err := http.ListenAndServe(*addr, nil)
-	if err != nil {
-		log.Fatal("ListenAndServe: ", err)
 	}
 }

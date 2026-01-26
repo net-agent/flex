@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/net-agent/flex/v2/numsrc"
@@ -36,6 +37,30 @@ type ServerError struct {
 	RawError string // 产生的原始错误
 }
 
+// Responses
+type StatsResponse struct {
+	ActiveConnections int   `json:"active_connections"`
+	TotalContexts     int64 `json:"total_contexts"`
+	UptimeSeconds     int64 `json:"uptime_seconds"`
+}
+
+type ClientInfo struct {
+	ID          int         `json:"id"`
+	Domain      string      `json:"domain"`
+	IP          uint16      `json:"ip"`
+	Mac         string      `json:"mac"`
+	ConnectedAt time.Time   `json:"connected_at"`
+	Stats       ClientStats `json:"stats"`
+}
+
+type ClientStats struct {
+	StreamCount   int32  `json:"active_streams"`
+	BytesReceived int64  `json:"bytes_in"`
+	BytesSent     int64  `json:"bytes_out"`
+	LastRTT       string `json:"rtt"`
+	LastRTTMs     int64  `json:"rtt_ms"`
+}
+
 func NewServer(password string) *Server {
 	ipm, _ := numsrc.NewManager(1, 1, vars.MaxIP-1)
 
@@ -43,6 +68,40 @@ func NewServer(password string) *Server {
 		password: password,
 		ipm:      ipm,
 	}
+}
+
+func (s *Server) GetStats() *StatsResponse {
+	ctxs := s.GetActiveContexts()
+	return &StatsResponse{
+		ActiveConnections: len(ctxs),
+		TotalContexts:     int64(atomic.LoadInt32(&ctxindex)),
+	}
+}
+
+func (s *Server) GetClients() []ClientInfo {
+	ctxs := s.GetActiveContexts()
+	infos := make([]ClientInfo, 0, len(ctxs))
+
+	for _, ctx := range ctxs {
+		rtt := ctx.Stats.LastRTT
+
+		info := ClientInfo{
+			ID:          ctx.id,
+			Domain:      ctx.Domain,
+			IP:          ctx.IP,
+			Mac:         ctx.Mac,
+			ConnectedAt: ctx.AttachTime,
+			Stats: ClientStats{
+				StreamCount:   atomic.LoadInt32(&ctx.Stats.StreamCount),
+				BytesReceived: atomic.LoadInt64(&ctx.Stats.BytesReceived),
+				BytesSent:     atomic.LoadInt64(&ctx.Stats.BytesSent),
+				LastRTT:       rtt.String(),
+				LastRTTMs:     rtt.Milliseconds(),
+			},
+		}
+		infos = append(infos, info)
+	}
+	return infos
 }
 
 func (s *Server) Run(l net.Listener) {

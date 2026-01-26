@@ -59,6 +59,20 @@ type Node struct {
 	flowConfig FlowConfig
 }
 
+type NodeInfo struct {
+	Domain       string `json:"domain"`
+	IP           uint16 `json:"ip"`
+	Network      string `json:"network"`
+	Uptime       int64  `json:"uptime_seconds"`
+	BytesRead    int64  `json:"bytes_read"`
+	BytesWritten int64  `json:"bytes_written"`
+}
+
+type ListenerInfo struct {
+	Port uint16 `json:"port"`
+	Addr string `json:"addr"`
+}
+
 func New(conn packet.Conn) *Node {
 	portm, _ := numsrc.NewManager(1, 1000, 0xFFFF)
 	return NewWithOptions(conn, portm, DefaultHeartbeatInterval, DefaultWriteLocalTimeout)
@@ -93,6 +107,29 @@ func (node *Node) SetIP(ip uint16)         { node.ip = ip }
 func (node *Node) GetIP() uint16           { return node.ip }
 func (node *Node) GetReadWriteSize() (readed, written int64) {
 	return node.readedDataSize, node.writtenDataSize
+}
+
+func (node *Node) GetInfo() *NodeInfo {
+	read, written := node.GetReadWriteSize()
+	return &NodeInfo{
+		Domain:       node.GetDomain(),
+		IP:           node.GetIP(),
+		Network:      node.GetNetwork(),
+		BytesRead:    read,
+		BytesWritten: written,
+	}
+}
+
+func (node *Node) GetListeners() []ListenerInfo {
+	listeners := node.GetActiveListeners()
+	infos := make([]ListenerInfo, 0, len(listeners))
+	for _, l := range listeners {
+		infos = append(infos, ListenerInfo{
+			Port: l.port,
+			Addr: l.str,
+		})
+	}
+	return infos
 }
 
 func (node *Node) SetFlowConfig(cfg FlowConfig) {
