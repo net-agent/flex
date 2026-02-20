@@ -13,7 +13,7 @@ import (
 
 func TestAttachCtx(t *testing.T) {
 	s := NewServer("")
-	ctx := NewContext(nil, "test1", "")
+	ctx := NewContext(1, nil, "test1", "")
 
 	// 测试分支：正确处理
 	err := s.AttachCtx(ctx)
@@ -30,7 +30,7 @@ func TestAttachCtx(t *testing.T) {
 	}
 
 	// 测试分支：domain不同但是ip相同
-	ctx2 := NewContext(nil, "test2", "")
+	ctx2 := NewContext(2, nil, "test2", "")
 	err = s.AttachCtx(ctx2)
 	if err != nil {
 		t.Errorf("unexpected err=%v\n", err)
@@ -38,8 +38,10 @@ func TestAttachCtx(t *testing.T) {
 	}
 
 	// 模拟设置一个未被清理的ip地址（ip的分配是自增的，所以使用ctx2.IP+1来模拟）
-	s.nodeIps.Store(ctx2.IP+1, nil)
-	ctx3 := NewContext(nil, "test3", "")
+	s.ipMu.Lock()
+	s.nodeIps[ctx2.IP+1] = nil
+	s.ipMu.Unlock()
+	ctx3 := NewContext(3, nil, "test3", "")
 	err = s.AttachCtx(ctx3)
 	if err != errContextIPExist {
 		t.Errorf("unexpected err=%v\n", err)
@@ -61,12 +63,12 @@ func TestAttachErr_GetIP(t *testing.T) {
 	s.ipm, _ = numsrc.NewManager(0, 9, 10)
 	var err error
 
-	err = s.AttachCtx(NewContext(nil, "test1", ""))
+	err = s.AttachCtx(NewContext(1, nil, "test1", ""))
 	if err != nil {
 		t.Error(err)
 		return
 	}
-	err = s.AttachCtx(NewContext(nil, "test2", ""))
+	err = s.AttachCtx(NewContext(2, nil, "test2", ""))
 	if err != errGetFreeContextIPFailed {
 		t.Errorf("unexpected err=%v\n", err)
 		return

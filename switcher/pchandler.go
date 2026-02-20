@@ -2,6 +2,7 @@ package switcher
 
 import (
 	"errors"
+	"sync/atomic"
 	"time"
 
 	"github.com/net-agent/flex/v2/handshake"
@@ -31,7 +32,7 @@ func (s *Server) HandlePacketConn(pc packet.Conn, onStart OnLoopStartHandler, on
 	}
 
 	// 第二步：将ctx映射到map中
-	ctx := NewContext(pc, req.Domain, req.Mac)
+	ctx := NewContext(int(atomic.AddInt32(&s.nextCtxID, 1)), pc, req.Domain, req.Mac)
 	err = s.AttachCtx(ctx)
 	if err != nil {
 		resp.ErrCode = -2

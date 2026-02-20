@@ -11,8 +11,8 @@ import (
 // RunPbufLoopService
 func RunPbufLoopService(s *Server, ctx *Context) error {
 	for {
-		pbuf, err := ctx.Conn.ReadBuffer()
-		ctx.LastReadTime = time.Now()
+		pbuf, err := ctx.ReadBuffer()
+		ctx.SetLastReadTime(time.Now())
 		if err != nil {
 			return err
 		}

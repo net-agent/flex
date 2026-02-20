@@ -11,11 +11,10 @@ import (
 )
 
 var (
-	errDomainNotFound       = errors.New("domain not found")
-	errConvertContextFailed = errors.New("convert domain context failed")
-	errInvalidContextIP     = errors.New("invalid context ip")
-	errContextIPNotFound    = errors.New("context ip not found")
-	errResolveDomainFailed  = errors.New("resolve domain failed")
+	errDomainNotFound    = errors.New("domain not found")
+	errInvalidContextIP  = errors.New("invalid context ip")
+	errContextIPNotFound = errors.New("context ip not found")
+	errResolveDomainFailed = errors.New("resolve domain failed")
 )
 
 // GetContextByDomain 根据domain获取已经连接的上下文
@@ -25,13 +24,11 @@ func (s *Server) GetContextByDomain(domain string) (*Context, error) {
 		return nil, handshake.ErrInvalidDomain
 	}
 
-	it, found := s.nodeDomains.Load(domain)
+	s.domainMu.Lock()
+	ctx, found := s.nodeDomains[domain]
+	s.domainMu.Unlock()
 	if !found {
 		return nil, errDomainNotFound
-	}
-	ctx, ok := it.(*Context)
-	if !ok {
-		return nil, errConvertContextFailed
 	}
 
 	return ctx, nil
@@ -43,13 +40,11 @@ func (s *Server) GetContextByIP(ip uint16) (*Context, error) {
 		return nil, errInvalidContextIP
 	}
 
-	it, found := s.nodeIps.Load(ip)
+	s.ipMu.Lock()
+	ctx, found := s.nodeIps[ip]
+	s.ipMu.Unlock()
 	if !found {
 		return nil, errContextIPNotFound
-	}
-	ctx, ok := it.(*Context)
-	if !ok {
-		return nil, errConvertContextFailed
 	}
 	return ctx, nil
 }
@@ -126,7 +121,11 @@ func (s *Server) HandleAckPingDomain(caller *Context, pbuf *packet.Buffer) {
 		return
 	}
 
-	ch <- pbuf
+	// Defensive send: channel may be closed or full if ping timed out
+	select {
+	case ch <- pbuf:
+	default:
+	}
 }
 
 // HandleCmdOpenStream 处理OpenStream命令，需要根据domain信息进行转发

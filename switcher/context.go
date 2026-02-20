@@ -11,8 +11,6 @@ import (
 	"github.com/net-agent/flex/v2/vars"
 )
 
-var ctxindex int32
-
 var (
 	errPingWriteFailed = errors.New("ping write buffer failed")
 	errPingTimeout     = errors.New("ping timeout")
@@ -20,19 +18,21 @@ var (
 )
 
 type Context struct {
-	id           int
-	Domain       string
-	Mac          string
-	IP           uint16
-	Conn         packet.Conn
-	LastReadTime time.Time
+	id     int
+	Domain string
+	Mac    string
+	IP     uint16
+
+	mu           sync.Mutex
+	conn         packet.Conn
+	attached     bool
+	lastReadTime atomic.Value // stores time.Time
 
 	AttachTime time.Time
 	DetachTime time.Time
 
 	pingIndex int32
 	pingBack  sync.Map
-	attached  bool
 	Stats     ContextStats
 }
 
@@ -40,34 +40,80 @@ type ContextStats struct {
 	StreamCount   int32
 	BytesReceived int64
 	BytesSent     int64
-	LastRTT       time.Duration
+	LastRTT       int64 // nanoseconds, use atomic access
 }
 
-func NewContext(conn packet.Conn, domain, mac string) *Context {
-	return &Context{
-		id:           int(atomic.AddInt32(&ctxindex, 1)),
-		Domain:       domain,
-		Mac:          mac,
-		IP:           0,
-		Conn:         conn,
-		LastReadTime: time.Now(),
-		AttachTime:   time.Now(),
+func NewContext(id int, conn packet.Conn, domain, mac string) *Context {
+	ctx := &Context{
+		id:         id,
+		Domain:     domain,
+		Mac:        mac,
+		IP:         0,
+		conn:       conn,
+		AttachTime: time.Now(),
 	}
+	ctx.lastReadTime.Store(time.Now())
+	return ctx
 }
 
 func (ctx *Context) GetID() int {
 	return ctx.id
 }
 
+func (ctx *Context) getConn() packet.Conn {
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	return ctx.conn
+}
+
+func (ctx *Context) setConn(c packet.Conn) {
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	ctx.conn = c
+}
+
+func (ctx *Context) isAttached() bool {
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	return ctx.attached
+}
+
+func (ctx *Context) setAttached(v bool) {
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	ctx.attached = v
+}
+
+func (ctx *Context) SetLastReadTime(t time.Time) {
+	ctx.lastReadTime.Store(t)
+}
+
+func (ctx *Context) GetLastReadTime() time.Time {
+	v := ctx.lastReadTime.Load()
+	if v == nil {
+		return time.Time{}
+	}
+	return v.(time.Time)
+}
+
+func (ctx *Context) ReadBuffer() (*packet.Buffer, error) {
+	c := ctx.getConn()
+	if c == nil {
+		return nil, errNilContextConn
+	}
+	return c.ReadBuffer()
+}
+
 func (ctx *Context) WriteBuffer(buf *packet.Buffer) error {
-	if ctx.Conn == nil {
+	c := ctx.getConn()
+	if c == nil {
 		return errNilContextConn
 	}
 
 	// Update stats
 	atomic.AddInt64(&ctx.Stats.BytesSent, int64(buf.PayloadSize()+packet.HeaderSz))
 
-	return ctx.Conn.WriteBuffer(buf)
+	return c.WriteBuffer(buf)
 }
 
 func (ctx *Context) Ping(timeout time.Duration) (dur time.Duration, retErr error) {
@@ -79,7 +125,7 @@ func (ctx *Context) Ping(timeout time.Duration) (dur time.Duration, retErr error
 	pbuf.SetDist(ctx.IP, 0)
 	pbuf.SetPayload([]byte(ctx.Domain))
 
-	ch := make(chan *packet.Buffer)
+	ch := make(chan *packet.Buffer, 1) // buffered to prevent goroutine leak
 	ctx.pingBack.Store(port, ch)
 	defer func() {
 		ctx.pingBack.Delete(port)
@@ -103,6 +149,6 @@ func (ctx *Context) Ping(timeout time.Duration) (dur time.Duration, retErr error
 	}
 
 	dur = time.Since(pingStart)
-	ctx.Stats.LastRTT = dur
+	atomic.StoreInt64(&ctx.Stats.LastRTT, dur.Nanoseconds())
 	return dur, nil
 }

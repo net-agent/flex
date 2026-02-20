@@ -1,6 +1,7 @@
 package warning
 
 import (
+	"fmt"
 	"runtime"
 )
 
@@ -19,4 +20,11 @@ func New(skipCallStack int, info, err string) *Message {
 		Info:   info,
 		Error:  err,
 	}
+}
+
+func (m *Message) String() string {
+	if m.Error == "" {
+		return m.Info
+	}
+	return fmt.Sprintf("%v, err='%v'", m.Info, m.Error)
 }

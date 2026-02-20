@@ -22,12 +22,19 @@ var (
 )
 
 type Server struct {
-	listener      net.Listener
-	password      string
-	ipm           *numsrc.Manager
-	nodeDomains   sync.Map   // map[string]*Context
-	nodeIps       sync.Map   // map[uint16]*Context
-	ctxRecords    []*Context // 不断自增（todo：fix memory leak）
+	listenerMu sync.Mutex
+	listener   net.Listener
+	password   string
+	ipm        *numsrc.Manager
+	nextCtxID  int32
+
+	domainMu    sync.Mutex
+	nodeDomains map[string]*Context
+
+	ipMu    sync.Mutex
+	nodeIps map[uint16]*Context
+
+	ctxRecords    []*Context
 	ctxRecordsMut sync.Mutex
 	warning.Guard
 }
@@ -65,8 +72,10 @@ func NewServer(password string) *Server {
 	ipm, _ := numsrc.NewManager(1, 1, vars.MaxIP-1)
 
 	return &Server{
-		password: password,
-		ipm:      ipm,
+		password:    password,
+		ipm:         ipm,
+		nodeDomains: make(map[string]*Context),
+		nodeIps:     make(map[uint16]*Context),
 	}
 }
 
@@ -74,7 +83,7 @@ func (s *Server) GetStats() *StatsResponse {
 	ctxs := s.GetActiveContexts()
 	return &StatsResponse{
 		ActiveConnections: len(ctxs),
-		TotalContexts:     int64(atomic.LoadInt32(&ctxindex)),
+		TotalContexts:     int64(atomic.LoadInt32(&s.nextCtxID)),
 	}
 }
 
@@ -83,7 +92,8 @@ func (s *Server) GetClients() []ClientInfo {
 	infos := make([]ClientInfo, 0, len(ctxs))
 
 	for _, ctx := range ctxs {
-		rtt := ctx.Stats.LastRTT
+		rttNs := atomic.LoadInt64(&ctx.Stats.LastRTT)
+		rtt := time.Duration(rttNs)
 
 		info := ClientInfo{
 			ID:          ctx.id,
@@ -105,10 +115,13 @@ func (s *Server) GetClients() []ClientInfo {
 }
 
 func (s *Server) Run(l net.Listener) {
+	s.listenerMu.Lock()
 	if s.listener != nil {
+		s.listenerMu.Unlock()
 		return
 	}
 	s.listener = l
+	s.listenerMu.Unlock()
 
 	for {
 		conn, err := l.Accept()
@@ -123,8 +136,11 @@ func (s *Server) Run(l net.Listener) {
 }
 
 func (s *Server) Close() error {
-	if s.listener != nil {
-		return s.listener.Close()
+	s.listenerMu.Lock()
+	l := s.listener
+	s.listenerMu.Unlock()
+	if l != nil {
+		return l.Close()
 	}
 	return nil
 }
@@ -147,51 +163,81 @@ func (s *Server) AttachCtx(ctx *Context) error {
 	}
 	ctx.IP = ip
 
-	_, loaded := s.nodeIps.LoadOrStore(ctx.IP, ctx)
-	if loaded {
+	s.ipMu.Lock()
+	if _, exists := s.nodeIps[ctx.IP]; exists {
+		s.ipMu.Unlock()
 		// 该IP已经存在绑定，并且还未清理
-		s.nodeDomains.Delete(ctx.Domain)
+		s.domainMu.Lock()
+		delete(s.nodeDomains, ctx.Domain)
+		s.domainMu.Unlock()
 		s.clearCtx(ctx)
 		return errContextIPExist
 	}
+	s.nodeIps[ctx.IP] = ctx
+	s.ipMu.Unlock()
 
 	ctx.AttachTime = time.Now()
 	return nil
 }
 
 // replaceDomain 如果存在同名的context，进行检测
+// Uses optimistic locking: lock to check, unlock to ping, re-lock to verify and replace.
 func (s *Server) replaceDomain(newCtx *Context) (curr *Context, replaceOK bool) {
-	it, loaded := s.nodeDomains.LoadOrStore(newCtx.Domain, newCtx)
+	s.domainMu.Lock()
+	existing, loaded := s.nodeDomains[newCtx.Domain]
 	if !loaded {
 		// 不存在重名情况（绝大多数正常情况）
+		s.nodeDomains[newCtx.Domain] = newCtx
+		s.domainMu.Unlock()
 		s.pushCtxRecord(newCtx)
-		newCtx.attached = true
+		newCtx.setAttached(true)
 		return nil, true
 	}
+	s.domainMu.Unlock()
 
-	curr, ok := it.(*Context)
-	if ok {
-		// 增加会话探活机制，要求domain当前绑定的ctx在3秒内进行回应
-		// 如果3秒内未进行回应可以判定是“僵尸”连接
-		// 3秒内收到回应，则拒绝新连接绑定
-		_, err := curr.Ping(time.Second * 3)
-		if err == nil {
-			return curr, false
-		}
-
-		// 没有ping通，则移除当前的context，注册新的context
-		s.DetachCtx(curr)
+	// Ping outside the lock to avoid holding it during network I/O
+	_, err := existing.Ping(time.Second * 3)
+	if err == nil {
+		// Existing context is alive, reject the new one
+		return existing, false
 	}
 
-	s.nodeDomains.Store(newCtx.Domain, newCtx)
+	// Ping failed — re-lock and verify the domain still points to the same context
+	s.domainMu.Lock()
+	current, stillExists := s.nodeDomains[newCtx.Domain]
+	if stillExists && current == existing {
+		// Still the same stale context, safe to replace
+		s.nodeDomains[newCtx.Domain] = newCtx
+		s.domainMu.Unlock()
+		s.DetachCtx(existing)
+		s.pushCtxRecord(newCtx)
+		newCtx.setAttached(true)
+		return existing, true
+	}
+	// Someone else already replaced it — try again with simple store
+	s.nodeDomains[newCtx.Domain] = newCtx
+	s.domainMu.Unlock()
 	s.pushCtxRecord(newCtx)
-	newCtx.attached = true
-	return curr, true
+	newCtx.setAttached(true)
+	return existing, true
 }
 
 func (s *Server) pushCtxRecord(ctx *Context) {
 	s.ctxRecordsMut.Lock()
 	defer s.ctxRecordsMut.Unlock()
+
+	// Prune old detached records when exceeding 10000 entries
+	if len(s.ctxRecords) > 10000 {
+		cutoff := time.Now().Add(-24 * time.Hour)
+		kept := make([]*Context, 0, len(s.ctxRecords)/2)
+		for _, c := range s.ctxRecords {
+			if c.isAttached() || c.DetachTime.After(cutoff) || c.DetachTime.IsZero() {
+				kept = append(kept, c)
+			}
+		}
+		s.ctxRecords = kept
+	}
+
 	s.ctxRecords = append(s.ctxRecords, ctx)
 }
 
@@ -211,7 +257,7 @@ func (s *Server) GetCtxRecords() [][]string {
 		state := "working"
 		workTime := now.Sub(ctx.AttachTime)
 
-		if ctx.DetachTime.After(ctx.AttachTime) {
+		if !ctx.isAttached() && ctx.DetachTime.After(ctx.AttachTime) {
 			state = "done"
 			workTime = ctx.DetachTime.Sub(ctx.AttachTime)
 		}
@@ -233,31 +279,45 @@ func (s *Server) GetCtxRecords() [][]string {
 
 // GetActiveContexts returns a snapshot of all active contexts
 func (s *Server) GetActiveContexts() []*Context {
-	ctxs := make([]*Context, 0)
-	s.nodeIps.Range(func(key, value interface{}) bool {
-		if ctx, ok := value.(*Context); ok {
-			ctxs = append(ctxs, ctx)
-		}
-		return true
-	})
+	s.ipMu.Lock()
+	ctxs := make([]*Context, 0, len(s.nodeIps))
+	for _, ctx := range s.nodeIps {
+		ctxs = append(ctxs, ctx)
+	}
+	s.ipMu.Unlock()
 	return ctxs
 }
 
 // DetachCtx 分离上下文
 func (s *Server) DetachCtx(ctx *Context) {
-	if ctx.attached {
-		s.nodeDomains.Delete(ctx.Domain)
-		s.nodeIps.Delete(ctx.IP)
-		s.clearCtx(ctx)
+	if !ctx.isAttached() {
+		return
 	}
+
+	s.domainMu.Lock()
+	// Verify ctx still owns the domain before deleting
+	if current, ok := s.nodeDomains[ctx.Domain]; ok && current == ctx {
+		delete(s.nodeDomains, ctx.Domain)
+	}
+	s.domainMu.Unlock()
+
+	s.ipMu.Lock()
+	if current, ok := s.nodeIps[ctx.IP]; ok && current == ctx {
+		delete(s.nodeIps, ctx.IP)
+	}
+	s.ipMu.Unlock()
+
+	s.clearCtx(ctx)
 }
 
 func (s *Server) clearCtx(ctx *Context) {
-	if ctx.Conn != nil {
-		ctx.Conn.Close()
+	c := ctx.getConn()
+	if c != nil {
+		c.Close()
 	}
-	ctx.Conn = nil
-	ctx.attached = false
+	ctx.setConn(nil)
+	ctx.setAttached(false)
+	atomic.StoreInt32(&ctx.Stats.StreamCount, 0)
 	ctx.DetachTime = time.Now()
 	s.ipm.ReleaseNumberSrc(ctx.IP)
 }

@@ -55,17 +55,11 @@ func TestGetContextByDomain(t *testing.T) {
 		return
 	}
 
-	// 错误分支：context类型错误
-	s.nodeDomains.Store("testdomain2", 100)
-	_, err = s.GetContextByDomain("testdomain2")
-	if err != errConvertContextFailed {
-		t.Errorf("unexpected err=%v\n", err)
-		return
-	}
-
 	// 正确分支
-	ctx := NewContext(nil, "testdomain3", "")
-	s.nodeDomains.Store(ctx.Domain, ctx)
+	ctx := NewContext(1, nil, "testdomain3", "")
+	s.domainMu.Lock()
+	s.nodeDomains[ctx.Domain] = ctx
+	s.domainMu.Unlock()
 	returnCtx, err := s.GetContextByDomain(ctx.Domain)
 	if err != nil {
 		t.Errorf("unexpected err=%v\n", err)
@@ -100,19 +94,12 @@ func TestGetContextByIP(t *testing.T) {
 		return
 	}
 
-	// 错误分支：context类型错误
-	// 备注：不能直接s.nodeIps.Store(100, 3000)，这里的100会被当做int对待，int(100) != uint16(100)
-	s.nodeIps.Store(uint16(100), 3000)
-	_, err = s.GetContextByIP(uint16(100))
-	if err != errConvertContextFailed {
-		t.Errorf("unexpected err=%v\n", err)
-		return
-	}
-
 	// 正确分支
-	ctx := NewContext(nil, "testdomain", "")
+	ctx := NewContext(1, nil, "testdomain", "")
 	ctx.IP = 200
-	s.nodeIps.Store(ctx.IP, ctx)
+	s.ipMu.Lock()
+	s.nodeIps[ctx.IP] = ctx
+	s.ipMu.Unlock()
 	returnCtx, err := s.GetContextByIP(ctx.IP)
 	if err != nil {
 		t.Errorf("unexpected err=%v\n", err)
@@ -162,9 +149,11 @@ func TestHandleDefaultPbufWithPing(t *testing.T) {
 
 func TestHandleDefaultPbufErr_Write(t *testing.T) {
 	s := NewServer("")
-	ctx := NewContext(nil, "test", "")
+	ctx := NewContext(1, nil, "test", "")
 	ctx.IP = 2
-	s.nodeIps.Store(ctx.IP, ctx)
+	s.ipMu.Lock()
+	s.nodeIps[ctx.IP] = ctx
+	s.ipMu.Unlock()
 
 	// 错误用例：因为ctx的pc是空，所以会触发dist.WriteBuffer的错误
 	pbuf := packet.NewBuffer(nil)
@@ -194,7 +183,7 @@ func TestHandleCmdOpenStream(t *testing.T) {
 
 func TestHandlePingDomainAck(t *testing.T) {
 	s := NewServer("")
-	caller := NewContext(nil, "test", "")
+	caller := NewContext(1, nil, "test", "")
 	pbuf := packet.NewBuffer(nil)
 
 	// 分支覆盖：找不到port
