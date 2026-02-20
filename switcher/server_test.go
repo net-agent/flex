@@ -23,8 +23,8 @@ func TestServerRun(t *testing.T) {
 		t.Errorf("listen failed. err=%v\n", err)
 		return
 	}
-	go s.Run(l)
-	go s.Run(l) // 提高代码覆盖度
+	go s.Serve(l)
+	go s.Serve(l) // 提高代码覆盖度
 
 	c, err := net.Dial("tcp", addr)
 	if err != nil {
@@ -37,7 +37,7 @@ func TestServerRun(t *testing.T) {
 	s.Close()
 }
 
-func TestHandlePacketConn(t *testing.T) {
+func TestServeConn(t *testing.T) {
 	pswd := "testpswd"
 	s := NewServer(pswd, nil, nil)
 	pc1, pc2 := packet.Pipe()
@@ -48,7 +48,7 @@ func TestHandlePacketConn(t *testing.T) {
 		pc1.Close()
 	}()
 
-	s.HandlePacketConn(pc2)
+	s.ServeConn(pc2)
 }
 
 // 模拟domain重复的场景
@@ -65,8 +65,8 @@ func TestHandlePCErr_DomainExist(t *testing.T) {
 	pc1, pc2 := packet.Pipe()
 	pc3, pc4 := packet.Pipe()
 
-	go s.HandlePacketConn(pc2)
-	go s.HandlePacketConn(pc4)
+	go s.ServeConn(pc2)
+	go s.ServeConn(pc4)
 
 	// 先正常接入一个domain=test的连接
 	ip, err := handshake.UpgradeRequest(pc1, "test", "", pswd)
@@ -114,7 +114,7 @@ func TestHandlePCErr_Password(t *testing.T) {
 		pc1.ReadBuffer()
 	}()
 
-	err := s.HandlePacketConn(pc2)
+	err := s.ServeConn(pc2)
 	if err != handshake.ErrInvalidPassword {
 		t.Errorf("unexpected err=%v\n", err)
 		return
@@ -141,7 +141,7 @@ func TestHandlePCErr_WriteResponse(t *testing.T) {
 		pc1.Close()
 	}()
 
-	err := s.HandlePacketConn(pc2)
+	err := s.ServeConn(pc2)
 	if err != errHandlePCWriteFailed {
 		t.Errorf("unexpected err=%v\n", err)
 		return

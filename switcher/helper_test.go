@@ -14,8 +14,8 @@ func initTestEnv(domain1, domain2 string) (*Server, *node.Node, *node.Node) {
 	pc1, pc2 := packet.Pipe()
 	pc3, pc4 := packet.Pipe()
 
-	go s.HandlePacketConn(pc2)
-	go s.HandlePacketConn(pc4)
+	go s.ServeConn(pc2)
+	go s.ServeConn(pc4)
 
 	ip1, _ := handshake.UpgradeRequest(pc1, domain1, "", pswd)
 	node1 := node.New(pc1)

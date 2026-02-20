@@ -124,7 +124,7 @@ func (s *Server) GetClients() []ClientInfo {
 	return infos
 }
 
-func (s *Server) Run(l net.Listener) error {
+func (s *Server) Serve(l net.Listener) error {
 	s.listenerMu.Lock()
 	if s.listener != nil {
 		s.listenerMu.Unlock()
@@ -146,7 +146,7 @@ func (s *Server) Run(l net.Listener) error {
 		}
 
 		pconn := sched.NewFairConn(packet.NewWithConn(conn))
-		go s.HandlePacketConn(pconn)
+		go s.ServeConn(pconn)
 	}
 }
 
@@ -161,9 +161,9 @@ func (s *Server) Close() error {
 	return nil
 }
 
-// HandlePacketConn handles the full lifecycle of a single packet connection:
+// ServeConn handles the full lifecycle of a single packet connection:
 // handshake, context registration, packet loop, and cleanup.
-func (s *Server) HandlePacketConn(pc packet.Conn) error {
+func (s *Server) ServeConn(pc packet.Conn) error {
 	defer pc.Close()
 
 	var resp handshake.Response

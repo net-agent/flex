@@ -95,7 +95,7 @@ import "github.com/net-agent/flex/v2/switcher"
 s := switcher.NewServer("secret-password")
 
 // In your TCP/WS accept loop:
-go s.HandlePacketConn(pconn, onStart, onStop)
+go s.ServeConn(pconn, onStart, onStop)
 ```
 
 ### Context & Routing

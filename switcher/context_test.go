@@ -54,8 +54,8 @@ func TestPingErr_Timeout(t *testing.T) {
 	pc1, pc2 := packet.Pipe()
 	pc3, pc4 := packet.Pipe()
 
-	go s.HandlePacketConn(pc2)
-	go s.HandlePacketConn(pc4)
+	go s.ServeConn(pc2)
+	go s.ServeConn(pc4)
 
 	var waitUpgradeReady sync.WaitGroup
 

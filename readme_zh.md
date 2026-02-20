@@ -76,7 +76,7 @@ func main() {
 // 启动 Switcher
 s := switcher.NewServer("password")
 // 处理传入连接
-go s.HandlePacketConn(pconn, ...)
+go s.ServeConn(pconn, ...)
 ```
 
 ## 文档

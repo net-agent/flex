@@ -86,6 +86,6 @@ func handleWS(s *switcher.Server) http.HandlerFunc {
 		pConn := packet.NewWithWs(c)
 
 		// Handover to switcher
-		go s.HandlePacketConn(pConn)
+		go s.ServeConn(pConn)
 	}
 }

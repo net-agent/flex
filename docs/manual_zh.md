@@ -95,7 +95,7 @@ import "github.com/net-agent/flex/v2/switcher"
 s := switcher.NewServer("secret-password")
 
 // 在你的 TCP/WS accept 循环中:
-go s.HandlePacketConn(pconn, onStart, onStop)
+go s.ServeConn(pconn, onStart, onStop)
 ```
 
 ### 上下文与路由

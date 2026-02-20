@@ -40,15 +40,15 @@ func main() {
     if err != nil {
         log.Fatal(err)
     }
-    log.Fatal(s.Run(l))
+    log.Fatal(s.Serve(l))
 }
 ```
 
-如果使用 WebSocket，可以在 HTTP handler 中手动调用 `HandlePacketConn`：
+如果使用 WebSocket，可以在 HTTP handler 中手动调用 `ServeConn`：
 
 ```go
 pConn := packet.NewWithWs(wsConn)
-go s.HandlePacketConn(pConn)
+go s.ServeConn(pConn)
 ```
 
 完整示例见 [examples/ws-gate](../examples/ws-gate)。
@@ -69,9 +69,9 @@ func NewServer(password string, logger *slog.Logger, logCfg *LogConfig) *Server
 
 | 方法 | 说明 |
 |------|------|
-| `Run(l net.Listener) error` | 在 listener 上接受连接并阻塞运行 |
-| `Close() error` | 关闭 listener，`Run` 会返回 nil |
-| `HandlePacketConn(pc packet.Conn) error` | 处理单个 packet 连接的完整生命周期（握手→注册→路由→清理） |
+| `Serve(l net.Listener) error` | 在 listener 上接受连接并阻塞运行 |
+| `Close() error` | 关闭 listener，`Serve` 会返回 nil |
+| `ServeConn(pc packet.Conn) error` | 处理单个 packet 连接的完整生命周期（握手→注册→路由→清理） |
 | `GetStats() *StatsResponse` | 返回活跃连接数和累计 Context 数 |
 | `GetClients() []ClientInfo` | 返回所有在线客户端的详细信息 |
 

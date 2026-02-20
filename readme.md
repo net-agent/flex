@@ -76,7 +76,7 @@ See [examples/ws-gate](examples/ws-gate/main.go) for a complete example of runni
 // Start Switcher
 s := switcher.NewServer("password")
 // Handle incoming connections
-go s.HandlePacketConn(pconn, ...)
+go s.ServeConn(pconn, ...)
 ```
 
 ## Documentation
