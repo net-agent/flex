@@ -7,9 +7,9 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/net-agent/flex/v2/event"
 	"github.com/net-agent/flex/v2/idpool"
 	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v2/pending"
 	"github.com/net-agent/flex/v2/stream"
 	"github.com/net-agent/flex/v2/vars"
 )
@@ -27,7 +27,7 @@ type Dialer struct {
 	host    *Node
 	portm   *idpool.Pool
 	timeout time.Duration
-	evbus event.Bus
+	pending pending.Requests[*stream.Stream]
 }
 
 func (d *Dialer) init(host *Node, portm *idpool.Pool) {
@@ -112,10 +112,11 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 
 	// 第二步：创建一个用于接收stream的chan
 	// 这个stream会在ack到达时创建并绑定sid
-	ev, err := d.evbus.ListenOnce(srcPort)
+	ch, err := d.pending.Register(srcPort)
 	if err != nil {
 		return nil, err
 	}
+	defer d.pending.Remove(srcPort)
 
 	// 第三步：补齐pbuf的srcPort参数，向服务端发送open命令
 	pbuf.SetSrcPort(srcPort)
@@ -125,16 +126,20 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 	}
 
 	// 第四步：等待ack返回（设置超时时间）
-	resp, err := ev.Wait(d.timeout)
-	if err != nil {
-		return nil, err
+	select {
+	case res, ok := <-ch:
+		if !ok {
+			return nil, pending.ErrTimeout
+		}
+		if res.Err != nil {
+			return nil, res.Err
+		}
+		s := res.Val
+		s.SetRemoteDomain(remoteDomain)
+		return s, nil
+	case <-time.After(d.timeout):
+		return nil, pending.ErrTimeout
 	}
-
-	// handleAckOpenStream 里面的处理逻辑，确保不会出现nil resp
-	s := resp.(*stream.Stream)
-	s.SetRemoteDomain(remoteDomain)
-
-	return s, nil
 }
 
 func (d *Dialer) handleAckOpenStream(pbuf *packet.Buffer) {
@@ -153,7 +158,7 @@ func (d *Dialer) handleAckOpenStream(pbuf *packet.Buffer) {
 	}
 
 	if !isSuccess {
-		err := d.evbus.Dispatch(evKey, errors.New(string(pbuf.Payload)), nil)
+		err := d.pending.Complete(evKey, nil, errors.New(string(pbuf.Payload)))
 		if err != nil {
 			d.host.logger.Warn("dispatch ack-msg failed", "error", err)
 		}
@@ -173,14 +178,14 @@ func (d *Dialer) handleAckOpenStream(pbuf *packet.Buffer) {
 	err := d.host.attachStream(s, pbuf.SID())
 	if err != nil {
 		d.host.logger.Warn("attach stream to node failed", "error", err)
-		err = d.evbus.Dispatch(evKey, err, nil)
+		err = d.pending.Complete(evKey, nil, err)
 		if err != nil {
 			d.host.logger.Warn("dispatch ack-err failed", "error", err)
 		}
 		return
 	}
 
-	err = d.evbus.Dispatch(evKey, nil, s)
+	err = d.pending.Complete(evKey, s, nil)
 	if err != nil {
 		d.host.logger.Warn("dispatch ack failed", "error", err)
 	}

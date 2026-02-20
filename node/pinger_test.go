@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v2/event"
+	"github.com/net-agent/flex/v2/pending"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -50,14 +50,14 @@ func TestPingDomainErr_timeout(t *testing.T) {
 	n2.SetIgnorePing(true)
 
 	_, err := n1.PingDomain("test2", time.Millisecond*20)
-	assert.Equal(t, err, event.ErrWaitReplyTimeout, "test: ping timeout")
+	assert.Equal(t, err, pending.ErrTimeout, "test: ping timeout")
 }
 
 func TestPingErr(t *testing.T) {
 	n1, _ := Pipe("test1", "test2")
 
 	// 提前监听：ping port 是从1开始计数
-	n1.Pinger.evbus.Listen(uint16(1))
+	n1.Pinger.pending.Register(uint16(1))
 	_, err := n1.PingDomain("test2", time.Second)
-	assert.Equal(t, event.ErrEventHasListened, err)
+	assert.Equal(t, pending.ErrAlreadyRegistered, err)
 }

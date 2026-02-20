@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v2/event"
 	"github.com/net-agent/flex/v2/idpool"
 	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v2/pending"
 	"github.com/net-agent/flex/v2/vars"
 	"github.com/stretchr/testify/assert"
 )
@@ -246,10 +246,10 @@ func TestDialBufErr_portmAndRepsonse(t *testing.T) {
 
 	// 测试用例：提前把response设置好，触发local port used错误
 	// d1.responses.Store(uint16(1), nil)
-	d1.evbus.ListenOnce(uint16(1))
+	d1.pending.Register(uint16(1))
 	pbuf := packet.NewBuffer(nil)
 	_, err = d1.dialPbuf(pbuf)
-	assert.Equal(t, event.ErrEventHasListened, err)
+	assert.Equal(t, pending.ErrAlreadyRegistered, err)
 
 	// 测试用例：提前把free port申请完，触发无可用端口错误
 	for {
@@ -281,7 +281,7 @@ func TestDialBuffErr_timeoutAndWriteFailed(t *testing.T) {
 	pbuf.SetDistIP(0) // 默认0，会进入本地循环，触发timeout
 	d1.SetDialTimeout(time.Millisecond * 100)
 	_, err = d1.dialPbuf(pbuf)
-	assert.Equal(t, event.ErrWaitReplyTimeout, err)
+	assert.Equal(t, pending.ErrTimeout, err)
 
 	// 测试用例：关闭pipe，触发write错误
 	// portm(2)

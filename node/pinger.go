@@ -4,9 +4,9 @@ import (
 	"errors"
 	"time"
 
-	"github.com/net-agent/flex/v2/event"
 	"github.com/net-agent/flex/v2/idpool"
 	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v2/pending"
 	"github.com/net-agent/flex/v2/vars"
 )
 
@@ -17,7 +17,7 @@ var (
 type Pinger struct {
 	host  *Node
 	portm *idpool.Pool
-	evbus event.Bus
+	pending pending.Requests[struct{}]
 	ignorePing bool // 为 true 时忽略所有 ping 请求
 }
 
@@ -37,10 +37,11 @@ func (p *Pinger) PingDomain(domain string, timeout time.Duration) (time.Duration
 	}
 	defer p.portm.Release(port)
 
-	w, err := p.evbus.ListenOnce(port)
+	ch, err := p.pending.Register(port)
 	if err != nil {
 		return 0, err
 	}
+	defer p.pending.Remove(port)
 
 	pingStart := time.Now()
 
@@ -54,11 +55,18 @@ func (p *Pinger) PingDomain(domain string, timeout time.Duration) (time.Duration
 		return 0, err
 	}
 
-	_, err = w.Wait(timeout)
-	if err != nil {
-		return 0, err
+	select {
+	case res, ok := <-ch:
+		if !ok {
+			return 0, pending.ErrTimeout
+		}
+		if res.Err != nil {
+			return 0, res.Err
+		}
+		return time.Since(pingStart), nil
+	case <-time.After(timeout):
+		return 0, pending.ErrTimeout
 	}
-	return time.Since(pingStart), nil
 }
 
 // handleCmdPingDomain 处理远端的PingDomain请求
@@ -86,8 +94,8 @@ func (p *Pinger) handleAckPingDomain(pbuf *packet.Buffer) {
 	port := pbuf.DistPort()
 	msg := string(pbuf.Payload)
 	if msg != "" {
-		p.evbus.Dispatch(port, errors.New(msg), nil)
+		p.pending.Complete(port, struct{}{}, errors.New(msg))
 	} else {
-		p.evbus.Dispatch(port, nil, nil)
+		p.pending.Complete(port, struct{}{}, nil)
 	}
 }
