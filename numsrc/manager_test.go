@@ -1,6 +1,9 @@
 package numsrc
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestManagerNormalUseCase(t *testing.T) {
 	m, err := NewManager(0, 1000, 65535)
@@ -164,6 +167,34 @@ func TestErrInvalidPortState(t *testing.T) {
 	if err != ErrInvalidNumberState {
 		t.Error("unexpected err")
 		return
+	}
+}
+
+func TestConcurrentGetRelease(t *testing.T) {
+	// Create a manager with only 1 free port to force contention.
+	m, err := NewManager(0, 99, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Exhaust the only free port.
+	port, err := m.GetFreeNumberSrc()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Release the port after a short delay — GetFreeNumberSrc must not deadlock.
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		m.ReleaseNumberSrc(port)
+	}()
+
+	got, err := m.GetFreeNumberSrc()
+	if err != nil {
+		t.Fatalf("expected successful get after concurrent release, got err=%v", err)
+	}
+	if got != port {
+		t.Fatalf("expected port %v, got %v", port, got)
 	}
 }
 

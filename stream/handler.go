@@ -14,12 +14,12 @@ func (s *Stream) HandleCmdPushStreamData(pbuf *packet.Buffer) {
 	defer s.rmut.RUnlock()
 
 	if s.rclosed {
-		s.PopupInfo("stream closed")
+		s.logger.Info("stream closed")
 		return
 	}
 
 	if pbuf.PayloadSize() <= 0 {
-		s.PopupInfo("payload is empty")
+		s.logger.Info("payload is empty")
 		return
 	}
 
@@ -28,7 +28,7 @@ func (s *Stream) HandleCmdPushStreamData(pbuf *packet.Buffer) {
 		atomic.AddInt64(&s.state.HandledDataSize, int64(pbuf.PayloadSize()))
 		return
 	case <-time.After(s.appendDataTimeout):
-		s.PopupInfo("append data timeout")
+		s.logger.Info("append data timeout")
 		return
 	}
 }

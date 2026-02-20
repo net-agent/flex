@@ -98,10 +98,7 @@ func (hub *ListenHub) HandleCmdOpenStream(pbuf *packet.Buffer) {
 
 		err := hub.host.WriteBuffer(pbuf) // pbuf is modified in place
 		if err != nil {
-			hub.host.PopupWarning(
-				"write ack-msg failed",
-				err.Error(),
-			)
+			hub.host.logger.Warn("write ack-msg failed", "error", err)
 		}
 	}()
 

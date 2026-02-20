@@ -14,12 +14,12 @@ import (
 func TestContextPing(t *testing.T) {
 	s, node1, node2 := initTestEnv("test1", "test2")
 
-	ctx1, err := s.GetContextByDomain("test1")
+	ctx1, err := s.registry.lookupByDomain("test1")
 	if err != nil {
 		t.Error(err)
 		return
 	}
-	_, err = ctx1.Ping(time.Second)
+	_, err = ctx1.ping(time.Second)
 	if err != nil {
 		t.Error(err)
 		return
@@ -27,12 +27,12 @@ func TestContextPing(t *testing.T) {
 
 	// 修改node2的domain，让客户端被ping时返回错误
 	node2.SetDomain("xxxx")
-	ctx2, err := s.GetContextByDomain("test2")
+	ctx2, err := s.registry.lookupByDomain("test2")
 	if err != nil {
 		t.Error(err)
 		return
 	}
-	_, err = ctx2.Ping(time.Second)
+	_, err = ctx2.ping(time.Second)
 	if err == nil {
 		t.Error("unexpected nil err")
 		return
@@ -41,7 +41,7 @@ func TestContextPing(t *testing.T) {
 
 	// 错误分支：WriteBuffer failed
 	node1.Conn.Close()
-	_, err = ctx1.Ping(time.Second)
+	_, err = ctx1.ping(time.Second)
 	if err != errPingWriteFailed {
 		t.Errorf("unexpected err=%v\n", err)
 		return
@@ -50,12 +50,12 @@ func TestContextPing(t *testing.T) {
 
 func TestPingErr_Timeout(t *testing.T) {
 	pswd := "testpswd"
-	s := NewServer(pswd)
+	s := NewServer(pswd, nil, nil)
 	pc1, pc2 := packet.Pipe()
 	pc3, pc4 := packet.Pipe()
 
-	go s.HandlePacketConn(pc2, nil, nil)
-	go s.HandlePacketConn(pc4, nil, nil)
+	go s.HandlePacketConn(pc2)
+	go s.HandlePacketConn(pc4)
 
 	var waitUpgradeReady sync.WaitGroup
 
@@ -82,14 +82,163 @@ func TestPingErr_Timeout(t *testing.T) {
 
 	waitUpgradeReady.Wait()
 
-	ctx1, err := s.GetContextByDomain("test1")
+	ctx1, err := s.registry.lookupByDomain("test1")
 	if err != nil {
 		t.Error(err)
 		return
 	}
-	_, err = ctx1.Ping(time.Millisecond * 100)
+	_, err = ctx1.ping(time.Millisecond * 100)
 	if err != errPingTimeout {
 		t.Errorf("unexpected err=%v\n", err)
 		return
+	}
+}
+
+func TestReadBufferNilConn(t *testing.T) {
+	ctx := NewContext(1, nil, "test", "", nil)
+	_, err := ctx.readBuffer()
+	if err != errNilContextConn {
+		t.Errorf("expected errNilContextConn, got %v", err)
+	}
+}
+
+func TestRecordIncoming(t *testing.T) {
+	ctx := NewContext(1, nil, "test", "", nil)
+
+	// CmdOpenStream 增加 StreamCount
+	pbuf := packet.NewBuffer(nil)
+	pbuf.SetCmd(packet.CmdOpenStream)
+	ctx.recordIncoming(pbuf)
+	if ctx.Stats.StreamCount != 1 {
+		t.Errorf("expected StreamCount=1, got %v", ctx.Stats.StreamCount)
+	}
+
+	// CmdCloseStream 减少 StreamCount
+	pbuf2 := packet.NewBuffer(nil)
+	pbuf2.SetCmd(packet.CmdCloseStream)
+	ctx.recordIncoming(pbuf2)
+	if ctx.Stats.StreamCount != 0 {
+		t.Errorf("expected StreamCount=0, got %v", ctx.Stats.StreamCount)
+	}
+
+	// 其他命令不影响 StreamCount
+	pbuf3 := packet.NewBuffer(nil)
+	pbuf3.SetCmd(packet.CmdPingDomain)
+	ctx.recordIncoming(pbuf3)
+	if ctx.Stats.StreamCount != 0 {
+		t.Errorf("expected StreamCount=0, got %v", ctx.Stats.StreamCount)
+	}
+
+	// BytesReceived 应该累加
+	if ctx.Stats.BytesReceived == 0 {
+		t.Error("expected BytesReceived > 0")
+	}
+}
+
+func TestEnqueueForward_FastPathClosed(t *testing.T) {
+	ctx := &Context{
+		forwardCh:   make(chan *packet.Buffer, 1),
+		forwardDone: make(chan struct{}),
+	}
+	// 填满 channel，使 send case 不可用，只有 forwardDone 可选
+	ctx.forwardCh <- packet.NewBuffer(nil)
+	close(ctx.forwardDone)
+
+	err := ctx.enqueueForward(packet.NewBuffer(nil))
+	if err == nil {
+		t.Error("expected error for closed context")
+	}
+}
+
+func TestEnqueueForward_SlowPathSuccess(t *testing.T) {
+	ctx := &Context{
+		forwardCh:   make(chan *packet.Buffer, 1),
+		forwardDone: make(chan struct{}),
+	}
+	// 填满 channel，使快路径失败
+	ctx.forwardCh <- packet.NewBuffer(nil)
+
+	// 延迟腾出空间
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		<-ctx.forwardCh
+	}()
+
+	err := ctx.enqueueForward(packet.NewBuffer(nil))
+	if err != nil {
+		t.Errorf("expected nil error, got %v", err)
+	}
+}
+
+func TestEnqueueForward_SlowPathClosed(t *testing.T) {
+	ctx := &Context{
+		forwardCh:   make(chan *packet.Buffer, 1),
+		forwardDone: make(chan struct{}),
+	}
+	// 填满 channel，使快路径失败
+	ctx.forwardCh <- packet.NewBuffer(nil)
+
+	// 延迟关闭 context
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		close(ctx.forwardDone)
+	}()
+
+	err := ctx.enqueueForward(packet.NewBuffer(nil))
+	if err == nil {
+		t.Error("expected error for closed context")
+	}
+}
+
+func TestEnqueueForward_Timeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping slow enqueue timeout test")
+	}
+
+	ctx := &Context{
+		forwardCh:   make(chan *packet.Buffer, 1),
+		forwardDone: make(chan struct{}),
+	}
+	// 填满 channel，不消费，不关闭 — 触发 5s 超时
+	ctx.forwardCh <- packet.NewBuffer(nil)
+
+	start := time.Now()
+	err := ctx.enqueueForward(packet.NewBuffer(nil))
+	dur := time.Since(start)
+
+	if err == nil {
+		t.Error("expected timeout error")
+	}
+	if dur < 4*time.Second {
+		t.Errorf("expected ~5s timeout, got %v", dur)
+	}
+}
+
+func TestRunForwardLoopChannelClose(t *testing.T) {
+	ctx := &Context{
+		forwardCh:   make(chan *packet.Buffer, 1),
+		forwardDone: make(chan struct{}),
+	}
+
+	done := make(chan struct{})
+	go func() {
+		ctx.runForwardLoop()
+		close(done)
+	}()
+
+	// 关闭 channel 触发 !ok 分支
+	close(ctx.forwardCh)
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Error("runForwardLoop did not exit after channel close")
+	}
+}
+
+func TestGetID(t *testing.T) {
+	ctx := NewContext(42, nil, "test", "", nil)
+	if ctx.GetID() != 42 {
+		t.Errorf("expected 42, got %v", ctx.GetID())
 	}
 }

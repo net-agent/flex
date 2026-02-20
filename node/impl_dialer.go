@@ -156,10 +156,7 @@ func (d *Dialer) HandleAckOpenStream(pbuf *packet.Buffer) {
 	if !isSuccess {
 		err := d.evbus.Dispatch(evKey, errors.New(string(pbuf.Payload)), nil)
 		if err != nil {
-			d.host.PopupWarning(
-				"dispatch ack-msg failed",
-				err.Error(),
-			)
+			d.host.logger.Warn("dispatch ack-msg failed", "error", err)
 		}
 		return
 	}
@@ -176,17 +173,17 @@ func (d *Dialer) HandleAckOpenStream(pbuf *packet.Buffer) {
 
 	err := d.host.AttachStream(s, pbuf.SID())
 	if err != nil {
-		d.host.PopupWarning("attach stream to node failed", err.Error())
+		d.host.logger.Warn("attach stream to node failed", "error", err)
 		err = d.evbus.Dispatch(evKey, err, nil)
 		if err != nil {
-			d.host.PopupWarning("dispatch ack-err failed", err.Error())
+			d.host.logger.Warn("dispatch ack-err failed", "error", err)
 		}
 		return
 	}
 
 	err = d.evbus.Dispatch(evKey, nil, s)
 	if err != nil {
-		d.host.PopupWarning("dispatch ack failed", err.Error())
+		d.host.logger.Warn("dispatch ack failed", "error", err)
 	}
 }
 

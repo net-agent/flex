@@ -65,8 +65,8 @@ func (pm *Manager) requestNumber(port uint16) error {
 }
 
 func (pm *Manager) GetFreeNumberSrc() (uint16, error) {
-	pm.locker.Lock()
-	defer pm.locker.Unlock()
+	timer := time.NewTimer(100 * time.Millisecond)
+	defer timer.Stop()
 
 	for {
 		select {
@@ -75,12 +75,14 @@ func (pm *Manager) GetFreeNumberSrc() (uint16, error) {
 				return 0, ErrFreeNumberChClosed
 			}
 
-			// 尝试调用requestPortByNumber验证port的可用性，返回true则代表申请成功
-			if nil == pm.requestNumber(port) {
+			pm.locker.Lock()
+			err := pm.requestNumber(port)
+			pm.locker.Unlock()
+			if err == nil {
 				return port, nil
 			}
 
-		case <-time.After(time.Millisecond * 100):
+		case <-timer.C:
 			return 0, ErrGetFreeNumberTimeout
 		}
 	}

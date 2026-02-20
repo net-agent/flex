@@ -2,13 +2,13 @@ package node
 
 import (
 	"errors"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/net-agent/flex/v2/numsrc"
 	"github.com/net-agent/flex/v2/packet"
-	"github.com/net-agent/flex/v2/warning"
 )
 
 var (
@@ -44,7 +44,7 @@ type Node struct {
 	Dialer        // 提供Dial、DialDomain、DialIP实现
 	Pinger        // 提供PingDomain实现
 	DataHub       // 处理Data、DataAck、Close、CloseAck
-	warning.Guard // 处理后台任务的异常信息
+	logger *slog.Logger
 
 	network string
 	domain  string
@@ -85,6 +85,7 @@ func NewWithOptions(conn packet.Conn, portm *numsrc.Manager, heartbeatInterval, 
 		running:              false,
 		heartbeatInterval:    heartbeatInterval,
 		writePbufChanTimeout: writePbufChanTimeout,
+		logger:               slog.Default(),
 	}
 
 	node.ListenHub.Init(node, portm)
@@ -105,6 +106,11 @@ func (node *Node) SetDomain(domain string) { node.domain = domain }
 func (node *Node) GetDomain() string       { return node.domain }
 func (node *Node) SetIP(ip uint16)         { node.ip = ip }
 func (node *Node) GetIP() uint16           { return node.ip }
+func (node *Node) SetLogger(l *slog.Logger) {
+	if l != nil {
+		node.logger = l
+	}
+}
 func (node *Node) GetReadWriteSize() (readed, written int64) {
 	return node.readedDataSize, node.writtenDataSize
 }
@@ -282,7 +288,7 @@ func (node *Node) routeCmdPbufChan(ch chan *packet.Buffer) {
 			node.HandleAckPingDomain(pbuf)
 
 		default:
-			node.PopupWarning("unknown cmd", pbuf.HeaderString())
+			node.logger.Warn("unknown cmd", "header", pbuf.HeaderString())
 		}
 	}
 }
@@ -302,7 +308,7 @@ func (node *Node) routeDataPbufChan(ch chan *packet.Buffer) {
 			node.HandleAckCloseStream(pbuf)
 
 		default:
-			node.PopupWarning("unknown cmd", pbuf.HeaderString())
+			node.logger.Warn("unknown cmd", "header", pbuf.HeaderString())
 		}
 	}
 }
@@ -315,13 +321,13 @@ func (node *Node) keepalive(ticker *time.Ticker) {
 		}
 
 		if node.aliveChecker == nil {
-			node.PopupWarning("aliveChecker is nil", "")
+			node.logger.Warn("aliveChecker is nil")
 			return
 		}
 
 		err := node.aliveChecker()
 		if err != nil {
-			node.PopupWarning("check alive failed", err.Error())
+			node.logger.Warn("check alive failed", "error", err)
 			node.Close()
 			ticker.Stop()
 			return

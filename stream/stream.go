@@ -2,12 +2,12 @@ package stream
 
 import (
 	"fmt"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/net-agent/flex/v2/packet"
-	"github.com/net-agent/flex/v2/warning"
 )
 
 const (
@@ -58,7 +58,7 @@ type Stream struct {
 	readTimeout        time.Duration
 	waitDataAckTimeout time.Duration
 
-	warning.Guard
+	logger *slog.Logger
 }
 
 func (s *Stream) GetState() *State {
@@ -101,6 +101,7 @@ func New(pwriter packet.Writer, initialWindowSize int32) *Stream {
 		appendDataTimeout:  DefaultAppendDataTimeout,
 		readTimeout:        DefaultReadTimeout,
 		waitDataAckTimeout: DefaultWaitDataAckTimeout,
+		logger:             slog.Default(),
 	}
 }
 
@@ -138,6 +139,11 @@ func (s *Stream) GetReadWriteSize() (int64, int64) {
 func (s *Stream) SetUsedPort(port uint16)       { s.usedPort = port }
 func (s *Stream) GetUsedPort() uint16           { return s.usedPort }
 func (s *Stream) SetRemoteDomain(domain string) { s.state.RemoteDomain = domain }
+func (s *Stream) SetLogger(l *slog.Logger) {
+	if l != nil {
+		s.logger = l
+	}
+}
 
 func directionStr(d int) string {
 	if d == DIRECTION_LOCAL_TO_REMOTE {

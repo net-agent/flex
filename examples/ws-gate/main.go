@@ -27,8 +27,15 @@ func main() {
 	flag.Parse()
 
 	// Initialize Switcher
-	s := switcher.NewServer(*password)
+	s := switcher.NewServer(*password, nil, nil)
 	defer s.Close()
+
+	s.OnContextStart = func(ctx *switcher.Context) {
+		log.Printf("context loop start. domain=%s, id=%v", ctx.Domain, ctx.GetID())
+	}
+	s.OnContextStop = func(ctx *switcher.Context, duration time.Duration) {
+		log.Printf("context loop stop. domain=%s, id=%v, dur=%v", ctx.Domain, ctx.GetID(), duration)
+	}
 
 	// Create Handler
 	handler := newHandler(s)
@@ -79,10 +86,6 @@ func handleWS(s *switcher.Server) http.HandlerFunc {
 		pConn := packet.NewWithWs(c)
 
 		// Handover to switcher
-		go s.HandlePacketConn(pConn, func(ctx *switcher.Context) {
-			log.Printf("context loop start. domain=%s, id=%v", ctx.Domain, ctx.GetID())
-		}, func(ctx *switcher.Context, duration time.Duration) {
-			log.Printf("context loop stop. domain=%s, id=%v, dur=%v", ctx.Domain, ctx.GetID(), duration)
-		})
+		go s.HandlePacketConn(pConn)
 	}
 }

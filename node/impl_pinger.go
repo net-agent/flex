@@ -2,7 +2,6 @@ package node
 
 import (
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/net-agent/flex/v2/event"
@@ -66,10 +65,7 @@ func (p *Pinger) PingDomain(domain string, timeout time.Duration) (time.Duration
 // HandleCmdPingDomain 处理远端的PingDomain请求
 func (p *Pinger) HandleCmdPingDomain(pbuf *packet.Buffer) {
 	if p.ignorePing {
-		p.host.PopupWarning(
-			"ignore ping request",
-			fmt.Sprintf("srcip=%v", pbuf.SrcIP()),
-		)
+		p.host.logger.Warn("ignore ping request", "srcip", pbuf.SrcIP())
 		return
 	}
 	if string(pbuf.Payload) != p.host.domain {
