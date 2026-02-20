@@ -21,13 +21,13 @@ func initTestEnv(domain1, domain2 string) (*Server, *node.Node, *node.Node) {
 	node1 := node.New(pc1)
 	node1.SetIP(ip1)
 	node1.SetDomain(domain1)
-	go node1.Run()
+	go node1.Serve()
 
 	ip2, _ := handshake.UpgradeRequest(pc3, domain2, "", pswd)
 	node2 := node.New(pc3)
 	node2.SetIP(ip2)
 	node2.SetDomain(domain2)
-	go node2.Run()
+	go node2.Serve()
 
 	<-time.After(time.Millisecond * 50)
 

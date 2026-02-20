@@ -14,42 +14,48 @@ import (
 )
 
 func TestGetStreamBySID(t *testing.T) {
-	hub := &DataHub{}
+	hub := &StreamHub{}
 	var err error
 
 	// 测试分支：stream not found
-	_, err = hub.GetStreamBySID(100, false)
+	_, err = hub.getStream(100)
 	assert.Equal(t, err, errStreamNotFound, "cover test: errStreamNotFound")
 
-	// 测试分支：convert failed
-	hub.streamSidMap.Store(uint64(100), 1234)
-	loadAndDelete := true
-	_, err = hub.GetStreamBySID(100, loadAndDelete)
-	assert.Equal(t, err, errConvertStreamFailed, "cover test: errConvertStreamFailed")
+	// 测试分支：convert failed (detachStream)
+	hub.streams.Store(uint64(100), 1234)
+	_, err = hub.detachStream(100)
+	assert.Equal(t, err, errInvalidStreamType, "cover test: errInvalidStreamType")
 
-	_, loaded := hub.streamSidMap.Load(uint64(100))
-	assert.False(t, loaded, "test loadAndDelete flag")
+	_, loaded := hub.streams.Load(uint64(100))
+	assert.False(t, loaded, "test detachStream deletes entry")
 
 	// 测试分支：正常通过
 	s := stream.New(nil, 0)
-	hub.streamSidMap.Store(uint64(200), s)
-	loadAndDelete = false
-	retStream, err := hub.GetStreamBySID(uint64(200), loadAndDelete)
-	assert.Nil(t, err, "test loadAndDelete flag")
+	hub.streams.Store(uint64(200), s)
+	retStream, err := hub.getStream(uint64(200))
+	assert.Nil(t, err, "test getStream")
 	assert.Equal(t, retStream, s, "retStream should equal to s")
 
-	_, loaded = hub.streamSidMap.Load(uint64(200))
-	assert.True(t, loaded, "test loadAndDelete flag")
+	_, loaded = hub.streams.Load(uint64(200))
+	assert.True(t, loaded, "getStream should not delete entry")
+
+	// 测试分支：detachStream 正常通过
+	retStream, err = hub.detachStream(uint64(200))
+	assert.Nil(t, err, "test detachStream")
+	assert.Equal(t, retStream, s, "retStream should equal to s")
+
+	_, loaded = hub.streams.Load(uint64(200))
+	assert.False(t, loaded, "detachStream should delete entry")
 }
 
 func TestHandleErr_SIDNotFound(t *testing.T) {
-	d := &DataHub{}
+	d := &StreamHub{}
 	pbuf := packet.NewBufferWithCmd(0)
 
-	d.HandleCmdPushStreamData(pbuf)
-	d.HandleAckPushStreamData(pbuf)
-	d.HandleCmdCloseStream(pbuf)
-	d.HandleAckCloseStream(pbuf)
+	d.handleCmdPushStreamData(pbuf)
+	d.handleAckPushStreamData(pbuf)
+	d.handleCmdCloseStream(pbuf)
+	d.handleAckCloseStream(pbuf)
 }
 
 func TestStreamList(t *testing.T) {
@@ -103,25 +109,25 @@ func TestStreamList(t *testing.T) {
 	}
 
 	sendWaiter.Wait()
-	list1 := n1.GetStreamStateList()
-	list2 := n2.GetStreamStateList()
+	list1 := n1.GetStreamStates()
+	list2 := n2.GetStreamStates()
 	assert.Equal(t, len(list1), len(list2))
 	assert.NotEqual(t, len(list1), 0)
 	log.Println("len(list1)=", len(list1))
 
-	closed1 := n1.GetClosedStreamStateList(0)
-	assert.Equal(t, int(0), len(closed1))
+	closed1 := n1.GetClosedStates(0)
+	assert.Equal(t, 0, len(closed1))
 
 	close(testStep1Done) // 关闭后，所有等待的地方都会收到消息，进入下一阶段
 
 	closeWaiter.Wait()
-	list1 = n1.GetStreamStateList()
-	list2 = n2.GetStreamStateList()
+	list1 = n1.GetStreamStates()
+	list2 = n2.GetStreamStates()
 	assert.Equal(t, len(list1), len(list2))
 	assert.Equal(t, len(list1), 0)
 	log.Println("len(list1)=", len(list1))
 
-	closed1 = n1.GetClosedStreamStateList(0)
+	closed1 = n1.GetClosedStates(0)
 	assert.Equal(t, times, len(closed1))
 
 }

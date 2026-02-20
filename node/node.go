@@ -15,11 +15,11 @@ var (
 	ErrSidIsAttached = errors.New("sid is attached")
 	ErrWriterIsNil   = errors.New("writer is nil")
 	ErrNodeIsStopped = errors.New("node is stopped")
+	ErrRepeatRun     = errors.New("repeat run detected")
 )
 
 var (
 	DefaultHeartbeatInterval = time.Second * 15
-	DefaultWriteLocalTimeout = time.Second * 15
 )
 
 type FlowConfig struct {
@@ -30,31 +30,25 @@ type FlowConfig struct {
 
 type Node struct {
 	packet.Conn
-	// lastWriteTime int64 // atomic unix nano
-	lastWriteTime        int64
-	heartbeatInterval    time.Duration // 探活的时间间隔
-	writePbufChanTimeout time.Duration // 读取数据包的超时时间
 
-	cmdChan  chan *packet.Buffer
-	dataChan chan *packet.Buffer
-	running  bool
-	chanMut  sync.RWMutex
+	Dispatcher
+	Heartbeat
 
-	ListenHub     // 提供Listen实现
-	Dialer        // 提供Dial、DialDomain、DialIP实现
-	Pinger        // 提供PingDomain实现
-	DataHub       // 处理Data、DataAck、Close、CloseAck
-	logger *slog.Logger
+	ListenHub // 提供Listen实现
+	Dialer    // 提供Dial、DialDomain、DialIP实现
+	Pinger    // 提供PingDomain实现
+	StreamHub // 处理Data、DataAck、Close、CloseAck
+	logger    *slog.Logger
 
 	network string
 	domain  string
 	ip      uint16
 
-	onceClose    sync.Once
-	aliveChecker func() error
+	done      chan struct{}
+	onceClose sync.Once
 
 	writtenDataSize int64
-	readedDataSize  int64
+	readDataSize    int64
 
 	flowConfig FlowConfig
 }
@@ -75,27 +69,27 @@ type ListenerInfo struct {
 
 func New(conn packet.Conn) *Node {
 	portm, _ := idpool.New(1000, 0xFFFF)
-	return NewWithOptions(conn, portm, DefaultHeartbeatInterval, DefaultWriteLocalTimeout)
+	return NewWithOptions(conn, portm, DefaultHeartbeatInterval)
 }
 
-func NewWithOptions(conn packet.Conn, portm *idpool.Pool, heartbeatInterval, writePbufChanTimeout time.Duration) *Node {
+func NewWithOptions(conn packet.Conn, portm *idpool.Pool, heartbeatInterval time.Duration) *Node {
 	node := &Node{
-		Conn:                 conn,
-		lastWriteTime:        time.Now().UnixNano(),
-		running:              false,
-		heartbeatInterval:    heartbeatInterval,
-		writePbufChanTimeout: writePbufChanTimeout,
-		logger:               slog.Default(),
+		Conn:   conn,
+		done:   make(chan struct{}),
+		logger: slog.Default(),
 	}
 
-	node.ListenHub.Init(node, portm)
-	node.Dialer.Init(node, portm)
-	node.Pinger.Init(node)
-	node.DataHub.Init(portm)
-	node.aliveChecker = func() error {
+	node.ListenHub.init(node, portm)
+	node.Dialer.init(node, portm)
+	node.Pinger.init(node)
+	node.StreamHub.init(node, portm)
+	node.Heartbeat.init(node, heartbeatInterval)
+	node.Dispatcher.init(node)
+
+	node.Heartbeat.SetChecker(func() error {
 		_, err := node.PingDomain("", time.Second*2)
 		return err
-	}
+	})
 
 	return node
 }
@@ -111,8 +105,8 @@ func (node *Node) SetLogger(l *slog.Logger) {
 		node.logger = l
 	}
 }
-func (node *Node) GetReadWriteSize() (readed, written int64) {
-	return node.readedDataSize, node.writtenDataSize
+func (node *Node) GetReadWriteSize() (read, written int64) {
+	return node.readDataSize, node.writtenDataSize
 }
 
 func (node *Node) GetInfo() *NodeInfo {
@@ -127,7 +121,7 @@ func (node *Node) GetInfo() *NodeInfo {
 }
 
 func (node *Node) GetListeners() []ListenerInfo {
-	listeners := node.GetActiveListeners()
+	listeners := node.getActiveListeners()
 	infos := make([]ListenerInfo, 0, len(listeners))
 	for _, l := range listeners {
 		infos = append(infos, ListenerInfo{
@@ -153,57 +147,38 @@ func (node *Node) GetWindowSize() int32 {
 	return 0 // uses default in stream package
 }
 
-func (node *Node) Run() error {
-	err := node.initRun()
+func (node *Node) Serve() error {
+	err := node.Dispatcher.start()
 	if err != nil {
 		return err
 	}
 	defer node.Close()
 
-	// 从pbuf channel中消费数据
-	// 不断路由收到的pbuf
-	go node.routeCmdPbufChan(node.cmdChan)
-	go node.routeDataPbufChan(node.dataChan)
+	go node.Dispatcher.processCmdChan()
+	go node.Dispatcher.processDataChan()
 
-	// 创建一个计时器，用于定时探活
-	ticker := time.NewTicker(node.heartbeatInterval)
+	ticker := time.NewTicker(node.Heartbeat.interval)
 	defer ticker.Stop()
-	go node.keepalive(ticker)
+	go node.Heartbeat.run(ticker, node.done, func() { node.Close() })
 
-	// 不断读取pbuf直到底层网络通信失败为止
-	// 正常情况下阻塞于此
-	return node.readBufferUntilFailed()
-}
-
-// Run之前的资源创建工作
-func (node *Node) initRun() error {
-	node.chanMut.Lock()
-	defer node.chanMut.Unlock()
-
-	if node.running {
-		return errors.New("repeat run detected")
-	}
-	node.running = true
-
-	// 创建不同的缓存队列，避免不同功能的数据包相互影响
-	// 根据是否需要有序分为：Cmd和Data两种类型
-	node.cmdChan = make(chan *packet.Buffer, 4096)  // 用于缓存OpenStream、PushDataAck的队列，这两个无需保证顺序
-	node.dataChan = make(chan *packet.Buffer, 1024) // 与数据传输有关的包，OpenStreamAck、PushData、Close、CloseAck，需要保证顺序
-
-	return nil
+	return node.readLoop()
 }
 
 func (node *Node) Close() error {
 	node.onceClose.Do(func() {
-		// 安全清理相关资源
-		node.chanMut.Lock()
-		if node.running {
-			node.running = false
-			close(node.cmdChan)
-			close(node.dataChan)
-		}
-		node.chanMut.Unlock()
+		// 1. 广播关闭信号，通知 Heartbeat 等 goroutine 退出
+		close(node.done)
 
+		// 2. 停止 Dispatcher，不再接受新的 dispatch
+		node.Dispatcher.stop()
+
+		// 3. 关闭所有 Listener，解除阻塞在 Accept() 上的 goroutine
+		node.ListenHub.closeAllListeners()
+
+		// 4. 关闭所有活跃 Stream，释放本地资源（不走网络协商）
+		node.StreamHub.closeAllStreams()
+
+		// 5. 关闭底层连接，使 readLoop 退出
 		node.Conn.Close()
 	})
 	return nil
@@ -212,25 +187,20 @@ func (node *Node) Close() error {
 // WriteBuffer goroutine safe writer
 func (node *Node) WriteBuffer(pbuf *packet.Buffer) error {
 	if pbuf.DistIP() == 0 || pbuf.DistIP() == node.ip {
-		// 跳过网络传输直接送入数据缓存队列中
-		node.handlePbuf(pbuf)
+		node.Dispatcher.dispatch(pbuf)
 		return nil
 	}
 	if node.Conn == nil {
 		return ErrWriterIsNil
 	}
 
-	// Update timestamp atomically
-	atomic.StoreInt64(&node.lastWriteTime, time.Now().UnixNano())
-
-	// Atomic Add stats
+	node.Heartbeat.Touch()
 	atomic.AddInt64(&node.writtenDataSize, int64(pbuf.PayloadSize()))
 
-	// Direct write without lock (assumes underlying Conn is thread-safe, e.g. FairConn)
 	return node.Conn.WriteBuffer(pbuf)
 }
 
-func (node *Node) readBufferUntilFailed() error {
+func (node *Node) readLoop() error {
 	for {
 		node.SetReadTimeout(time.Minute * 15)
 		pbuf, err := node.ReadBuffer()
@@ -238,99 +208,11 @@ func (node *Node) readBufferUntilFailed() error {
 			return err
 		}
 
-		atomic.AddInt64(&node.readedDataSize, int64(pbuf.PayloadSize()))
+		atomic.AddInt64(&node.readDataSize, int64(pbuf.PayloadSize()))
 
-		err = node.handlePbuf(pbuf)
+		err = node.Dispatcher.dispatch(pbuf)
 		if err != nil {
 			return err
-		}
-	}
-
-}
-
-func (node *Node) handlePbuf(pbuf *packet.Buffer) error {
-	node.chanMut.RLock()
-	defer node.chanMut.RUnlock()
-
-	if !node.running {
-		return ErrNodeIsStopped
-	}
-
-	switch pbuf.Cmd() {
-	case packet.CmdPushStreamData:
-		node.dataChan <- pbuf // PushData是最常见的，设置最短比较路径
-	case packet.CmdOpenStream,
-		packet.AckPushStreamData,
-		packet.CmdPingDomain,
-		packet.AckPingDomain:
-		node.cmdChan <- pbuf
-	default:
-		node.dataChan <- pbuf
-	}
-
-	return nil
-}
-
-// pbufRouteLoop 处理流数据传输的逻辑（open-ack -> push -> push-ack -> close -> close-ack）
-func (node *Node) routeCmdPbufChan(ch chan *packet.Buffer) {
-	for pbuf := range ch {
-		switch pbuf.Cmd() {
-		case packet.AckPushStreamData:
-			node.HandleAckPushStreamData(pbuf)
-
-		case packet.CmdOpenStream:
-			node.HandleCmdOpenStream(pbuf)
-
-		case packet.CmdPingDomain:
-			node.HandleCmdPingDomain(pbuf)
-
-		case packet.AckPingDomain:
-			node.HandleAckPingDomain(pbuf)
-
-		default:
-			node.logger.Warn("unknown cmd", "header", pbuf.HeaderString())
-		}
-	}
-}
-func (node *Node) routeDataPbufChan(ch chan *packet.Buffer) {
-	for pbuf := range ch {
-		switch pbuf.Cmd() {
-		case packet.CmdPushStreamData:
-			node.HandleCmdPushStreamData(pbuf)
-
-		case packet.AckOpenStream:
-			node.HandleAckOpenStream(pbuf)
-
-		case packet.CmdCloseStream:
-			node.HandleCmdCloseStream(pbuf)
-
-		case packet.AckCloseStream:
-			node.HandleAckCloseStream(pbuf)
-
-		default:
-			node.logger.Warn("unknown cmd", "header", pbuf.HeaderString())
-		}
-	}
-}
-
-func (node *Node) keepalive(ticker *time.Ticker) {
-	for range ticker.C {
-		last := atomic.LoadInt64(&node.lastWriteTime)
-		if time.Since(time.Unix(0, last)) < node.heartbeatInterval {
-			continue
-		}
-
-		if node.aliveChecker == nil {
-			node.logger.Warn("aliveChecker is nil")
-			return
-		}
-
-		err := node.aliveChecker()
-		if err != nil {
-			node.logger.Warn("check alive failed", "error", err)
-			node.Close()
-			ticker.Stop()
-			return
 		}
 	}
 }

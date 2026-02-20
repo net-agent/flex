@@ -218,16 +218,16 @@ func TestHandleAckOpen(t *testing.T) {
 	pbuf.SetDistPort(port)
 
 	// branch: not found error
-	n.HandleAckOpenStream(pbuf)
+	n.handleAckOpenStream(pbuf)
 	// branch: ok
-	n.HandleAckOpenStream(pbuf)
+	n.handleAckOpenStream(pbuf)
 
 	// branch: attach stream failed（上一个branch中，sid已经被登记）
-	n.HandleAckOpenStream(pbuf)
+	n.handleAckOpenStream(pbuf)
 
 	// branch: ackmessage
 	pbuf.Payload = []byte{1, 2, 3}
-	n.HandleAckOpenStream(pbuf)
+	n.handleAckOpenStream(pbuf)
 }
 
 func TestDialBufErr_portmAndRepsonse(t *testing.T) {
@@ -240,7 +240,7 @@ func TestDialBufErr_portmAndRepsonse(t *testing.T) {
 	n := New(pc)
 
 	d1 := &Dialer{}
-	d1.Init(n, portm)
+	d1.init(n, portm)
 
 	// d1.SetDialTimeout(time.Millisecond * 200)
 
@@ -273,7 +273,7 @@ func TestDialBuffErr_timeoutAndWriteFailed(t *testing.T) {
 	n := New(pc)
 
 	d1 := &Dialer{}
-	d1.Init(n, portm)
+	d1.init(n, portm)
 
 	// 测试用例：正常发送，触发timeout（因为对端不会有应答）
 	// portm(1)

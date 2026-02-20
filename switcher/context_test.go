@@ -77,7 +77,7 @@ func TestPingErr_Timeout(t *testing.T) {
 		n := node.New(pc3)
 		n.SetIP(ip)
 		n.SetDomain("test2")
-		n.Run()
+		n.Serve()
 	}()
 
 	waitUpgradeReady.Wait()

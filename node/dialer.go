@@ -27,11 +27,10 @@ type Dialer struct {
 	host    *Node
 	portm   *idpool.Pool
 	timeout time.Duration
-	// responses sync.Map // map[uint16]chan *dialresp
 	evbus event.Bus
 }
 
-func (d *Dialer) Init(host *Node, portm *idpool.Pool) {
+func (d *Dialer) init(host *Node, portm *idpool.Pool) {
 	d.host = host
 	d.portm = portm
 	d.SetDialTimeout(time.Second * 15)
@@ -131,14 +130,14 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 		return nil, err
 	}
 
-	// HandleAckOpenStream 里面的处理逻辑，确保不会出现nil resp
+	// handleAckOpenStream 里面的处理逻辑，确保不会出现nil resp
 	s := resp.(*stream.Stream)
 	s.SetRemoteDomain(remoteDomain)
 
 	return s, nil
 }
 
-func (d *Dialer) HandleAckOpenStream(pbuf *packet.Buffer) {
+func (d *Dialer) handleAckOpenStream(pbuf *packet.Buffer) {
 	evKey := pbuf.DistPort()
 	var negotiatedWindowSize int32
 	isSuccess := false
@@ -171,7 +170,7 @@ func (d *Dialer) HandleAckOpenStream(pbuf *packet.Buffer) {
 		negotiatedWindowSize,
 	)
 
-	err := d.host.AttachStream(s, pbuf.SID())
+	err := d.host.attachStream(s, pbuf.SID())
 	if err != nil {
 		d.host.logger.Warn("attach stream to node failed", "error", err)
 		err = d.evbus.Dispatch(evKey, err, nil)

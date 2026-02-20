@@ -18,16 +18,15 @@ type Pinger struct {
 	host  *Node
 	portm *idpool.Pool
 	evbus event.Bus
-	// ackwaiter  sync.Map // map[srcport]chan string
-	ignorePing bool // 是否相应ping请求
+	ignorePing bool // 为 true 时忽略所有 ping 请求
 }
 
-func (p *Pinger) Init(host *Node) {
+func (p *Pinger) init(host *Node) {
 	p.host = host
 	p.portm, _ = idpool.New(1, 0xffff)
 }
 
-// SetPingHandleFlag 设置未false时，不响应任何ping请求，做丢包处理
+// SetIgnorePing 设置为 true 时，不响应任何 ping 请求，做丢包处理
 func (p *Pinger) SetIgnorePing(val bool) { p.ignorePing = val }
 
 // PingDomain 对指定的节点进行连通性测试并返回RTT。domain为空时，返回到中转节点的RTT
@@ -62,8 +61,8 @@ func (p *Pinger) PingDomain(domain string, timeout time.Duration) (time.Duration
 	return time.Since(pingStart), nil
 }
 
-// HandleCmdPingDomain 处理远端的PingDomain请求
-func (p *Pinger) HandleCmdPingDomain(pbuf *packet.Buffer) {
+// handleCmdPingDomain 处理远端的PingDomain请求
+func (p *Pinger) handleCmdPingDomain(pbuf *packet.Buffer) {
 	if p.ignorePing {
 		p.host.logger.Warn("ignore ping request", "srcip", pbuf.SrcIP())
 		return
@@ -77,11 +76,13 @@ func (p *Pinger) HandleCmdPingDomain(pbuf *packet.Buffer) {
 	pbuf.SetCmd(packet.AckPingDomain)
 	pbuf.SwapSrcDist()
 	pbuf.SetSrc(p.host.GetIP(), 0)
-	p.host.WriteBuffer(pbuf)
+	if err := p.host.WriteBuffer(pbuf); err != nil {
+		p.host.logger.Warn("write ping response failed", "error", err)
+	}
 }
 
-// HandleAckPingDomain 处理远端的应答
-func (p *Pinger) HandleAckPingDomain(pbuf *packet.Buffer) {
+// handleAckPingDomain 处理远端的应答
+func (p *Pinger) handleAckPingDomain(pbuf *packet.Buffer) {
 	port := pbuf.DistPort()
 	msg := string(pbuf.Payload)
 	if msg != "" {

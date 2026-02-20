@@ -80,7 +80,7 @@ func TestHandlePCErr_DomainExist(t *testing.T) {
 	var waitNodeRun sync.WaitGroup
 	waitNodeRun.Add(1)
 	go func() {
-		node.Run()
+		node.Serve()
 		waitNodeRun.Done()
 	}()
 

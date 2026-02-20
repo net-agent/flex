@@ -16,12 +16,12 @@ func TestGetListenerByPort(t *testing.T) {
 	port2 := uint16(200)
 
 	hub.listeners.Store(port1, 123)
-	_, err := hub.GetListenerByPort(port1)
+	_, err := hub.getListenerByPort(port1)
 	assert.Equal(t, err, ErrConvertListenerFailed, "cover: convert listener failed")
 
 	l := &Listener{}
 	hub.listeners.Store(port2, l)
-	ret, err := hub.GetListenerByPort(port2)
+	ret, err := hub.getListenerByPort(port2)
 	assert.Nil(t, err)
 	assert.Equal(t, ret, l)
 }
@@ -69,7 +69,7 @@ func TestHandleCmdOpenErr(t *testing.T) {
 	n := New(nil)
 	pbuf := packet.NewBuffer(nil)
 	pbuf.SetSrc(100, 100)
-	n.HandleCmdOpenStream(pbuf)
+	n.handleCmdOpenStream(pbuf)
 
 	// 覆盖测试：SID已经存在的情况
 	n1, n2 := Pipe("test1", "test2")
@@ -94,7 +94,7 @@ func TestHandleCmdOpenErr(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, s)
 
-	//用重复的pbuf去创建连接，触发AttachStream错误
+	//用重复的pbuf去创建连接，触发attachStream错误
 	n1.WriteBuffer(pbuf)
 }
 
@@ -104,5 +104,5 @@ func TestAcceptErr(t *testing.T) {
 	l.streams = make(chan *stream.Stream, 10)
 	l.streams <- nil
 	_, err := l.Accept()
-	assert.Equal(t, ErrUnexpectedNilStream, err)
+	assert.Equal(t, ErrListenerClosed, err)
 }
