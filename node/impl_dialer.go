@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/net-agent/flex/v2/event"
-	"github.com/net-agent/flex/v2/numsrc"
+	"github.com/net-agent/flex/v2/idpool"
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/stream"
 	"github.com/net-agent/flex/v2/vars"
@@ -25,13 +25,13 @@ var (
 
 type Dialer struct {
 	host    *Node
-	portm   *numsrc.Manager
+	portm   *idpool.Pool
 	timeout time.Duration
 	// responses sync.Map // map[uint16]chan *dialresp
 	evbus event.Bus
 }
 
-func (d *Dialer) Init(host *Node, portm *numsrc.Manager) {
+func (d *Dialer) Init(host *Node, portm *idpool.Pool) {
 	d.host = host
 	d.portm = portm
 	d.SetDialTimeout(time.Second * 15)
@@ -101,13 +101,13 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 
 	// 第一步：选择可用端口。
 	// 如果此函数退出时srcPort非0，需要回收端口
-	srcPort, err := d.portm.GetFreeNumberSrc()
+	srcPort, err := d.portm.Allocate()
 	if err != nil {
 		return nil, err
 	}
 	defer func() {
 		if srcPort > 0 {
-			d.portm.ReleaseNumberSrc(srcPort)
+			d.portm.Release(srcPort)
 		}
 	}()
 

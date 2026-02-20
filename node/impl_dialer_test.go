@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/net-agent/flex/v2/event"
-	"github.com/net-agent/flex/v2/numsrc"
+	"github.com/net-agent/flex/v2/idpool"
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/vars"
 	"github.com/stretchr/testify/assert"
@@ -231,7 +231,7 @@ func TestHandleAckOpen(t *testing.T) {
 }
 
 func TestDialBufErr_portmAndRepsonse(t *testing.T) {
-	portm, err := numsrc.NewManager(1, 1, 2)
+	portm, err := idpool.New(1, 2)
 	assert.Nil(t, err)
 
 	c1, _ := net.Pipe()
@@ -253,7 +253,7 @@ func TestDialBufErr_portmAndRepsonse(t *testing.T) {
 
 	// 测试用例：提前把free port申请完，触发无可用端口错误
 	for {
-		_, err = portm.GetFreeNumberSrc()
+		_, err = portm.Allocate()
 		if err != nil {
 			break
 		}
@@ -264,7 +264,7 @@ func TestDialBufErr_portmAndRepsonse(t *testing.T) {
 }
 
 func TestDialBuffErr_timeoutAndWriteFailed(t *testing.T) {
-	portm, err := numsrc.NewManager(1, 1, 20)
+	portm, err := idpool.New(1, 20)
 	assert.Nil(t, err)
 
 	c1, _ := net.Pipe()

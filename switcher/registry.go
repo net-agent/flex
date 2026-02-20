@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/net-agent/flex/v2/handshake"
-	"github.com/net-agent/flex/v2/numsrc"
+	"github.com/net-agent/flex/v2/idpool"
 	"github.com/net-agent/flex/v2/vars"
 )
 
@@ -23,7 +23,7 @@ var (
 )
 
 type contextRegistry struct {
-	ipm    *numsrc.Manager
+	ipm    *idpool.Pool
 	logger *slog.Logger
 
 	domainMu    sync.Mutex
@@ -36,7 +36,7 @@ type contextRegistry struct {
 	records   []*Context
 }
 
-func newContextRegistry(ipm *numsrc.Manager, logger *slog.Logger) *contextRegistry {
+func newContextRegistry(ipm *idpool.Pool, logger *slog.Logger) *contextRegistry {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -63,10 +63,10 @@ func (r *contextRegistry) attach(ctx *Context) error {
 
 	if prev != nil {
 		prev.release()
-		r.ipm.ReleaseNumberSrc(prev.IP)
+		r.ipm.Release(prev.IP)
 	}
 
-	ip, err := r.ipm.GetFreeNumberSrc()
+	ip, err := r.ipm.Allocate()
 	if err != nil {
 		r.logger.Warn("attach failed: IP exhausted", "ctx_id", ctx.id, "domain", ctx.Domain, "error", err)
 		return errGetFreeContextIPFailed
@@ -80,7 +80,7 @@ func (r *contextRegistry) attach(ctx *Context) error {
 		delete(r.domainIndex, ctx.Domain)
 		r.domainMu.Unlock()
 		ctx.release()
-		r.ipm.ReleaseNumberSrc(ctx.IP)
+		r.ipm.Release(ctx.IP)
 		r.logger.Warn("attach failed: IP conflict", "ctx_id", ctx.id, "domain", ctx.Domain, "ip", ctx.IP)
 		return errContextIPExist
 	}
@@ -152,7 +152,7 @@ func (r *contextRegistry) detach(ctx *Context) {
 	r.ipMu.Unlock()
 
 	ctx.release()
-	r.ipm.ReleaseNumberSrc(ctx.IP)
+	r.ipm.Release(ctx.IP)
 
 	duration := ctx.DetachTime.Sub(ctx.AttachTime)
 	r.logger.Info("context detached", "ctx_id", ctx.id, "domain", ctx.Domain, "duration", duration)

@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/net-agent/flex/v2/numsrc"
+	"github.com/net-agent/flex/v2/idpool"
 	"github.com/net-agent/flex/v2/packet"
 )
 
@@ -74,11 +74,11 @@ type ListenerInfo struct {
 }
 
 func New(conn packet.Conn) *Node {
-	portm, _ := numsrc.NewManager(1, 1000, 0xFFFF)
+	portm, _ := idpool.New(1000, 0xFFFF)
 	return NewWithOptions(conn, portm, DefaultHeartbeatInterval, DefaultWriteLocalTimeout)
 }
 
-func NewWithOptions(conn packet.Conn, portm *numsrc.Manager, heartbeatInterval, writePbufChanTimeout time.Duration) *Node {
+func NewWithOptions(conn packet.Conn, portm *idpool.Pool, heartbeatInterval, writePbufChanTimeout time.Duration) *Node {
 	node := &Node{
 		Conn:                 conn,
 		lastWriteTime:        time.Now().UnixNano(),

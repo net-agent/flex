@@ -4,7 +4,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/net-agent/flex/v2/numsrc"
+	"github.com/net-agent/flex/v2/idpool"
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/stream"
 )
@@ -17,13 +17,13 @@ var (
 
 type DataHub struct {
 	// host    *Node
-	portm              *numsrc.Manager
+	portm              *idpool.Pool
 	streamSidMap       sync.Map        // map[sid]*stream.Conn
 	closedStreamStates []*stream.State // 保存已经关闭的连接状态
 	closedMut          sync.RWMutex
 }
 
-func (hub *DataHub) Init(portm *numsrc.Manager) {
+func (hub *DataHub) Init(portm *idpool.Pool) {
 	hub.portm = portm
 }
 
@@ -106,7 +106,7 @@ func (hub *DataHub) HandleCmdCloseStream(pbuf *packet.Buffer) {
 	}
 
 	s.HandleCmdCloseStream(pbuf)
-	hub.portm.ReleaseNumberSrc(s.GetUsedPort())
+	hub.portm.Release(s.GetUsedPort())
 
 	hub.closedMut.Lock()
 	hub.closedStreamStates = append(hub.closedStreamStates, s.GetState())
@@ -120,7 +120,7 @@ func (hub *DataHub) HandleAckCloseStream(pbuf *packet.Buffer) {
 	}
 
 	s.HandleAckCloseStream(pbuf)
-	hub.portm.ReleaseNumberSrc(s.GetUsedPort())
+	hub.portm.Release(s.GetUsedPort())
 
 	hub.closedMut.Lock()
 	hub.closedStreamStates = append(hub.closedStreamStates, s.GetState())

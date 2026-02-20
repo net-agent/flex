@@ -6,7 +6,7 @@ import (
 	"net"
 	"sync"
 
-	"github.com/net-agent/flex/v2/numsrc"
+	"github.com/net-agent/flex/v2/idpool"
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/stream"
 )
@@ -21,11 +21,11 @@ var (
 
 type ListenHub struct {
 	host      *Node
-	portm     *numsrc.Manager
+	portm     *idpool.Pool
 	listeners sync.Map // map[port]*Listener
 }
 
-func (hub *ListenHub) Init(host *Node, portm *numsrc.Manager) {
+func (hub *ListenHub) Init(host *Node, portm *idpool.Pool) {
 	hub.host = host
 	hub.portm = portm
 }
@@ -204,7 +204,7 @@ func (l *Listener) Close() error {
 	l.closed = true
 	l.hub.listeners.Delete(l.port)
 	close(l.streams)
-	l.hub.portm.ReleaseNumberSrc(l.port)
+	l.hub.portm.Release(l.port)
 	return nil
 }
 

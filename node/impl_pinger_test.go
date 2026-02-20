@@ -27,7 +27,7 @@ func TestPingDomainErr_GetFreeNum(t *testing.T) {
 
 	// 耗尽portm的资源
 	for {
-		_, err = n1.Pinger.portm.GetFreeNumberSrc()
+		_, err = n1.Pinger.portm.Allocate()
 		if err != nil {
 			break
 		}

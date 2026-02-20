@@ -5,7 +5,7 @@ import (
 	"time"
 
 	"github.com/net-agent/flex/v2/event"
-	"github.com/net-agent/flex/v2/numsrc"
+	"github.com/net-agent/flex/v2/idpool"
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/vars"
 )
@@ -16,7 +16,7 @@ var (
 
 type Pinger struct {
 	host  *Node
-	portm *numsrc.Manager
+	portm *idpool.Pool
 	evbus event.Bus
 	// ackwaiter  sync.Map // map[srcport]chan string
 	ignorePing bool // 是否相应ping请求
@@ -24,7 +24,7 @@ type Pinger struct {
 
 func (p *Pinger) Init(host *Node) {
 	p.host = host
-	p.portm, _ = numsrc.NewManager(1, 1, 0xffff)
+	p.portm, _ = idpool.New(1, 0xffff)
 }
 
 // SetPingHandleFlag 设置未false时，不响应任何ping请求，做丢包处理
@@ -32,11 +32,11 @@ func (p *Pinger) SetIgnorePing(val bool) { p.ignorePing = val }
 
 // PingDomain 对指定的节点进行连通性测试并返回RTT。domain为空时，返回到中转节点的RTT
 func (p *Pinger) PingDomain(domain string, timeout time.Duration) (time.Duration, error) {
-	port, err := p.portm.GetFreeNumberSrc()
+	port, err := p.portm.Allocate()
 	if err != nil {
 		return 0, err
 	}
-	defer p.portm.ReleaseNumberSrc(port)
+	defer p.portm.Release(port)
 
 	w, err := p.evbus.ListenOnce(port)
 	if err != nil {

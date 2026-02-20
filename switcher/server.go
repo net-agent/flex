@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/net-agent/flex/v2/handshake"
-	"github.com/net-agent/flex/v2/numsrc"
+	"github.com/net-agent/flex/v2/idpool"
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/packet/sched"
 	"github.com/net-agent/flex/v2/vars"
@@ -75,7 +75,7 @@ func NewServer(password string, logger *slog.Logger, logCfg *LogConfig) *Server 
 		cfg = *logCfg
 	}
 
-	ipm, _ := numsrc.NewManager(1, 1, vars.MaxIP-1)
+	ipm, _ := idpool.New(1, vars.MaxIP-1)
 	regLogger := newModuleLogger(logger, cfg.Registry, "registry")
 	reg := newContextRegistry(ipm, regLogger)
 

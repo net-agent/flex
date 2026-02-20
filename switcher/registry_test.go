@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/net-agent/flex/v2/handshake"
-	"github.com/net-agent/flex/v2/numsrc"
+	"github.com/net-agent/flex/v2/idpool"
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/vars"
 )
@@ -60,7 +60,7 @@ func TestAttachCtx(t *testing.T) {
 
 func TestAttachErr_GetIP(t *testing.T) {
 	s := NewServer("", nil, nil)
-	s.registry.ipm, _ = numsrc.NewManager(0, 9, 10)
+	s.registry.ipm, _ = idpool.New(9, 9)
 	var err error
 
 	err = s.registry.attach(NewContext(1, nil, "test1", "", nil))
