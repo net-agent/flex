@@ -26,7 +26,7 @@ func (resp *Response) WriteTo(pc packet.Conn) error {
 	if err != nil {
 		return err
 	}
-	pbuf := packet.NewBuffer(nil)
+	pbuf := packet.NewBuffer()
 	pbuf.SetPayload(payload)
 	return pc.WriteBuffer(pbuf)
 }

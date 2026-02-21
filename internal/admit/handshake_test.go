@@ -60,7 +60,7 @@ func TestHandshake_UnmarshalError(t *testing.T) {
 
 	go func() {
 		pc2.ReadBuffer()
-		pbuf := packet.NewBuffer(nil)
+		pbuf := packet.NewBuffer()
 		pbuf.SetPayload([]byte("a/2"))
 		pc2.WriteBuffer(pbuf)
 	}()
@@ -125,7 +125,7 @@ func TestAccept_UnmarshalError(t *testing.T) {
 	pc1, pc2 := packet.Pipe()
 
 	go func() {
-		pbuf := packet.NewBuffer(nil)
+		pbuf := packet.NewBuffer()
 		pbuf.SetPayload([]byte("a/2"))
 		pc1.WriteBuffer(pbuf)
 	}()

@@ -17,7 +17,7 @@ func TestRead(t *testing.T) {
 	LOG_WRITE_BUFFER_HEADER = true
 
 	makeCase := func(cmd byte, payload []byte) *Buffer {
-		pbuf := NewBuffer(nil)
+		pbuf := NewBuffer()
 		pbuf.SetCmd(cmd)
 		pbuf.SetPayload(payload)
 		return pbuf
@@ -82,7 +82,7 @@ func TestReadErr_SetDeadline(t *testing.T) {
 	w := NewConnWriter(c2)
 	r := NewConnReader(c1)
 	go func() {
-		w.WriteBuffer(NewBuffer(nil))
+		w.WriteBuffer(NewBuffer())
 	}()
 
 	c1.Close()
@@ -97,7 +97,7 @@ func TestReadErr_Header(t *testing.T) {
 	w := NewConnWriter(c2)
 	r := NewConnReader(c1)
 	go func() {
-		w.WriteBuffer(NewBuffer(nil))
+		w.WriteBuffer(NewBuffer())
 		c2.Write([]byte{0x01})
 	}()
 
@@ -119,7 +119,7 @@ func TestReadErr_Payload(t *testing.T) {
 	w := NewConnWriter(c2)
 	r := NewConnReader(c1)
 	go func() {
-		w.WriteBuffer(NewBuffer(nil))
+		w.WriteBuffer(NewBuffer())
 
 		var h Header
 		binary.BigEndian.PutUint16(h[9:11], 10)

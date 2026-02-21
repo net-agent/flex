@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"sync"
 )
 
 const (
@@ -47,41 +48,54 @@ const HeaderSz = 1 + 2 + 2 + 2 + 2 + 2
 
 type Header [HeaderSz]byte
 type Buffer struct {
-	Head    *Header
+	Head    Header
 	Payload []byte
 }
 
-func NewBuffer(head *Header) *Buffer {
-	if head == nil {
-		head = &Header{}
-	}
-	return &Buffer{Head: head}
+var bufferPool = sync.Pool{
+	New: func() any { return &Buffer{} },
+}
+
+// GetBuffer returns a Buffer from the pool. Caller must call PutBuffer when done.
+func GetBuffer() *Buffer {
+	return bufferPool.Get().(*Buffer)
+}
+
+// PutBuffer returns a Buffer to the pool after resetting it.
+func PutBuffer(buf *Buffer) {
+	buf.Head = Header{}
+	buf.Payload = nil
+	bufferPool.Put(buf)
+}
+
+func NewBuffer() *Buffer {
+	return &Buffer{}
+}
+
+func NewBufferWithCmd(cmd byte) *Buffer {
+	pbuf := NewBuffer()
+	pbuf.SetCmd(cmd)
+	return pbuf
 }
 
 func (buf *Buffer) WriteTo(w io.Writer) (total int64, err error) {
 	n, err := w.Write(buf.Head[:])
-	total = total + int64(n)
+	total += int64(n)
 	if err != nil {
 		return total, ErrWriteHeaderFailed
 	}
 
-	if len(buf.Payload) <= 0 {
+	if len(buf.Payload) == 0 {
 		return total, nil
 	}
 
 	n, err = w.Write(buf.Payload)
-	total = total + int64(n)
+	total += int64(n)
 	if err != nil {
 		return total, ErrWritePayloadFailed
 	}
 
 	return total, nil
-}
-
-func NewBufferWithCmd(cmd byte) *Buffer {
-	pbuf := NewBuffer(nil)
-	pbuf.SetCmd(cmd)
-	return pbuf
 }
 
 func (buf *Buffer) HeaderString() string {

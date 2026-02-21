@@ -66,7 +66,7 @@ func TestNodeListen(t *testing.T) {
 
 func TestHandleCmdOpenErr(t *testing.T) {
 	n := New(nil)
-	pbuf := packet.NewBuffer(nil)
+	pbuf := packet.NewBuffer()
 	pbuf.SetSrc(100, 100)
 	n.handleCmdOpenStream(pbuf)
 

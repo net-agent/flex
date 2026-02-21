@@ -23,7 +23,7 @@ func TestSetGet(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		buf := NewBuffer(nil)
+		buf := NewBuffer()
 		buf.SetHeader(c.cmd, c.distIP, c.distPort, c.srcIP, c.srcPort)
 		buf.SetPayload(c.payload)
 
@@ -44,7 +44,7 @@ func TestIsACK(t *testing.T) {
 }
 
 func TestSID(t *testing.T) {
-	pbuf := NewBuffer(nil)
+	pbuf := NewBuffer()
 	pbuf.SetHeader(0, 0, 0, 0, 0)
 	assert.Equal(t, uint64(0), pbuf.SID())
 
@@ -60,7 +60,7 @@ func TestSID(t *testing.T) {
 
 func TestPayload(t *testing.T) {
 	payload := []byte("helloworld")
-	pbuf := NewBuffer(nil)
+	pbuf := NewBuffer()
 
 	// test base payload
 	pbuf.SetCmd(CmdOpenStream)
@@ -95,7 +95,7 @@ func TestPayload(t *testing.T) {
 
 func TestBuffer_CmdName(t *testing.T) {
 	makebuf := func(cmd uint8) *Buffer {
-		buf := NewBuffer(nil)
+		buf := NewBuffer()
 		buf.SetCmd(cmd)
 		return buf
 	}
@@ -130,7 +130,7 @@ func TestBuffer_CmdName(t *testing.T) {
 
 func TestBuffer_HeaderString(t *testing.T) {
 	makebuf := func(cmd uint8, srcip, srcport, distip, distport uint16) *Buffer {
-		buf := NewBuffer(nil)
+		buf := NewBuffer()
 		buf.SetCmd(cmd)
 		buf.SetSrc(srcip, srcport)
 		buf.SetDist(distip, distport)

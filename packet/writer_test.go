@@ -21,7 +21,7 @@ func doTestWriteErr_Header(name string, t *testing.T, pc1, pc2 Conn) {
 	}()
 
 	w := NewConnWriter(c1)
-	err := w.WriteBuffer(NewBuffer(nil))
+	err := w.WriteBuffer(NewBuffer())
 	assert.Equal(t, err, ErrWriteHeaderFailed)
 }
 func doTestWriteErr_Payload(name string, t *testing.T, pc1, pc2 Conn) {
@@ -37,7 +37,7 @@ func doTestWriteErr_Payload(name string, t *testing.T, pc1, pc2 Conn) {
 	}()
 
 	w := NewConnWriter(c1)
-	pbuf := NewBuffer(nil)
+	pbuf := NewBuffer()
 	pbuf.SetPayload([]byte("helloworld"))
 	err := w.WriteBuffer(pbuf)
 	assert.Equal(t, ErrWritePayloadFailed, err)

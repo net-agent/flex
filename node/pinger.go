@@ -44,7 +44,7 @@ func (p *Pinger) PingDomain(domain string, timeout time.Duration) (time.Duration
 
 	pingStart := time.Now()
 
-	pbuf := packet.NewBuffer(nil)
+	pbuf := packet.NewBuffer()
 	pbuf.SetCmd(packet.CmdPingDomain)
 	pbuf.SetSrc(p.host.GetIP(), port)
 	pbuf.SetDist(packet.SwitcherIP, 0) // 忽略

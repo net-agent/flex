@@ -246,7 +246,7 @@ func TestDialBufErr_portmAndRepsonse(t *testing.T) {
 	// 测试用例：提前把response设置好，触发local port used错误
 	// d1.responses.Store(uint16(1), nil)
 	d1.pending.Register(uint16(1))
-	pbuf := packet.NewBuffer(nil)
+	pbuf := packet.NewBuffer()
 	_, err = d1.dialPbuf(pbuf)
 	assert.Equal(t, pending.ErrAlreadyRegistered, err)
 
@@ -276,7 +276,7 @@ func TestDialBuffErr_timeoutAndWriteFailed(t *testing.T) {
 
 	// 测试用例：正常发送，触发timeout（因为对端不会有应答）
 	// portm(1)
-	pbuf := packet.NewBuffer(nil)
+	pbuf := packet.NewBuffer()
 	pbuf.SetDistIP(0) // 默认0，会进入本地循环，触发timeout
 	d1.SetDialTimeout(time.Millisecond * 100)
 	_, err = d1.dialPbuf(pbuf)

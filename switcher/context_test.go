@@ -106,7 +106,7 @@ func TestRecordIncoming(t *testing.T) {
 	ctx := NewContext(1, nil, "test", "", nil)
 
 	// CmdOpenStream 增加 StreamCount
-	pbuf := packet.NewBuffer(nil)
+	pbuf := packet.NewBuffer()
 	pbuf.SetCmd(packet.CmdOpenStream)
 	ctx.recordIncoming(pbuf)
 	if ctx.Stats.StreamCount != 1 {
@@ -114,7 +114,7 @@ func TestRecordIncoming(t *testing.T) {
 	}
 
 	// CmdCloseStream 减少 StreamCount
-	pbuf2 := packet.NewBuffer(nil)
+	pbuf2 := packet.NewBuffer()
 	pbuf2.SetCmd(packet.CmdCloseStream)
 	ctx.recordIncoming(pbuf2)
 	if ctx.Stats.StreamCount != 0 {
@@ -122,7 +122,7 @@ func TestRecordIncoming(t *testing.T) {
 	}
 
 	// 其他命令不影响 StreamCount
-	pbuf3 := packet.NewBuffer(nil)
+	pbuf3 := packet.NewBuffer()
 	pbuf3.SetCmd(packet.CmdPingDomain)
 	ctx.recordIncoming(pbuf3)
 	if ctx.Stats.StreamCount != 0 {
@@ -141,10 +141,10 @@ func TestEnqueueForward_FastPathClosed(t *testing.T) {
 		forwardDone: make(chan struct{}),
 	}
 	// 填满 channel，使 send case 不可用，只有 forwardDone 可选
-	ctx.forwardCh <- packet.NewBuffer(nil)
+	ctx.forwardCh <- packet.NewBuffer()
 	close(ctx.forwardDone)
 
-	err := ctx.enqueueForward(packet.NewBuffer(nil))
+	err := ctx.enqueueForward(packet.NewBuffer())
 	if err == nil {
 		t.Error("expected error for closed context")
 	}
@@ -156,7 +156,7 @@ func TestEnqueueForward_SlowPathSuccess(t *testing.T) {
 		forwardDone: make(chan struct{}),
 	}
 	// 填满 channel，使快路径失败
-	ctx.forwardCh <- packet.NewBuffer(nil)
+	ctx.forwardCh <- packet.NewBuffer()
 
 	// 延迟腾出空间
 	go func() {
@@ -164,7 +164,7 @@ func TestEnqueueForward_SlowPathSuccess(t *testing.T) {
 		<-ctx.forwardCh
 	}()
 
-	err := ctx.enqueueForward(packet.NewBuffer(nil))
+	err := ctx.enqueueForward(packet.NewBuffer())
 	if err != nil {
 		t.Errorf("expected nil error, got %v", err)
 	}
@@ -176,7 +176,7 @@ func TestEnqueueForward_SlowPathClosed(t *testing.T) {
 		forwardDone: make(chan struct{}),
 	}
 	// 填满 channel，使快路径失败
-	ctx.forwardCh <- packet.NewBuffer(nil)
+	ctx.forwardCh <- packet.NewBuffer()
 
 	// 延迟关闭 context
 	go func() {
@@ -184,7 +184,7 @@ func TestEnqueueForward_SlowPathClosed(t *testing.T) {
 		close(ctx.forwardDone)
 	}()
 
-	err := ctx.enqueueForward(packet.NewBuffer(nil))
+	err := ctx.enqueueForward(packet.NewBuffer())
 	if err == nil {
 		t.Error("expected error for closed context")
 	}
@@ -200,10 +200,10 @@ func TestEnqueueForward_Timeout(t *testing.T) {
 		forwardDone: make(chan struct{}),
 	}
 	// 填满 channel，不消费，不关闭 — 触发 5s 超时
-	ctx.forwardCh <- packet.NewBuffer(nil)
+	ctx.forwardCh <- packet.NewBuffer()
 
 	start := time.Now()
-	err := ctx.enqueueForward(packet.NewBuffer(nil))
+	err := ctx.enqueueForward(packet.NewBuffer())
 	dur := time.Since(start)
 
 	if err == nil {

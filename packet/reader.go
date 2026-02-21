@@ -38,10 +38,11 @@ func (reader *connReader) SetReadTimeout(timeout time.Duration) error {
 }
 
 func (reader *connReader) ReadBuffer() (retBuf *Buffer, retErr error) {
-	pb := NewBuffer(nil)
+	pb := GetBuffer()
 
 	_, err := io.ReadFull(reader.conn, pb.Head[:])
 	if err != nil {
+		PutBuffer(pb)
 		return nil, ErrReadHeaderFailed
 	}
 
@@ -50,6 +51,7 @@ func (reader *connReader) ReadBuffer() (retBuf *Buffer, retErr error) {
 		pb.Payload = make([]byte, sz)
 		_, err := io.ReadFull(reader.conn, pb.Payload)
 		if err != nil {
+			PutBuffer(pb)
 			return nil, ErrReadPayloadFailed
 		}
 	}
@@ -77,13 +79,15 @@ func (reader *wsReader) SetReadTimeout(timeout time.Duration) error {
 }
 
 func (reader *wsReader) ReadBuffer() (retBuf *Buffer, retErr error) {
-	buf := NewBuffer(nil)
+	buf := GetBuffer()
 
 	mtype, data, err := reader.wsconn.ReadMessage()
 	if err != nil {
+		PutBuffer(buf)
 		return nil, err
 	}
 	if mtype != websocket.BinaryMessage {
+		PutBuffer(buf)
 		return nil, ErrBadDataType
 	}
 

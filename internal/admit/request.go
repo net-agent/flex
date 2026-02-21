@@ -33,7 +33,7 @@ func (req *Request) WriteTo(pc packet.Conn) error {
 	if err != nil {
 		return err
 	}
-	pbuf := packet.NewBuffer(nil)
+	pbuf := packet.NewBuffer()
 	pbuf.SetPayload(buf)
 	return pc.WriteBuffer(pbuf)
 }

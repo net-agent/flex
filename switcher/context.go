@@ -201,7 +201,7 @@ func (ctx *Context) deliverPingResponse(port uint16, pbuf *packet.Buffer) bool {
 func (ctx *Context) ping(timeout time.Duration) (dur time.Duration, retErr error) {
 	port := uint16(0xffff & atomic.AddInt32(&ctx.pingIndex, 1))
 
-	pbuf := packet.NewBuffer(nil)
+	pbuf := packet.NewBuffer()
 	pbuf.SetCmd(packet.CmdPingDomain)
 	pbuf.SetSrc(packet.SwitcherIP, port)
 	pbuf.SetDist(ctx.IP, 0)

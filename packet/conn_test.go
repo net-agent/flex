@@ -14,7 +14,7 @@ import (
 
 func doTestDataTranasfer(name string, t *testing.T, pc1, pc2 Conn) {
 	msg := []byte("hello world")
-	buf := NewBuffer(nil)
+	buf := NewBuffer()
 	buf.SetHeader(CmdCloseStream, 0, 1, 2, 3)
 	buf.SetPayload(msg)
 
@@ -49,7 +49,7 @@ func TestWebsocket(t *testing.T) {
 	DefaultReadTimeout = time.Millisecond * 50
 
 	msg := []byte("hello world")
-	buf := NewBuffer(nil)
+	buf := NewBuffer()
 	buf.SetHeader(CmdCloseStream, 0, 1, 2, 3)
 	buf.SetPayload(msg)
 

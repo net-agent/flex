@@ -64,12 +64,12 @@ func TestConcurrentClose(t *testing.T) {
 	go s.Close()
 
 	// Simulate concurrent passive close
-	go s.HandleCmdCloseStream(packet.NewBuffer(nil))
+	go s.HandleCmdCloseStream(packet.NewBuffer())
 
 	// Simulate late ACK
 	go func() {
 		time.Sleep(time.Millisecond * 10)
-		s.HandleAckCloseStream(packet.NewBuffer(nil))
+		s.HandleAckCloseStream(packet.NewBuffer())
 	}()
 
 	time.Sleep(time.Millisecond * 200)

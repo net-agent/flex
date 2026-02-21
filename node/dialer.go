@@ -57,7 +57,7 @@ func (d *Dialer) DialDomain(domain string, port uint16) (*stream.Stream, error) 
 		return d.DialIP(d.host.GetIP(), port)
 	}
 
-	pbuf := packet.NewBuffer(nil)
+	pbuf := packet.NewBuffer()
 	pbuf.SetCmd(packet.CmdOpenStream)
 	pbuf.SetSrc(d.host.GetIP(), 0)
 	pbuf.SetDist(packet.SwitcherIP, port)
@@ -68,7 +68,7 @@ func (d *Dialer) DialDomain(domain string, port uint16) (*stream.Stream, error) 
 
 // DialIP 通过IP信息进行dial
 func (d *Dialer) DialIP(ip, port uint16) (*stream.Stream, error) {
-	pbuf := packet.NewBuffer(nil)
+	pbuf := packet.NewBuffer()
 	pbuf.SetCmd(packet.CmdOpenStream)
 	pbuf.SetSrc(d.host.GetIP(), 0)
 	pbuf.SetDist(ip, port)

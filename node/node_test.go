@@ -117,7 +117,7 @@ func TestCoverWriteBuffer(t *testing.T) {
 	assert.Equal(t, ErrWriterIsNil, err)
 
 	// n.running是false，触发dispatchBuffer的错误
-	n.WriteBuffer(packet.NewBuffer(nil))
+	n.WriteBuffer(packet.NewBuffer())
 }
 
 // 覆盖route的default分支测试

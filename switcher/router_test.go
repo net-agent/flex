@@ -28,7 +28,7 @@ func TestRouterPingDomain(t *testing.T) {
 	}
 
 	// 测试用例：发送一个pbuf到未知的ip，触发route pbuf failed
-	pbuf := packet.NewBuffer(nil)
+	pbuf := packet.NewBuffer()
 	pbuf.SetDist(100, 100)
 	err = node1.WriteBuffer(pbuf)
 	if err != nil {
@@ -53,7 +53,7 @@ func TestRouterForwardNilConn(t *testing.T) {
 	s.registry.ipMu.Unlock()
 
 	// 错误用例：因为ctx的pc是空，所以会触发dist.writeBuffer的错误
-	pbuf := packet.NewBuffer(nil)
+	pbuf := packet.NewBuffer()
 	pbuf.SetDist(2, 100)
 	s.router.forward(pbuf)
 }
@@ -69,7 +69,7 @@ func TestRouterForwardClosedContext(t *testing.T) {
 	// 关闭context，使enqueueForward返回错误
 	ctx.release()
 
-	pbuf := packet.NewBuffer(nil)
+	pbuf := packet.NewBuffer()
 	pbuf.SetDist(2, 100)
 	s.router.forward(pbuf)
 }
@@ -97,7 +97,7 @@ func TestRouterOpenStream(t *testing.T) {
 func TestRouterAckPingDomain(t *testing.T) {
 	s := NewServer("", nil, nil)
 	caller := NewContext(1, nil, "test", "", nil)
-	pbuf := packet.NewBuffer(nil)
+	pbuf := packet.NewBuffer()
 
 	// 分支覆盖：找不到port
 	s.router.handleAckPingDomain(caller, pbuf)
