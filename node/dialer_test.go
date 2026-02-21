@@ -11,10 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v2/idpool"
+	"github.com/net-agent/flex/v2/internal/idpool"
 	"github.com/net-agent/flex/v2/packet"
-	"github.com/net-agent/flex/v2/pending"
-	"github.com/net-agent/flex/v2/vars"
+	"github.com/net-agent/flex/v2/internal/pending"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -184,7 +183,7 @@ func Test_parseAddress(t *testing.T) {
 		{"port out of range", args{"test:-1"}, false, "", 0, 0, true},
 		{"port out of range", args{"test:65536"}, false, "", 0, 0, true},
 		{"invalid ip number", args{"-1:100"}, false, "", 0, 100, true},
-		{"invalid ip number", args{fmt.Sprintf("%v:100", int(vars.MaxIP)+1)}, false, "", 0, 100, true},
+		{"invalid ip number", args{fmt.Sprintf("%v:100", int(packet.MaxIP)+1)}, false, "", 0, 100, true},
 		{"domain address", args{"testdomain:1080"}, true, "testdomain", 0, 1080, false},
 		{"ip address", args{"1001:443"}, false, "", 1001, 443, false},
 	}

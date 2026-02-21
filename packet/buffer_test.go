@@ -6,7 +6,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/net-agent/flex/v2/vars"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -99,7 +98,7 @@ func TestPayload(t *testing.T) {
 			}
 		}()
 
-		pbuf.SetPayload(make([]byte, vars.MaxPayloadSize+1))
+		pbuf.SetPayload(make([]byte, MaxPayloadSize+1))
 	}()
 
 	wg.Wait()

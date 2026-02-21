@@ -4,9 +4,16 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-
-	"github.com/net-agent/flex/v2/vars"
 )
+
+const (
+	MaxIP      = uint16(0xffff)
+	DNSIP      = uint16(0xffff)
+	SwitcherIP = uint16(0xffff)
+	LocalIP    = uint16(0)
+)
+
+const MaxPayloadSize = 0xFFFF
 
 // 当数据包结构出现不兼容改动时，此处需要更新
 const VERSION = int(20221204)
@@ -198,7 +205,7 @@ func (buf *Buffer) SetHeader(cmd byte, distIP, distPort, srcIP, srcPort uint16) 
 
 // SetPayload 设置payload字段，字段最大长度不能超过vars.MaxPayloadSize
 func (buf *Buffer) SetPayload(payload []byte) {
-	if len(payload) > vars.MaxPayloadSize {
+	if len(payload) > MaxPayloadSize {
 		panic("payload overflow")
 	}
 	binary.BigEndian.PutUint16(buf.Head[9:11], uint16(len(payload)))

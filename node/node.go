@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/net-agent/flex/v2/idpool"
+	"github.com/net-agent/flex/v2/internal/idpool"
 	"github.com/net-agent/flex/v2/packet"
 )
 

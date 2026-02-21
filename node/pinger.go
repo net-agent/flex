@@ -4,10 +4,9 @@ import (
 	"errors"
 	"time"
 
-	"github.com/net-agent/flex/v2/idpool"
+	"github.com/net-agent/flex/v2/internal/idpool"
 	"github.com/net-agent/flex/v2/packet"
-	"github.com/net-agent/flex/v2/pending"
-	"github.com/net-agent/flex/v2/vars"
+	"github.com/net-agent/flex/v2/internal/pending"
 )
 
 var (
@@ -48,7 +47,7 @@ func (p *Pinger) PingDomain(domain string, timeout time.Duration) (time.Duration
 	pbuf := packet.NewBuffer(nil)
 	pbuf.SetCmd(packet.CmdPingDomain)
 	pbuf.SetSrc(p.host.GetIP(), port)
-	pbuf.SetDist(vars.SwitcherIP, 0) // 忽略
+	pbuf.SetDist(packet.SwitcherIP, 0) // 忽略
 	pbuf.SetPayload([]byte(domain))
 	err = p.host.WriteBuffer(pbuf)
 	if err != nil {

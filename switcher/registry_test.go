@@ -5,10 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v2/handshake"
-	"github.com/net-agent/flex/v2/idpool"
+	"github.com/net-agent/flex/v2/internal/admit"
+	"github.com/net-agent/flex/v2/internal/idpool"
 	"github.com/net-agent/flex/v2/packet"
-	"github.com/net-agent/flex/v2/vars"
 )
 
 func TestAttachCtx(t *testing.T) {
@@ -81,7 +80,7 @@ func TestGetContextByDomain(t *testing.T) {
 
 	// 错误分支：domain不正确
 	_, err = s.registry.lookupByDomain("")
-	if err != handshake.ErrInvalidDomain {
+	if err != admit.ErrInvalidDomain {
 		t.Errorf("unexpected err=%v\n", err)
 		return
 	}
@@ -114,12 +113,12 @@ func TestGetContextByIP(t *testing.T) {
 	s := NewServer("", nil, nil)
 
 	// 错误分支：invalid context ip
-	_, err = s.registry.lookupByIP(vars.LocalIP)
+	_, err = s.registry.lookupByIP(packet.LocalIP)
 	if err != errInvalidContextIP {
 		t.Errorf("unexpected err=%v\n", err)
 		return
 	}
-	_, err = s.registry.lookupByIP(vars.SwitcherIP)
+	_, err = s.registry.lookupByIP(packet.SwitcherIP)
 	if err != errInvalidContextIP {
 		t.Errorf("unexpected err=%v\n", err)
 		return

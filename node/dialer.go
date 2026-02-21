@@ -7,11 +7,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/net-agent/flex/v2/idpool"
+	"github.com/net-agent/flex/v2/internal/idpool"
 	"github.com/net-agent/flex/v2/packet"
-	"github.com/net-agent/flex/v2/pending"
+	"github.com/net-agent/flex/v2/internal/pending"
 	"github.com/net-agent/flex/v2/stream"
-	"github.com/net-agent/flex/v2/vars"
 )
 
 var (
@@ -61,7 +60,7 @@ func (d *Dialer) DialDomain(domain string, port uint16) (*stream.Stream, error) 
 	pbuf := packet.NewBuffer(nil)
 	pbuf.SetCmd(packet.CmdOpenStream)
 	pbuf.SetSrc(d.host.GetIP(), 0)
-	pbuf.SetDist(vars.SwitcherIP, port)
+	pbuf.SetDist(packet.SwitcherIP, port)
 	// Payload: [domain] + [0x00] + [windowSize(4 bytes)]
 	payload := make([]byte, 0, len(domain)+5)
 	payload = append(payload, []byte(domain)...)
@@ -213,7 +212,7 @@ func parseAddress(addr string) (isDomain bool, domain string, ip uint16, port ui
 		// treat as domain
 		return true, h, 0, port, nil
 	}
-	if intIp < 0 || intIp > int(vars.MaxIP) {
+	if intIp < 0 || intIp > int(packet.MaxIP) {
 		err = errInvalidIPNumber
 		return
 	}

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/net-agent/flex/v2/idpool"
+	"github.com/net-agent/flex/v2/internal/idpool"
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/stream"
 )

@@ -6,7 +6,6 @@ import (
 	"sync/atomic"
 
 	"github.com/net-agent/flex/v2/packet"
-	"github.com/net-agent/flex/v2/vars"
 )
 
 var (
@@ -58,7 +57,7 @@ func (s *Sender) SendCmdData(buf []byte) error {
 	if len(buf) == 0 {
 		return nil
 	}
-	if len(buf) > vars.MaxPayloadSize {
+	if len(buf) > packet.MaxPayloadSize {
 		return ErrSendDataOversize
 	}
 

@@ -8,11 +8,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/net-agent/flex/v2/handshake"
-	"github.com/net-agent/flex/v2/idpool"
+	"github.com/net-agent/flex/v2/internal/admit"
+	"github.com/net-agent/flex/v2/internal/idpool"
 	"github.com/net-agent/flex/v2/packet"
-	"github.com/net-agent/flex/v2/packet/sched"
-	"github.com/net-agent/flex/v2/vars"
+	"github.com/net-agent/flex/v2/internal/sched"
 )
 
 var (
@@ -75,7 +74,7 @@ func NewServer(password string, logger *slog.Logger, logCfg *LogConfig) *Server 
 		cfg = *logCfg
 	}
 
-	ipm, _ := idpool.New(1, vars.MaxIP-1)
+	ipm, _ := idpool.New(1, packet.MaxIP-1)
 	regLogger := newModuleLogger(logger, cfg.Registry, "registry")
 	reg := newContextRegistry(ipm, regLogger)
 
@@ -166,14 +165,11 @@ func (s *Server) Close() error {
 func (s *Server) ServeConn(pc packet.Conn) error {
 	defer pc.Close()
 
-	var resp handshake.Response
-
 	// 第一步：交换版本和签名信息，保证版本一致与认证安全
-	req, err := handshake.HandleUpgradeRequest(pc, s.password)
+	req, err := admit.Accept(pc, s.password)
 	if err != nil {
-		resp.ErrCode = -1
-		resp.ErrMsg = err.Error()
-		resp.WriteToPacketConn(pc)
+		resp := admit.NewErrResponse(-1, "handshake rejected")
+		resp.WriteTo(pc)
 		s.logger.Warn("handshake failed", "error", err)
 		return err
 	}
@@ -182,19 +178,16 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 	ctx := NewContext(int(atomic.AddInt32(&s.nextCtxID, 1)), pc, req.Domain, req.Mac, s.ctxLogger)
 	err = s.registry.attach(ctx)
 	if err != nil {
-		resp.ErrCode = -2
-		resp.ErrMsg = err.Error()
-		resp.WriteToPacketConn(pc)
+		resp := admit.NewErrResponse(-2, "handshake rejected")
+		resp.WriteTo(pc)
 		s.logger.Warn("attach context failed", "domain", req.Domain, "error", err)
 		return err
 	}
 	defer s.registry.detach(ctx)
 
 	// 第三步：应答客户端
-	resp.ErrCode = 0
-	resp.IP = ctx.IP
-	resp.Version = packet.VERSION
-	err = resp.WriteToPacketConn(pc)
+	resp := admit.NewOKResponse(ctx.IP)
+	err = resp.WriteTo(pc)
 	if err != nil {
 		s.logger.Warn("response client failed", "domain", ctx.Domain, "mac", ctx.Mac, "error", err)
 		return errHandlePCWriteFailed

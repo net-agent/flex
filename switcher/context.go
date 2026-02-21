@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/net-agent/flex/v2/packet"
-	"github.com/net-agent/flex/v2/vars"
 )
 
 var (
@@ -204,7 +203,7 @@ func (ctx *Context) ping(timeout time.Duration) (dur time.Duration, retErr error
 
 	pbuf := packet.NewBuffer(nil)
 	pbuf.SetCmd(packet.CmdPingDomain)
-	pbuf.SetSrc(vars.SwitcherIP, port)
+	pbuf.SetSrc(packet.SwitcherIP, port)
 	pbuf.SetDist(ctx.IP, 0)
 	pbuf.SetPayload([]byte(ctx.Domain))
 

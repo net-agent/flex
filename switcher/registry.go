@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/net-agent/flex/v2/handshake"
-	"github.com/net-agent/flex/v2/idpool"
-	"github.com/net-agent/flex/v2/vars"
+	"github.com/net-agent/flex/v2/internal/admit"
+	"github.com/net-agent/flex/v2/internal/idpool"
+	"github.com/net-agent/flex/v2/packet"
 )
 
 var (
@@ -50,9 +50,9 @@ func newContextRegistry(ipm *idpool.Pool, logger *slog.Logger) *contextRegistry 
 
 func (r *contextRegistry) attach(ctx *Context) error {
 	ctx.Domain = strings.ToLower(ctx.Domain)
-	if handshake.IsInvalidDomain(ctx.Domain) {
+	if admit.IsInvalidDomain(ctx.Domain) {
 		r.logger.Warn("attach failed: invalid domain", "ctx_id", ctx.id, "domain", ctx.Domain)
-		return handshake.ErrInvalidDomain
+		return admit.ErrInvalidDomain
 	}
 
 	prev, acquired := r.acquireDomain(ctx)
@@ -160,8 +160,8 @@ func (r *contextRegistry) detach(ctx *Context) {
 
 func (r *contextRegistry) lookupByDomain(domain string) (*Context, error) {
 	domain = strings.ToLower(domain)
-	if handshake.IsInvalidDomain(domain) {
-		return nil, handshake.ErrInvalidDomain
+	if admit.IsInvalidDomain(domain) {
+		return nil, admit.ErrInvalidDomain
 	}
 
 	r.domainMu.Lock()
@@ -175,7 +175,7 @@ func (r *contextRegistry) lookupByDomain(domain string) (*Context, error) {
 }
 
 func (r *contextRegistry) lookupByIP(ip uint16) (*Context, error) {
-	if ip == vars.LocalIP || ip == vars.SwitcherIP {
+	if ip == packet.LocalIP || ip == packet.SwitcherIP {
 		return nil, errInvalidContextIP
 	}
 

@@ -3,7 +3,7 @@ package switcher
 import (
 	"time"
 
-	"github.com/net-agent/flex/v2/handshake"
+	"github.com/net-agent/flex/v2/internal/admit"
 	"github.com/net-agent/flex/v2/node"
 	"github.com/net-agent/flex/v2/packet"
 )
@@ -17,13 +17,13 @@ func initTestEnv(domain1, domain2 string) (*Server, *node.Node, *node.Node) {
 	go s.ServeConn(pc2)
 	go s.ServeConn(pc4)
 
-	ip1, _ := handshake.UpgradeRequest(pc1, domain1, "", pswd)
+	ip1, _ := admit.Handshake(pc1, domain1, "", pswd)
 	node1 := node.New(pc1)
 	node1.SetIP(ip1)
 	node1.SetDomain(domain1)
 	go node1.Serve()
 
-	ip2, _ := handshake.UpgradeRequest(pc3, domain2, "", pswd)
+	ip2, _ := admit.Handshake(pc3, domain2, "", pswd)
 	node2 := node.New(pc3)
 	node2.SetIP(ip2)
 	node2.SetDomain(domain2)

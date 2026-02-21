@@ -5,7 +5,6 @@ import (
 	"log/slog"
 
 	"github.com/net-agent/flex/v2/packet"
-	"github.com/net-agent/flex/v2/vars"
 )
 
 var (
@@ -33,7 +32,7 @@ func (rt *packetRouter) serve(ctx *Context) error {
 		}
 		ctx.recordIncoming(pbuf)
 
-		if pbuf.DistIP() != vars.SwitcherIP {
+		if pbuf.DistIP() != packet.SwitcherIP {
 			// 需要保证发送顺序，不能使用协程并行
 			rt.forward(pbuf)
 			continue

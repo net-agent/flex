@@ -6,7 +6,6 @@ import (
 
 	"github.com/net-agent/flex/v2/packet"
 	"github.com/net-agent/flex/v2/stream"
-	"github.com/net-agent/flex/v2/vars"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -86,7 +85,7 @@ func TestHandleCmdOpenErr(t *testing.T) {
 	}()
 
 	pbuf.SetCmd(packet.CmdOpenStream)
-	pbuf.SetDist(vars.SwitcherIP, 80)
+	pbuf.SetDist(packet.SwitcherIP, 80)
 	pbuf.SetSrc(1, 1000)
 	pbuf.SetPayload([]byte("test2"))
 

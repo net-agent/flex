@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v2/handshake"
+	"github.com/net-agent/flex/v2/internal/admit"
 	"github.com/net-agent/flex/v2/node"
 	"github.com/net-agent/flex/v2/packet"
 )
@@ -32,7 +32,7 @@ func TestServerRun(t *testing.T) {
 		return
 	}
 	pc := packet.NewWithConn(c)
-	handshake.UpgradeRequest(pc, "test", "", pswd)
+	admit.Handshake(pc, "test", "", pswd)
 
 	s.Close()
 }
@@ -44,7 +44,7 @@ func TestServeConn(t *testing.T) {
 
 	// 模拟客户端请求
 	go func() {
-		handshake.UpgradeRequest(pc1, "test", "", pswd)
+		admit.Handshake(pc1, "test", "", pswd)
 		pc1.Close()
 	}()
 
@@ -69,7 +69,7 @@ func TestHandlePCErr_DomainExist(t *testing.T) {
 	go s.ServeConn(pc4)
 
 	// 先正常接入一个domain=test的连接
-	ip, err := handshake.UpgradeRequest(pc1, "test", "", pswd)
+	ip, err := admit.Handshake(pc1, "test", "", pswd)
 	if err != nil {
 		t.Errorf("unexpected err=%v\n", err)
 		return
@@ -85,7 +85,7 @@ func TestHandlePCErr_DomainExist(t *testing.T) {
 	}()
 
 	// 模拟重复接入一个domain=test的连接
-	_, err = handshake.UpgradeRequest(pc3, "test", "", pswd)
+	_, err = admit.Handshake(pc3, "test", "", pswd)
 	if err == nil {
 		t.Error("unexpected nil err")
 		return
@@ -95,49 +95,43 @@ func TestHandlePCErr_DomainExist(t *testing.T) {
 	waitNodeRun.Wait()
 }
 
-// 模拟domain重复的场景
+// 模拟密码错误的场景
 func TestHandlePCErr_Password(t *testing.T) {
 	pswd := "testpswd"
 	s := NewServer(pswd, nil, nil)
 	pc1, pc2 := packet.Pipe()
 
 	go func() {
-		// 第一步：发送UpgradeRequest
-		// 第二步：发完后关闭连接
-		var req handshake.Request
+		var req admit.Request
 		req.Domain = "test"
 		req.Version = packet.VERSION
+		req.Timestamp = time.Now().UnixNano()
 		req.Sum = req.CalcSum(pswd + "_badpswd")
-		pbuf := packet.NewBuffer(nil)
-		pbuf.SetPayload(req.Marshal())
-		pc1.WriteBuffer(pbuf)
+		req.WriteTo(pc1)
 		pc1.ReadBuffer()
 	}()
 
 	err := s.ServeConn(pc2)
-	if err != handshake.ErrInvalidPassword {
+	if err != admit.ErrInvalidPassword {
 		t.Errorf("unexpected err=%v\n", err)
 		return
 	}
 	log.Printf("expected err=%v\n", err)
 }
 
-// 模拟服务端在应答UpgradeRequest之前连接断开的情况
+// 模拟服务端在应答之前连接断开的情况
 func TestHandlePCErr_WriteResponse(t *testing.T) {
 	pswd := "testpswd"
 	s := NewServer(pswd, nil, nil)
 	pc1, pc2 := packet.Pipe()
 
 	go func() {
-		// 第一步：发送UpgradeRequest
-		// 第二步：发完后关闭连接
-		var req handshake.Request
+		var req admit.Request
 		req.Domain = "test"
 		req.Version = packet.VERSION
+		req.Timestamp = time.Now().UnixNano()
 		req.Sum = req.CalcSum(pswd)
-		pbuf := packet.NewBuffer(nil)
-		pbuf.SetPayload(req.Marshal())
-		pc1.WriteBuffer(pbuf)
+		req.WriteTo(pc1)
 		pc1.Close()
 	}()
 
@@ -179,7 +173,6 @@ func TestGetClientsWithData(t *testing.T) {
 		t.Errorf("expected TotalContexts >= 2, got %d", stats.TotalContexts)
 	}
 
-	// 验证 client 信息完整性
 	for _, c := range clients {
 		if c.Domain == "" {
 			t.Error("expected non-empty domain")
