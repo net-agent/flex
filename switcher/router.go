@@ -113,7 +113,15 @@ func (rt *packetRouter) handleAckPingDomain(caller *Context, pbuf *packet.Buffer
 
 // handleOpenStream resolves the destination domain and forwards the open-stream request.
 func (rt *packetRouter) handleOpenStream(caller *Context, pbuf *packet.Buffer) {
-	distDomain := string(pbuf.Payload)
+	payload := pbuf.Payload
+	distDomain := string(payload)
+	// payload format: [domain] + [0x00] + [windowSize(4 bytes)]
+	for i, b := range payload {
+		if b == 0 {
+			distDomain = string(payload[:i])
+			break
+		}
+	}
 
 	distCtx, err := rt.registry.lookupByDomain(distDomain)
 	if err != nil {
