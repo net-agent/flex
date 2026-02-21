@@ -113,20 +113,15 @@ func (rt *packetRouter) handleAckPingDomain(caller *Context, pbuf *packet.Buffer
 
 // handleOpenStream resolves the destination domain and forwards the open-stream request.
 func (rt *packetRouter) handleOpenStream(caller *Context, pbuf *packet.Buffer) {
-	payload := pbuf.Payload
-	distDomain := string(payload)
-	// payload format: [domain] + [0x00] + [windowSize(4 bytes)]
-	for i, b := range payload {
-		if b == 0 {
-			distDomain = string(payload[:i])
-			break
-		}
-	}
+	req := packet.DecodeOpenStreamRequest(pbuf.Payload)
 
-	distCtx, err := rt.registry.lookupByDomain(distDomain)
+	distCtx, err := rt.registry.lookupByDomain(req.Domain)
 	if err != nil {
-		rt.logger.Warn("resolve domain failed", "caller_id", caller.id, "caller_domain", caller.Domain, "target_domain", distDomain, "error", err)
-		pbuf.SetOpenACK(errResolveDomainFailed.Error())
+		rt.logger.Warn("resolve domain failed", "caller_id", caller.id, "caller_domain", caller.Domain, "target_domain", req.Domain, "error", err)
+		ack := packet.OpenStreamACK{Error: errResolveDomainFailed.Error()}
+		pbuf.SetCmd(packet.AckOpenStream)
+		pbuf.SwapSrcDist()
+		pbuf.SetPayload(ack.Encode())
 		pbuf.SetSrcIP(0)
 		if err := caller.writeBuffer(pbuf); err != nil {
 			rt.logger.Warn("open-stream error reply write failed", "ctx_id", caller.id, "domain", caller.Domain, "error", err)
@@ -134,8 +129,9 @@ func (rt *packetRouter) handleOpenStream(caller *Context, pbuf *packet.Buffer) {
 		return
 	}
 
+	fwd := packet.OpenStreamRequest{Domain: caller.Domain, WindowSize: req.WindowSize}
 	pbuf.SetDistIP(distCtx.IP)
-	pbuf.SetPayload([]byte(caller.Domain))
+	pbuf.SetPayload(fwd.Encode())
 	if err := distCtx.writeBuffer(pbuf); err != nil {
 		rt.logger.Warn("open-stream forward write failed", "ctx_id", distCtx.id, "domain", distCtx.Domain, "error", err)
 	}

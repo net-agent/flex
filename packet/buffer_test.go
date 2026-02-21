@@ -74,17 +74,6 @@ func TestPayload(t *testing.T) {
 	assert.Equal(t, uint16(0), pbuf.PayloadSize())
 	assert.Equal(t, uint16(10245), pbuf.ACKInfo())
 
-	// test SetOpenAck
-	pbuf.SetCmd(CmdOpenStream)
-	if pbuf.SetOpenACK("").PayloadSize() != 0 {
-		t.Error("not equal")
-		return
-	}
-	if pbuf.SetOpenACK("abcd").PayloadSize() != 4 {
-		t.Error("not equal")
-		return
-	}
-
 	// test payload overflow panic
 	var wg sync.WaitGroup
 	wg.Add(1)

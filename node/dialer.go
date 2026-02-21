@@ -61,12 +61,8 @@ func (d *Dialer) DialDomain(domain string, port uint16) (*stream.Stream, error) 
 	pbuf.SetCmd(packet.CmdOpenStream)
 	pbuf.SetSrc(d.host.GetIP(), 0)
 	pbuf.SetDist(packet.SwitcherIP, port)
-	// Payload: [domain] + [0x00] + [windowSize(4 bytes)]
-	payload := make([]byte, 0, len(domain)+5)
-	payload = append(payload, []byte(domain)...)
-	payload = append(payload, 0)
-	payload = appendWindowSize(payload, d.host.GetWindowSize())
-	pbuf.SetPayload(payload)
+	req := packet.OpenStreamRequest{Domain: domain, WindowSize: uint32(d.host.GetWindowSize())}
+	pbuf.SetPayload(req.Encode())
 	return d.dialPbuf(pbuf)
 }
 
@@ -76,11 +72,8 @@ func (d *Dialer) DialIP(ip, port uint16) (*stream.Stream, error) {
 	pbuf.SetCmd(packet.CmdOpenStream)
 	pbuf.SetSrc(d.host.GetIP(), 0)
 	pbuf.SetDist(ip, port)
-	// Payload: [0x00] + [windowSize(4 bytes)]
-	payload := make([]byte, 0, 5)
-	payload = append(payload, 0)
-	payload = appendWindowSize(payload, d.host.GetWindowSize())
-	pbuf.SetPayload(payload)
+	req := packet.OpenStreamRequest{WindowSize: uint32(d.host.GetWindowSize())}
+	pbuf.SetPayload(req.Encode())
 	return d.dialPbuf(pbuf)
 }
 
@@ -143,26 +136,17 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 
 func (d *Dialer) handleAckOpenStream(pbuf *packet.Buffer) {
 	evKey := pbuf.DistPort()
-	var negotiatedWindowSize int32
-	isSuccess := false
+	ack := packet.DecodeOpenStreamACK(pbuf.Payload)
 
-	if len(pbuf.Payload) == 0 {
-		isSuccess = true
-		negotiatedWindowSize = 0 // use default
-	} else if pbuf.Payload[0] == 0 {
-		isSuccess = true
-		if len(pbuf.Payload) >= 5 {
-			negotiatedWindowSize = int32(readUint32(pbuf.Payload[1:]))
-		}
-	}
-
-	if !isSuccess {
-		err := d.pending.Complete(evKey, nil, errors.New(string(pbuf.Payload)))
+	if !ack.OK {
+		err := d.pending.Complete(evKey, nil, errors.New(ack.Error))
 		if err != nil {
 			d.host.logger.Warn("dispatch ack-msg failed", "error", err)
 		}
 		return
 	}
+
+	negotiatedWindowSize := int32(ack.WindowSize)
 
 	//
 	// create and bind stream

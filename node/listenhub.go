@@ -82,29 +82,25 @@ func (hub *ListenHub) getActiveListeners() []*Listener {
 // 处理对端发送过来的OpenStream请求
 func (hub *ListenHub) handleCmdOpenStream(pbuf *packet.Buffer) {
 	var negotiatedWindowSize int32
-	var ackPayload []byte
 	var ackMessage string
 
 	defer func() {
-		// Construct ACK payload: [0x00] + [negotiatedWindowSize] if success
+		var ack packet.OpenStreamACK
 		if ackMessage == "" {
-			ackPayload = make([]byte, 5)
-			ackPayload[0] = 0
-			writeUint32(ackPayload[1:], uint32(negotiatedWindowSize))
+			ack = packet.OpenStreamACK{OK: true, WindowSize: uint32(negotiatedWindowSize)}
 		} else {
-			ackPayload = []byte(ackMessage)
+			ack = packet.OpenStreamACK{Error: ackMessage}
 		}
 
-		pbuf.SetPayload(ackPayload)
-		pbuf.SetCmd(packet.AckOpenStream) // Re-use buffer, set Ack Cmd
+		pbuf.SetPayload(ack.Encode())
+		pbuf.SetCmd(packet.AckOpenStream)
 
-		// Swap Addresses to reply
 		srcIP, srcPort := pbuf.SrcIP(), pbuf.SrcPort()
 		distIP, distPort := pbuf.DistIP(), pbuf.DistPort()
 		pbuf.SetSrc(distIP, distPort)
 		pbuf.SetDist(srcIP, srcPort)
 
-		err := hub.host.WriteBuffer(pbuf) // pbuf is modified in place
+		err := hub.host.WriteBuffer(pbuf)
 		if err != nil {
 			hub.host.logger.Warn("write ack-msg failed", "error", err)
 		}
@@ -117,28 +113,9 @@ func (hub *ListenHub) handleCmdOpenStream(pbuf *packet.Buffer) {
 		return
 	}
 
-	// Parse Payload
-	// [domain] + [0x00] + [windowSize]
-	var remoteDomain string
-	var remoteWindowSize int32
-
-	payload := pbuf.Payload
-	nullByteIdx := -1
-	for i, b := range payload {
-		if b == 0 {
-			nullByteIdx = i
-			break
-		}
-	}
-
-	if nullByteIdx >= 0 {
-		remoteDomain = string(payload[:nullByteIdx])
-		if len(payload) >= nullByteIdx+5 {
-			remoteWindowSize = int32(readUint32(payload[nullByteIdx+1:]))
-		}
-	} else {
-		remoteDomain = string(payload)
-	}
+	req := packet.DecodeOpenStreamRequest(pbuf.Payload)
+	remoteDomain := req.Domain
+	remoteWindowSize := int32(req.WindowSize)
 
 	if remoteDomain == "" && pbuf.SrcIP() == hub.host.ip {
 		remoteDomain = hub.host.domain
