@@ -4,9 +4,9 @@ import (
 	"errors"
 	"time"
 
-	"github.com/net-agent/flex/v2/internal/idpool"
-	"github.com/net-agent/flex/v2/packet"
-	"github.com/net-agent/flex/v2/internal/pending"
+	"github.com/net-agent/flex/v3/internal/idpool"
+	"github.com/net-agent/flex/v3/internal/pending"
+	"github.com/net-agent/flex/v3/packet"
 )
 
 var (
@@ -14,9 +14,9 @@ var (
 )
 
 type Pinger struct {
-	host  *Node
-	portm *idpool.Pool
-	pending pending.Requests[struct{}]
+	host       *Node
+	portm      *idpool.Pool
+	pending    pending.Requests[struct{}]
 	ignorePing bool // 为 true 时忽略所有 ping 请求
 }
 

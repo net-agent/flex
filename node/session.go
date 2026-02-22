@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/net-agent/flex/v2/stream"
+	"github.com/net-agent/flex/v3/stream"
 )
 
 var (

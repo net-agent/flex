@@ -4,7 +4,7 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v3/packet"
 )
 
 var (

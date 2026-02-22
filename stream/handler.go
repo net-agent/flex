@@ -4,7 +4,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v3/packet"
 )
 
 // HandleCmdPushStreamData 处理对端发送过来的数据包

@@ -3,7 +3,7 @@ package sched
 import (
 	"time"
 
-	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v3/packet"
 )
 
 // FairConn wraps a packet.Conn and uses FairWriter for writing

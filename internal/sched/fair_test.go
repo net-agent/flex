@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v3/packet"
 )
 
 // RecordEntry captures a single packet write event.
@@ -385,17 +385,17 @@ func runRealThroughput(numStreams, total int) ThroughputResult {
 	}
 
 	return ThroughputResult{
-		Name:     fmt.Sprintf("Real %d streams × %d pkts", numStreams, perStream),
-		RawPPS:   measure(false),
-		FairPPS:  measure(true),
+		Name:    fmt.Sprintf("Real %d streams × %d pkts", numStreams, perStream),
+		RawPPS:  measure(false),
+		FairPPS: measure(true),
 	}
 }
 
 // Report aggregates all scenario results for HTML rendering.
 type Report struct {
-	Fairness   []ScenarioResult  `json:"fairness"`
-	Priority   ScenarioResult    `json:"priority"`
-	Starvation ScenarioResult    `json:"starvation"`
+	Fairness   []ScenarioResult   `json:"fairness"`
+	Priority   ScenarioResult     `json:"priority"`
+	Starvation ScenarioResult     `json:"starvation"`
 	Throughput []ThroughputResult `json:"throughput"`
 }
 

@@ -12,10 +12,10 @@ import (
 	"net"
 	"time"
 
-	"github.com/net-agent/flex/v2/internal/admit"
-	"github.com/net-agent/flex/v2/node"
-	"github.com/net-agent/flex/v2/packet"
-	"github.com/net-agent/flex/v2/switcher"
+	"github.com/net-agent/flex/v3/internal/admit"
+	"github.com/net-agent/flex/v3/node"
+	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v3/switcher"
 )
 
 func main() {

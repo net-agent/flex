@@ -3,7 +3,7 @@ package admit
 import (
 	"encoding/json"
 
-	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v3/packet"
 )
 
 type Response struct {

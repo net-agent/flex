@@ -32,8 +32,8 @@ import (
 
 	"net"
 
-	"github.com/net-agent/flex/v2/packet"
-	"github.com/net-agent/flex/v2/stream"
+	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v3/stream"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -516,7 +516,7 @@ func (f *fakeListener) Accept() (net.Conn, error) {
 		return nil, errors.New("closed")
 	}
 }
-func (f *fakeListener) Close() error { close(f.done); return nil }
+func (f *fakeListener) Close() error   { close(f.done); return nil }
 func (f *fakeListener) Addr() net.Addr { return nil }
 
 func TestSessionBridgeListenerDone(t *testing.T) {

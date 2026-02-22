@@ -30,7 +30,7 @@ import (
     "log"
     "net"
 
-    "github.com/net-agent/flex/v2/switcher"
+    "github.com/net-agent/flex/v3/switcher"
 )
 
 func main() {

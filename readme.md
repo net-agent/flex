@@ -30,7 +30,7 @@ graph LR
 ### Installation
 
 ```bash
-go get github.com/net-agent/flex/v2
+go get github.com/net-agent/flex/v3
 ```
 
 ### 1. Minimal Node-to-Node (Direct) used
@@ -43,8 +43,8 @@ package main
 import (
 	"log"
 	"net"
-	"github.com/net-agent/flex/v2/node"
-	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v3/node"
+	"github.com/net-agent/flex/v3/packet"
 )
 
 func main() {

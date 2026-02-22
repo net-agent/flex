@@ -3,7 +3,7 @@ package stream
 import (
 	"log"
 
-	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v3/packet"
 )
 
 func Pipe() (*Stream, *Stream) {

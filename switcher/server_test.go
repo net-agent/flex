@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v2/internal/admit"
-	"github.com/net-agent/flex/v2/node"
-	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v3/internal/admit"
+	"github.com/net-agent/flex/v3/node"
+	"github.com/net-agent/flex/v3/packet"
 )
 
 func TestServerRun(t *testing.T) {

@@ -8,10 +8,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/net-agent/flex/v2/internal/admit"
-	"github.com/net-agent/flex/v2/internal/idpool"
-	"github.com/net-agent/flex/v2/packet"
-	"github.com/net-agent/flex/v2/internal/sched"
+	"github.com/net-agent/flex/v3/internal/admit"
+	"github.com/net-agent/flex/v3/internal/idpool"
+	"github.com/net-agent/flex/v3/internal/sched"
+	"github.com/net-agent/flex/v3/packet"
 )
 
 var (

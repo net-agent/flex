@@ -6,9 +6,9 @@ import (
 	"net"
 	"sync"
 
-	"github.com/net-agent/flex/v2/internal/idpool"
-	"github.com/net-agent/flex/v2/packet"
-	"github.com/net-agent/flex/v2/stream"
+	"github.com/net-agent/flex/v3/internal/idpool"
+	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v3/stream"
 )
 
 var (

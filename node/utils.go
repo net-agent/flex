@@ -1,6 +1,6 @@
 package node
 
-import "github.com/net-agent/flex/v2/packet"
+import "github.com/net-agent/flex/v3/packet"
 
 func Pipe(domain1, domain2 string) (*Node, *Node) {
 	c1, c2 := packet.Pipe()

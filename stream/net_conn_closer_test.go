@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v3/packet"
 	"github.com/stretchr/testify/assert"
 )
 

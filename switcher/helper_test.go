@@ -3,9 +3,9 @@ package switcher
 import (
 	"time"
 
-	"github.com/net-agent/flex/v2/internal/admit"
-	"github.com/net-agent/flex/v2/node"
-	"github.com/net-agent/flex/v2/packet"
+	"github.com/net-agent/flex/v3/internal/admit"
+	"github.com/net-agent/flex/v3/node"
+	"github.com/net-agent/flex/v3/packet"
 )
 
 func initTestEnv(domain1, domain2 string) (*Server, *node.Node, *node.Node) {
