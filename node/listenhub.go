@@ -92,7 +92,7 @@ func (hub *ListenHub) handleCmdOpenStream(pbuf *packet.Buffer) {
 			ack = packet.OpenStreamACK{Error: ackMessage}
 		}
 
-		pbuf.SetPayload(ack.Encode())
+		_ = pbuf.SetPayload(ack.Encode())
 		pbuf.SetCmd(packet.AckOpenStream)
 
 		srcIP, srcPort := pbuf.SrcIP(), pbuf.SrcPort()

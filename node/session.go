@@ -26,6 +26,9 @@ type Session struct {
 	listeners map[uint16]*SessionListener
 	ready     chan struct{} // closed when node is ready
 
+	trigger   chan struct{} // closed on first Listen/Dial to start connecting
+	onceStart sync.Once
+
 	done      chan struct{}
 	onceClose sync.Once
 	logger    *slog.Logger
@@ -36,6 +39,7 @@ func NewSession(connector func() (*Node, error)) *Session {
 		connector: connector,
 		listeners: make(map[uint16]*SessionListener),
 		ready:     make(chan struct{}),
+		trigger:   make(chan struct{}),
 		done:      make(chan struct{}),
 		logger:    slog.Default(),
 	}
@@ -48,7 +52,10 @@ func (s *Session) SetLogger(l *slog.Logger) {
 }
 
 // Listen 注册一个端口监听。该监听跨重连存活，Node 重建后自动重新注册。
+// 首次调用会触发 Serve 开始连接。
 func (s *Session) Listen(port uint16) (net.Listener, error) {
+	s.ensureServing()
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -78,7 +85,10 @@ func (s *Session) Listen(port uint16) (net.Listener, error) {
 }
 
 // Dial 通过当前 Node 发起连接。如果当前处于断线状态，立即返回错误。
+// 首次调用会触发 Serve 开始连接。
 func (s *Session) Dial(addr string) (*stream.Stream, error) {
+	s.ensureServing()
+
 	s.mu.RLock()
 	n := s.node
 	s.mu.RUnlock()
@@ -115,8 +125,20 @@ func (s *Session) GetNode() *Node {
 	return s.node
 }
 
+func (s *Session) ensureServing() {
+	s.onceStart.Do(func() { close(s.trigger) })
+}
+
 // Serve 启动重连循环。阻塞直到 Close 被调用。
+// 实际连接在首次 Listen 或 Dial 调用时才开始（懒连接）。
 func (s *Session) Serve() error {
+	// 等待首次使用触发
+	select {
+	case <-s.trigger:
+	case <-s.done:
+		return nil
+	}
+
 	backoff := time.Second
 
 	for {

@@ -35,7 +35,7 @@ func (s *Stream) HandleCmdPushStreamData(pbuf *packet.Buffer) {
 
 func (s *Stream) HandleAckPushStreamData(pbuf *packet.Buffer) {
 	atomic.AddInt32(&s.state.HandledBufferCount, 1)
-	size := pbuf.ACKInfo()
+	size := pbuf.DataACKSize()
 	atomic.AddInt32(&s.bucketSz, int32(size))
 	atomic.AddInt64(&s.state.HandledDataAckSum, int64(size))
 

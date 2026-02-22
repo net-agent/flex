@@ -205,7 +205,7 @@ func (ctx *Context) ping(timeout time.Duration) (dur time.Duration, retErr error
 	pbuf.SetCmd(packet.CmdPingDomain)
 	pbuf.SetSrc(packet.SwitcherIP, port)
 	pbuf.SetDist(ctx.IP, 0)
-	pbuf.SetPayload([]byte(ctx.Domain))
+	_ = pbuf.SetPayload([]byte(ctx.Domain))
 
 	ch := make(chan *packet.Buffer, 1) // buffered to prevent goroutine leak
 	ctx.pingBack.Store(port, ch)

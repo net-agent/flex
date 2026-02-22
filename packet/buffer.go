@@ -2,10 +2,13 @@ package packet
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
 )
+
+var ErrPayloadOverflow = errors.New("payload size exceeds MaxPayloadSize")
 
 const (
 	MaxIP      = uint16(0xffff)
@@ -37,13 +40,17 @@ const (
 )
 
 // Header
-// +-------+------+--------+----------+--------+---------+-------------+
-// | Field | Cmd  | DistIP | DistPort | SrcIP  | SrcPort | PayloadSize |
-// +-------+------+--------+----------+--------+---------+-------------+
-// | Type  | byte | uint16 | uint16   | uint16 | uint16  | uint16      |
-// | Pos   | 0    | 1      | 3        | 5      | 7       | 9           |
-// | Size  | 1    | 2      | 2        | 2      | 2       | 2           |
-// +-------+------+--------+----------+--------+---------+-------------+
+// +-------+------+--------+----------+--------+---------+---------------------+
+// | Field | Cmd  | DistIP | DistPort | SrcIP  | SrcPort | PayloadSize/ACKSize |
+// +-------+------+--------+----------+--------+---------+---------------------+
+// | Type  | byte | uint16 | uint16   | uint16 | uint16  | uint16              |
+// | Pos   | 0    | 1      | 3        | 5      | 7       | 9                   |
+// | Size  | 1    | 2      | 2        | 2      | 2       | 2                   |
+// +-------+------+--------+----------+--------+---------+---------------------+
+//
+// 注意：字节 [9:11] 是 union 字段：
+//   - 非 ACK 包：表示 PayloadSize，通过 SetPayload/PayloadSize 访问
+//   - AckPushStreamData：表示已确认的数据大小，通过 SetDataACKSize/DataACKSize 访问
 const HeaderSz = 1 + 2 + 2 + 2 + 2 + 2
 
 type Header [HeaderSz]byte
@@ -217,13 +224,14 @@ func (buf *Buffer) SetHeader(cmd byte, distIP, distPort, srcIP, srcPort uint16) 
 	buf.SetSrc(srcIP, srcPort)
 }
 
-// SetPayload 设置payload字段，字段最大长度不能超过vars.MaxPayloadSize
-func (buf *Buffer) SetPayload(payload []byte) {
+// SetPayload 设置payload字段，字段最大长度不能超过MaxPayloadSize
+func (buf *Buffer) SetPayload(payload []byte) error {
 	if len(payload) > MaxPayloadSize {
-		panic("payload overflow")
+		return ErrPayloadOverflow
 	}
 	binary.BigEndian.PutUint16(buf.Head[9:11], uint16(len(payload)))
 	buf.Payload = payload
+	return nil
 }
 
 // PayloadSize 获取payload的长度
@@ -234,14 +242,16 @@ func (buf *Buffer) PayloadSize() uint16 {
 	return binary.BigEndian.Uint16(buf.Head[9:11])
 }
 
-// SetACKInfo 设置ack附带信息。ack附带信息为uint16的值
-func (buf *Buffer) SetACKInfo(ack uint16) {
-	binary.BigEndian.PutUint16(buf.Head[9:11], ack)
+// SetDataACKSize 设置 AckPushStreamData 包中已确认的数据大小。
+// 此方法复用 Head[9:11]（与 PayloadSize 共享），并清空 Payload。
+func (buf *Buffer) SetDataACKSize(size uint16) {
+	binary.BigEndian.PutUint16(buf.Head[9:11], size)
 	buf.Payload = nil
 }
 
-// ACKInfo 获取ack附带信息
-func (buf *Buffer) ACKInfo() uint16 {
+// DataACKSize 获取 AckPushStreamData 包中已确认的数据大小。
+// 仅当 Cmd 为 AckPushStreamData 时有效，其他命令返回 0。
+func (buf *Buffer) DataACKSize() uint16 {
 	if buf.Cmd() != CmdPushStreamData|CmdACKFlag {
 		return 0
 	}

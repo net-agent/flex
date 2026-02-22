@@ -63,7 +63,9 @@ func (s *Sender) SendCmdData(buf []byte) error {
 
 	s.dataMut.Lock()
 	defer s.dataMut.Unlock()
-	s.dataPbuf.SetPayload(buf)
+	if err := s.dataPbuf.SetPayload(buf); err != nil {
+		return err
+	}
 	atomic.AddInt32(s.counter, 1)
 	return s.WriteBuffer(s.dataPbuf)
 }
@@ -72,7 +74,7 @@ func (s *Sender) SendCmdData(buf []byte) error {
 func (s *Sender) SendCmdDataAck(n uint16) error {
 	s.ackMut.Lock()
 	defer s.ackMut.Unlock()
-	s.dataAckPbuf.SetACKInfo(n)
+	s.dataAckPbuf.SetDataACKSize(n)
 	atomic.AddInt32(s.counter, 1)
 	return s.WriteBuffer(s.dataAckPbuf)
 }

@@ -48,9 +48,8 @@ func (p *Pinger) PingDomain(domain string, timeout time.Duration) (time.Duration
 	pbuf.SetCmd(packet.CmdPingDomain)
 	pbuf.SetSrc(p.host.GetIP(), port)
 	pbuf.SetDist(packet.SwitcherIP, 0) // 忽略
-	pbuf.SetPayload([]byte(domain))
-	err = p.host.WriteBuffer(pbuf)
-	if err != nil {
+	_ = pbuf.SetPayload([]byte(domain))
+	if err = p.host.WriteBuffer(pbuf); err != nil {
 		return 0, err
 	}
 
@@ -75,9 +74,9 @@ func (p *Pinger) handleCmdPingDomain(pbuf *packet.Buffer) {
 		return
 	}
 	if string(pbuf.Payload) != p.host.domain {
-		pbuf.SetPayload([]byte("domain not match"))
+		_ = pbuf.SetPayload([]byte("domain not match"))
 	} else {
-		pbuf.SetPayload(nil)
+		_ = pbuf.SetPayload(nil)
 	}
 
 	pbuf.SetCmd(packet.AckPingDomain)

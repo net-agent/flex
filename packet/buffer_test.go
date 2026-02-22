@@ -3,7 +3,6 @@ package packet
 import (
 	"bytes"
 	"fmt"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -66,31 +65,17 @@ func TestPayload(t *testing.T) {
 	pbuf.SetCmd(CmdOpenStream)
 	pbuf.SetPayload(payload)
 	assert.Equal(t, uint16(len(payload)), pbuf.PayloadSize())
-	assert.Equal(t, uint16(0), pbuf.ACKInfo())
+	assert.Equal(t, uint16(0), pbuf.DataACKSize())
 
 	// test base ack
 	pbuf.SetCmd(AckPushStreamData)
-	pbuf.SetACKInfo(10245)
+	pbuf.SetDataACKSize(10245)
 	assert.Equal(t, uint16(0), pbuf.PayloadSize())
-	assert.Equal(t, uint16(10245), pbuf.ACKInfo())
+	assert.Equal(t, uint16(10245), pbuf.DataACKSize())
 
-	// test payload overflow panic
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer func() {
-			defer wg.Done()
-			r := recover()
-			if r == nil {
-				t.Error("unexpected nil recover")
-				return
-			}
-		}()
-
-		pbuf.SetPayload(make([]byte, MaxPayloadSize+1))
-	}()
-
-	wg.Wait()
+	// test payload overflow returns error
+	err := pbuf.SetPayload(make([]byte, MaxPayloadSize+1))
+	assert.ErrorIs(t, err, ErrPayloadOverflow)
 }
 
 func TestBuffer_CmdName(t *testing.T) {

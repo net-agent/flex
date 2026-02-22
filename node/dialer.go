@@ -62,7 +62,7 @@ func (d *Dialer) DialDomain(domain string, port uint16) (*stream.Stream, error) 
 	pbuf.SetSrc(d.host.GetIP(), 0)
 	pbuf.SetDist(packet.SwitcherIP, port)
 	req := packet.OpenStreamRequest{Domain: domain, WindowSize: uint32(d.host.GetWindowSize())}
-	pbuf.SetPayload(req.Encode())
+	_ = pbuf.SetPayload(req.Encode())
 	return d.dialPbuf(pbuf)
 }
 
@@ -73,7 +73,7 @@ func (d *Dialer) DialIP(ip, port uint16) (*stream.Stream, error) {
 	pbuf.SetSrc(d.host.GetIP(), 0)
 	pbuf.SetDist(ip, port)
 	req := packet.OpenStreamRequest{WindowSize: uint32(d.host.GetWindowSize())}
-	pbuf.SetPayload(req.Encode())
+	_ = pbuf.SetPayload(req.Encode())
 	return d.dialPbuf(pbuf)
 }
 
