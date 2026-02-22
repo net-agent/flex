@@ -81,15 +81,39 @@ func Accept(pc packet.Conn, pswd string) (*Request, error) {
 		return nil, ErrInvalidPassword
 	}
 
-	req.Domain = strings.ToLower(req.Domain)
-	if IsInvalidDomain(req.Domain) {
-		return nil, ErrInvalidDomain
+	normalized, err := NormalizeDomain(req.Domain)
+	if err != nil {
+		return nil, err
 	}
+	req.Domain = normalized
 
 	return req, nil
 }
 
-// IsInvalidDomain 判断名称是否合法
+// NormalizeDomain 归一化并校验 domain。
+// 返回归一化后的 domain 或 ErrInvalidDomain。
+func NormalizeDomain(domain string) (string, error) {
+	domain = strings.TrimSpace(strings.ToLower(domain))
+
+	if domain == "" || len(domain) > 63 {
+		return "", ErrInvalidDomain
+	}
+	if domain == "local" || domain == "localhost" {
+		return "", ErrInvalidDomain
+	}
+	if domain[0] == '-' || domain[0] == '_' || domain[len(domain)-1] == '-' || domain[len(domain)-1] == '_' {
+		return "", ErrInvalidDomain
+	}
+	for _, c := range domain {
+		if !(c >= 'a' && c <= 'z') && !(c >= '0' && c <= '9') && c != '-' && c != '_' {
+			return "", ErrInvalidDomain
+		}
+	}
+	return domain, nil
+}
+
+// IsInvalidDomain 判断名称是否合法（兼容旧调用方）。
 func IsInvalidDomain(domain string) bool {
-	return domain == "" || strings.HasPrefix(domain, "local")
+	_, err := NormalizeDomain(domain)
+	return err != nil
 }

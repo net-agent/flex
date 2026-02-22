@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -49,11 +48,12 @@ func newContextRegistry(ipm *idpool.Pool, logger *slog.Logger) *contextRegistry 
 }
 
 func (r *contextRegistry) attach(ctx *Context) error {
-	ctx.Domain = strings.ToLower(ctx.Domain)
-	if admit.IsInvalidDomain(ctx.Domain) {
+	normalized, err := admit.NormalizeDomain(ctx.Domain)
+	if err != nil {
 		r.logger.Warn("attach failed: invalid domain", "ctx_id", ctx.id, "domain", ctx.Domain)
-		return admit.ErrInvalidDomain
+		return err
 	}
+	ctx.Domain = normalized
 
 	prev, acquired := r.acquireDomain(ctx)
 	if !acquired {
@@ -159,9 +159,9 @@ func (r *contextRegistry) detach(ctx *Context) {
 }
 
 func (r *contextRegistry) lookupByDomain(domain string) (*Context, error) {
-	domain = strings.ToLower(domain)
-	if admit.IsInvalidDomain(domain) {
-		return nil, admit.ErrInvalidDomain
+	domain, err := admit.NormalizeDomain(domain)
+	if err != nil {
+		return nil, err
 	}
 
 	r.domainMu.Lock()
