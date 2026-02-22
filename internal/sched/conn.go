@@ -12,10 +12,10 @@ type FairConn struct {
 	writer *FairWriter
 }
 
-func NewFairConn(conn packet.Conn) *FairConn {
+func NewFairConn(conn packet.Conn, quantum ...int) *FairConn {
 	return &FairConn{
 		Conn:   conn,
-		writer: NewFairWriter(conn),
+		writer: NewFairWriter(conn, quantum...),
 	}
 }
 

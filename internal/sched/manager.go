@@ -3,6 +3,7 @@ package sched
 import (
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/net-agent/flex/v2/packet"
@@ -10,43 +11,72 @@ import (
 
 const (
 	DefaultControlQueueSize = 128
-	DefaultStreamQueueSize  = 16
+	DefaultQuantum          = 4
 	ReadyQueueSize          = 1024
 )
 
-var (
-	ErrWriterClosed = errors.New("fair writer closed")
-)
+var ErrWriterClosed = errors.New("fair writer closed")
 
 type FairWriter struct {
-	writer packet.Writer
+	writer  packet.Writer
+	quantum int
 
-	// Control Priority Queue (Highest Priority)
-	controlCh chan *packet.Buffer
-
-	// Stream Queues
-	// map[sid]*StreamQueue
-	streams map[uint64]*StreamQueue
-	mu      sync.Mutex
-
-	// Ready Queue for Round Robin
-	// Stores SIDs that have data to send
+	controlCh  chan *packet.Buffer
+	streams    map[uint64]*StreamQueue
+	mu         sync.Mutex // protects streams map only
 	readyQueue chan uint64
-
-	// Signaling
-	done     chan struct{}
-	closeOne sync.Once
-	closed   bool
+	done       chan struct{}
+	closeOne   sync.Once
+	closed     atomic.Bool
 }
 
+// StreamQueue is a per-stream packet queue using slice+mutex instead of channel.
 type StreamQueue struct {
-	ch       chan *packet.Buffer
-	inReadyQ bool // protected by FairWriter.mu
+	mu     sync.Mutex
+	queue  []*packet.Buffer
+	active atomic.Bool // whether this stream's SID is in readyQueue
 }
 
-func NewFairWriter(w packet.Writer) *FairWriter {
+func (sq *StreamQueue) Push(buf *packet.Buffer) {
+	sq.mu.Lock()
+	sq.queue = append(sq.queue, buf)
+	sq.mu.Unlock()
+}
+
+// Drain removes and returns up to n packets from the queue.
+func (sq *StreamQueue) Drain(n int) []*packet.Buffer {
+	sq.mu.Lock()
+	l := len(sq.queue)
+	if l == 0 {
+		sq.mu.Unlock()
+		return nil
+	}
+	if n > l {
+		n = l
+	}
+	out := make([]*packet.Buffer, n)
+	copy(out, sq.queue[:n])
+	copy(sq.queue, sq.queue[n:])
+	sq.queue = sq.queue[:l-n]
+	sq.mu.Unlock()
+	return out
+}
+
+func (sq *StreamQueue) Len() int {
+	sq.mu.Lock()
+	n := len(sq.queue)
+	sq.mu.Unlock()
+	return n
+}
+
+func NewFairWriter(w packet.Writer, quantum ...int) *FairWriter {
+	q := DefaultQuantum
+	if len(quantum) > 0 && quantum[0] > 0 {
+		q = quantum[0]
+	}
 	fw := &FairWriter{
 		writer:     w,
+		quantum:    q,
 		controlCh:  make(chan *packet.Buffer, DefaultControlQueueSize),
 		streams:    make(map[uint64]*StreamQueue),
 		readyQueue: make(chan uint64, ReadyQueueSize),
@@ -57,13 +87,12 @@ func NewFairWriter(w packet.Writer) *FairWriter {
 }
 
 func (fw *FairWriter) WriteBuffer(buf *packet.Buffer) error {
-	if fw.closed {
+	if fw.closed.Load() {
 		return ErrWriterClosed
 	}
 
-	// 1. Classification
+	// Control packets: high priority
 	if buf.Cmd() != packet.CmdPushStreamData {
-		// High Priority (Control)
 		select {
 		case fw.controlCh <- buf:
 			return nil
@@ -72,42 +101,26 @@ func (fw *FairWriter) WriteBuffer(buf *packet.Buffer) error {
 		}
 	}
 
-	// 2. Data Packet Handling
-	// 2. Data Packet Handling
-	fw.mu.Lock()
+	// Data packets: push to stream queue
 	sid := buf.SID()
+	fw.mu.Lock()
 	sq, exists := fw.streams[sid]
 	if !exists {
-		sq = &StreamQueue{
-			ch: make(chan *packet.Buffer, DefaultStreamQueueSize),
-		}
+		sq = &StreamQueue{}
 		fw.streams[sid] = sq
 	}
 	fw.mu.Unlock()
 
-	// Push Data (Blocking)
-	select {
-	case sq.ch <- buf:
-	case <-fw.done:
-		return ErrWriterClosed
-	}
+	sq.Push(buf)
 
-	// Ensure Active
-	// Check AFTER push to avoid race where consumer drains queue and marks inactive
-	// while we were blocked.
-	fw.mu.Lock()
-	if !sq.inReadyQ {
-		sq.inReadyQ = true
+	// Activate stream if not already in readyQueue (atomic CAS, no mutex needed)
+	if sq.active.CompareAndSwap(false, true) {
 		select {
 		case fw.readyQueue <- sid:
-		default:
-			// Queue full. Establish backpressure or force push.
-			// Ideally readyQueue is large enough (1024) for active streams.
-			// Blocking here is acceptable backpressure.
-			fw.readyQueue <- sid
+		case <-fw.done:
+			return ErrWriterClosed
 		}
 	}
-	fw.mu.Unlock()
 
 	return nil
 }
@@ -118,7 +131,7 @@ func (fw *FairWriter) SetWriteTimeout(dur time.Duration) {
 
 func (fw *FairWriter) Close() error {
 	fw.closeOne.Do(func() {
-		fw.closed = true
+		fw.closed.Store(true)
 		close(fw.done)
 	})
 	return nil
@@ -129,73 +142,63 @@ func (fw *FairWriter) loop() {
 		select {
 		case <-fw.done:
 			return
-
-		// Priority 1: Control Packets
 		case buf := <-fw.controlCh:
 			fw.writer.WriteBuffer(buf)
-			continue // Check control channel again immediately
-
-		// Priority 2: Ready Streams
+			continue
 		case sid := <-fw.readyQueue:
-			// Check if control channel has data first (Preemption check)
-			select {
-			case cBuf := <-fw.controlCh:
-				fw.writer.WriteBuffer(cBuf)
-				// Put SID back at head? No, back at tail is fine/fairer actually.
-				// Or simplify: just process the sid. control will be caught next loop.
-			default:
-			}
-
-			if !fw.processStream(sid) {
-				// Stream finished or empty
-			}
+			// Preemption: drain control channel first
+			fw.drainControl()
+			fw.processStream(sid)
 		}
 	}
 }
 
-// processStream sends one packet from the stream and re-queues if more data exists
-func (fw *FairWriter) processStream(sid uint64) bool {
+func (fw *FairWriter) drainControl() {
+	for {
+		select {
+		case buf := <-fw.controlCh:
+			fw.writer.WriteBuffer(buf)
+		default:
+			return
+		}
+	}
+}
+
+func (fw *FairWriter) processStream(sid uint64) {
 	fw.mu.Lock()
 	sq, exists := fw.streams[sid]
-	if !exists {
-		fw.mu.Unlock()
-		return false
-	}
 	fw.mu.Unlock()
+	if !exists {
+		return
+	}
 
-	select {
-	case buf := <-sq.ch:
-		fw.writer.WriteBuffer(buf)
+	bufs := sq.Drain(fw.quantum)
+	if len(bufs) > 0 {
+		if bw, ok := fw.writer.(packet.BatchWriter); ok {
+			bw.WriteBufferBatch(bufs)
+		} else {
+			for _, buf := range bufs {
+				fw.writer.WriteBuffer(buf)
+			}
+		}
+	}
 
-		// Determine if we should re-queue
-		// We can't peak easily.
-		// Strategy: Always re-queue if we pulled a packet?
-		// No, if empty, we want to stop spinning.
-
-		fw.mu.Lock()
-		// Double check if more data is available or likely available
-		// len(sq.ch) > 0 is racy but acceptable hint.
-		if len(sq.ch) > 0 {
-			// Re-queue
+	// Re-queue if more data, otherwise deactivate
+	if sq.Len() > 0 {
+		select {
+		case fw.readyQueue <- sid:
+		default:
+			go func() { fw.readyQueue <- sid }()
+		}
+	} else {
+		sq.active.Store(false)
+		// Double-check: producer may have pushed between Drain and Store
+		if sq.Len() > 0 && sq.active.CompareAndSwap(false, true) {
 			select {
 			case fw.readyQueue <- sid:
 			default:
-				// Should not happen if we consume faster than produce
-				// Force push or blocking
 				go func() { fw.readyQueue <- sid }()
 			}
-		} else {
-			// Mark as not in ready queue
-			sq.inReadyQ = false
 		}
-		fw.mu.Unlock()
-		return true
-
-	default:
-		// Queue was empty (spurious wake-up or race)
-		fw.mu.Lock()
-		sq.inReadyQ = false
-		fw.mu.Unlock()
-		return false
 	}
 }

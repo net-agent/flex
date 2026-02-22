@@ -42,3 +42,15 @@ func NewWithWs(wsconn *websocket.Conn) Conn {
 func (impl *connImpl) GetRawConn() net.Conn {
 	return impl.raw
 }
+
+func (impl *connImpl) WriteBufferBatch(bufs []*Buffer) error {
+	if bw, ok := impl.Writer.(BatchWriter); ok {
+		return bw.WriteBufferBatch(bufs)
+	}
+	for _, buf := range bufs {
+		if err := impl.WriteBuffer(buf); err != nil {
+			return err
+		}
+	}
+	return nil
+}
