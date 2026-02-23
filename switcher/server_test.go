@@ -107,13 +107,13 @@ func TestHandlePCErr_Password(t *testing.T) {
 		req.Version = packet.VERSION
 		req.Timestamp = time.Now().UnixNano()
 		req.Sum = req.CalcSum(pswd + "_badpswd")
-		req.WriteTo(pc1)
-		pc1.ReadBuffer()
+		req.WriteTo(pc1, pswd+"_badpswd")
+		pc1.ReadBuffer() // drain error response
 	}()
 
 	err := s.ServeConn(pc2)
-	if err != admit.ErrInvalidPassword {
-		t.Errorf("unexpected err=%v\n", err)
+	if err == nil {
+		t.Error("expected error for bad password")
 		return
 	}
 	log.Printf("expected err=%v\n", err)
@@ -131,7 +131,7 @@ func TestHandlePCErr_WriteResponse(t *testing.T) {
 		req.Version = packet.VERSION
 		req.Timestamp = time.Now().UnixNano()
 		req.Sum = req.CalcSum(pswd)
-		req.WriteTo(pc1)
+		req.WriteTo(pc1, pswd)
 		pc1.Close()
 	}()
 

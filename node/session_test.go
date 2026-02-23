@@ -1,7 +1,8 @@
 // Session 单元测试方案
 //
 // 测试策略：
-//   - 使用 newTestConnector 创建可控的 connector，每次调用返回一对通过 packet.Pipe 互联的 Node
+//   - 使用 newTestConnector 创建可控的 connector，每次调用返回一对通过 packet.Pipe 互联的 packet.Conn
+//   - server 端在 goroutine 中完成 admit.Accept 握手并创建 Node
 //   - 使用 fakeListener 直接测试 bridge 内部的 select 分支（sl.done / s.done）
 //   - 通过关闭 server 端 Node 触发断线，验证自动重连和 Listener 重新注册
 //
@@ -12,7 +13,7 @@
 //   Listen           — Serve 前注册 | 端口重复 | 运行中注册+桥接 | 运行中 node.Listen 失败
 //   Dial             — node 为 nil 返回错误 | 正常委托
 //   WaitReady        — 已就绪 | 超时 | Session 已关闭 | 等待后就绪
-//   Serve            — 启动前已关闭 | connector 失败+backoff 中 Close | Listener 重注册失败 | 断线重连
+//   Serve            — 启动前已关闭 | connector 失败+backoff 中 Close | 断线重连
 //   Close            — 有活跃 Node | 无 Node | 幂等
 //   bridge           — nl.Accept 错误退出 | 正常转发 | sl.done 退出 | s.done 退出
 //   removeListener   — node 为 nil 仅删 map | 有 Node 时同时关闭底层 Listener
@@ -32,36 +33,60 @@ import (
 
 	"net"
 
+	"github.com/net-agent/flex/v3/internal/admit"
 	"github.com/net-agent/flex/v3/packet"
 	"github.com/net-agent/flex/v3/stream"
 	"github.com/stretchr/testify/assert"
 )
 
-// newTestConnector 创建一个测试用的 connector，每次调用返回一对互联的 Node。
-// 返回 connector 函数和一个获取所有 server 端 Node 的函数。
-func newTestConnector() (connector func() (*Node, error), getServers func() []*Node) {
+const testPassword = "testpass"
+
+func testSessionConfig() SessionConfig {
+	return SessionConfig{
+		Domain:   "testclient",
+		Password: testPassword,
+		Mac:      "testmac",
+	}
+}
+
+// newTestConnector 创建一个测试用的 connector，每次调用返回 packet.Conn。
+// server 端在 goroutine 中完成握手并创建 Node。
+// getServers 会等待所有 pending 的 server 创建完成后返回。
+func newTestConnector() (connector func() (packet.Conn, error), getServers func() []*Node) {
 	var mu sync.Mutex
 	var servers []*Node
+	var wg sync.WaitGroup
 
-	connector = func() (*Node, error) {
+	connector = func() (packet.Conn, error) {
 		c1, c2 := packet.Pipe()
-		client := New(c1)
-		client.SetIP(1)
-		client.SetDomain("client")
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req, err := admit.Accept(c2, testPassword)
+			if err != nil {
+				c2.Close()
+				return
+			}
+			resp := admit.NewOKResponse(1)
+			if err := resp.WriteTo(c2, testPassword); err != nil {
+				c2.Close()
+				return
+			}
 
-		server := New(c2)
-		server.SetIP(2)
-		server.SetDomain("server")
-		go server.Serve()
+			server := New(c2)
+			server.SetIP(2)
+			server.SetDomain(req.Domain)
+			go server.Serve()
 
-		mu.Lock()
-		servers = append(servers, server)
-		mu.Unlock()
-
-		return client, nil
+			mu.Lock()
+			servers = append(servers, server)
+			mu.Unlock()
+		}()
+		return c1, nil
 	}
 
 	getServers = func() []*Node {
+		wg.Wait()
 		mu.Lock()
 		defer mu.Unlock()
 		cp := make([]*Node, len(servers))
@@ -73,7 +98,7 @@ func newTestConnector() (connector func() (*Node, error), getServers func() []*N
 }
 
 func TestNewSession(t *testing.T) {
-	s := NewSession(nil)
+	s := NewSession(nil, SessionConfig{})
 	assert.NotNil(t, s)
 	assert.Nil(t, s.node)
 	assert.NotNil(t, s.listeners)
@@ -82,7 +107,7 @@ func TestNewSession(t *testing.T) {
 }
 
 func TestSessionSetLogger(t *testing.T) {
-	s := NewSession(nil)
+	s := NewSession(nil, SessionConfig{})
 	original := s.logger
 
 	// nil 不应改变 logger
@@ -96,7 +121,7 @@ func TestSessionSetLogger(t *testing.T) {
 }
 
 func TestSessionGetNode(t *testing.T) {
-	s := NewSession(nil)
+	s := NewSession(nil, SessionConfig{})
 	assert.Nil(t, s.GetNode())
 
 	n := New(nil)
@@ -107,7 +132,7 @@ func TestSessionGetNode(t *testing.T) {
 // --- Listen ---
 
 func TestSessionListenBeforeServe(t *testing.T) {
-	s := NewSession(nil)
+	s := NewSession(nil, SessionConfig{})
 
 	sl, err := s.Listen(80)
 	assert.Nil(t, err)
@@ -116,7 +141,7 @@ func TestSessionListenBeforeServe(t *testing.T) {
 }
 
 func TestSessionListenDuplicatePort(t *testing.T) {
-	s := NewSession(nil)
+	s := NewSession(nil, SessionConfig{})
 
 	_, err := s.Listen(80)
 	assert.Nil(t, err)
@@ -127,8 +152,9 @@ func TestSessionListenDuplicatePort(t *testing.T) {
 
 func TestSessionListenWhileRunning(t *testing.T) {
 	connector, getServers := newTestConnector()
-	s := NewSession(connector)
+	s := NewSession(connector, testSessionConfig())
 
+	s.ensureServing()
 	go s.Serve()
 	defer s.Close()
 
@@ -154,15 +180,16 @@ func TestSessionListenWhileRunning(t *testing.T) {
 // --- Dial ---
 
 func TestSessionDialDisconnected(t *testing.T) {
-	s := NewSession(nil)
+	s := NewSession(nil, SessionConfig{})
 	_, err := s.Dial("1:80")
 	assert.Equal(t, ErrSessionDisconnected, err)
 }
 
 func TestSessionDialConnected(t *testing.T) {
 	connector, getServers := newTestConnector()
-	s := NewSession(connector)
+	s := NewSession(connector, testSessionConfig())
 
+	s.ensureServing()
 	go s.Serve()
 	defer s.Close()
 
@@ -181,19 +208,19 @@ func TestSessionDialConnected(t *testing.T) {
 // --- WaitReady ---
 
 func TestSessionWaitReadyAlreadyReady(t *testing.T) {
-	s := NewSession(nil)
+	s := NewSession(nil, SessionConfig{})
 	s.node = New(nil) // 模拟已连接
 	assert.Nil(t, s.WaitReady(time.Millisecond))
 }
 
 func TestSessionWaitReadyTimeout(t *testing.T) {
-	s := NewSession(nil)
+	s := NewSession(nil, SessionConfig{})
 	err := s.WaitReady(50 * time.Millisecond)
 	assert.Equal(t, ErrSessionDisconnected, err)
 }
 
 func TestSessionWaitReadySessionClosed(t *testing.T) {
-	s := NewSession(nil)
+	s := NewSession(nil, SessionConfig{})
 	s.Close()
 	err := s.WaitReady(time.Second)
 	assert.Equal(t, ErrSessionClosed, err)
@@ -201,8 +228,9 @@ func TestSessionWaitReadySessionClosed(t *testing.T) {
 
 func TestSessionWaitReadyBecomesReady(t *testing.T) {
 	connector, _ := newTestConnector()
-	s := NewSession(connector)
+	s := NewSession(connector, testSessionConfig())
 
+	s.ensureServing()
 	go s.Serve()
 	defer s.Close()
 
@@ -214,22 +242,23 @@ func TestSessionWaitReadyBecomesReady(t *testing.T) {
 // --- Serve ---
 
 func TestSessionServeAlreadyClosed(t *testing.T) {
-	s := NewSession(nil)
+	s := NewSession(nil, SessionConfig{})
 	s.Close()
 	err := s.Serve()
 	assert.Nil(t, err)
 }
 
 func TestSessionServeConnectorFails(t *testing.T) {
-	connector := func() (*Node, error) {
+	connector := func() (packet.Conn, error) {
 		return nil, errors.New("connect failed")
 	}
-	s := NewSession(connector)
+	s := NewSession(connector, testSessionConfig())
 
 	done := make(chan error, 1)
 	go func() { done <- s.Serve() }()
 
-	// 等待进入 backoff
+	// 触发连接并等待进入 backoff
+	s.ensureServing()
 	time.Sleep(50 * time.Millisecond)
 
 	// Close 应中断 backoff 等待
@@ -243,36 +272,11 @@ func TestSessionServeConnectorFails(t *testing.T) {
 	}
 }
 
-func TestSessionServeListenerRegisterFails(t *testing.T) {
-	// connector 返回的 Node 已经占用了 port 80，导致 Session 注册失败
-	connector := func() (*Node, error) {
-		c1, c2 := packet.Pipe()
-		client := New(c1)
-		client.SetIP(1)
-		client.Listen(80) // 预占端口
-
-		server := New(c2)
-		server.SetIP(2)
-		go server.Serve()
-
-		return client, nil
-	}
-
-	s := NewSession(connector)
-	s.Listen(80) // Session 记录了 port 80
-
-	go s.Serve()
-	defer s.Close()
-
-	// Serve 不应崩溃，只是 log warning
-	assert.Nil(t, s.WaitReady(time.Second))
-}
-
 // --- Reconnect ---
 
 func TestSessionReconnect(t *testing.T) {
 	connector, getServers := newTestConnector()
-	s := NewSession(connector)
+	s := NewSession(connector, testSessionConfig())
 
 	// 先注册 Listener
 	sl, err := s.Listen(80)
@@ -322,9 +326,10 @@ func TestSessionReconnect(t *testing.T) {
 
 func TestSessionCloseWithActiveNode(t *testing.T) {
 	connector, _ := newTestConnector()
-	s := NewSession(connector)
+	s := NewSession(connector, testSessionConfig())
 
 	done := make(chan error, 1)
+	s.ensureServing()
 	go func() { done <- s.Serve() }()
 
 	assert.Nil(t, s.WaitReady(time.Second))
@@ -342,12 +347,12 @@ func TestSessionCloseWithActiveNode(t *testing.T) {
 }
 
 func TestSessionCloseNilNode(t *testing.T) {
-	s := NewSession(nil)
+	s := NewSession(nil, SessionConfig{})
 	assert.Nil(t, s.Close())
 }
 
 func TestSessionDoubleClose(t *testing.T) {
-	s := NewSession(nil)
+	s := NewSession(nil, SessionConfig{})
 	assert.Nil(t, s.Close())
 	assert.Nil(t, s.Close())
 }
@@ -356,7 +361,7 @@ func TestSessionDoubleClose(t *testing.T) {
 
 func TestSessionListenerAccept(t *testing.T) {
 	connector, getServers := newTestConnector()
-	s := NewSession(connector)
+	s := NewSession(connector, testSessionConfig())
 
 	sl, _ := s.Listen(80)
 	go s.Serve()
@@ -376,7 +381,7 @@ func TestSessionListenerAccept(t *testing.T) {
 }
 
 func TestSessionListenerAcceptOnListenerClose(t *testing.T) {
-	s := NewSession(nil)
+	s := NewSession(nil, SessionConfig{})
 	sl, _ := s.Listen(80)
 
 	done := make(chan error, 1)
@@ -397,7 +402,7 @@ func TestSessionListenerAcceptOnListenerClose(t *testing.T) {
 }
 
 func TestSessionListenerAcceptOnSessionClose(t *testing.T) {
-	s := NewSession(nil)
+	s := NewSession(nil, SessionConfig{})
 	sl, _ := s.Listen(80)
 
 	done := make(chan error, 1)
@@ -418,7 +423,7 @@ func TestSessionListenerAcceptOnSessionClose(t *testing.T) {
 }
 
 func TestSessionListenerAcceptChannelClosed(t *testing.T) {
-	s := NewSession(nil)
+	s := NewSession(nil, SessionConfig{})
 	sl := &SessionListener{
 		port:    80,
 		session: s,
@@ -431,7 +436,7 @@ func TestSessionListenerAcceptChannelClosed(t *testing.T) {
 }
 
 func TestSessionListenerClose(t *testing.T) {
-	s := NewSession(nil)
+	s := NewSession(nil, SessionConfig{})
 	sl, _ := s.Listen(80)
 	assert.Len(t, s.listeners, 1)
 
@@ -441,7 +446,7 @@ func TestSessionListenerClose(t *testing.T) {
 }
 
 func TestSessionListenerDoubleClose(t *testing.T) {
-	s := NewSession(nil)
+	s := NewSession(nil, SessionConfig{})
 	sl, _ := s.Listen(80)
 
 	assert.Nil(t, sl.Close())
@@ -450,7 +455,7 @@ func TestSessionListenerDoubleClose(t *testing.T) {
 
 func TestSessionListenerCloseWithActiveNode(t *testing.T) {
 	connector, _ := newTestConnector()
-	s := NewSession(connector)
+	s := NewSession(connector, testSessionConfig())
 
 	sl, _ := s.Listen(80)
 	go s.Serve()
@@ -470,7 +475,7 @@ func TestSessionListenerCloseWithActiveNode(t *testing.T) {
 }
 
 func TestSessionListenerAddr(t *testing.T) {
-	s := NewSession(nil)
+	s := NewSession(nil, SessionConfig{})
 	sl, _ := s.Listen(80)
 
 	assert.Equal(t, "flex", sl.(*SessionListener).Network())
@@ -480,8 +485,9 @@ func TestSessionListenerAddr(t *testing.T) {
 
 func TestSessionListenWhileRunningNodeListenFails(t *testing.T) {
 	connector, _ := newTestConnector()
-	s := NewSession(connector)
+	s := NewSession(connector, testSessionConfig())
 
+	s.ensureServing()
 	go s.Serve()
 	defer s.Close()
 
@@ -520,7 +526,7 @@ func (f *fakeListener) Close() error   { close(f.done); return nil }
 func (f *fakeListener) Addr() net.Addr { return nil }
 
 func TestSessionBridgeListenerDone(t *testing.T) {
-	s := NewSession(nil)
+	s := NewSession(nil, SessionConfig{})
 	sl := &SessionListener{
 		port:    80,
 		session: s,
@@ -550,7 +556,7 @@ func TestSessionBridgeListenerDone(t *testing.T) {
 }
 
 func TestSessionBridgeSessionDone(t *testing.T) {
-	s := NewSession(nil)
+	s := NewSession(nil, SessionConfig{})
 	sl := &SessionListener{
 		port:    80,
 		session: s,
@@ -582,7 +588,7 @@ func TestSessionBridgeSessionDone(t *testing.T) {
 // --- removeListener ---
 
 func TestSessionRemoveListenerNilNode(t *testing.T) {
-	s := NewSession(nil)
+	s := NewSession(nil, SessionConfig{})
 	s.Listen(80)
 	assert.Len(t, s.listeners, 1)
 

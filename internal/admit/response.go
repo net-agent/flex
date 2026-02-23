@@ -21,22 +21,31 @@ func NewErrResponse(code int, msg string) *Response {
 	return &Response{Version: packet.VERSION, ErrCode: code, ErrMsg: msg}
 }
 
-func (resp *Response) WriteTo(pc packet.Conn) error {
-	payload, err := json.Marshal(resp)
+func (resp *Response) WriteTo(pc packet.Conn, password string) error {
+	plaintext, err := json.Marshal(resp)
 	if err != nil {
 		return err
 	}
-	pbuf := packet.NewBuffer()
-	if err := pbuf.SetPayload(payload); err != nil {
+	ciphertext, err := encrypt(plaintext, password)
+	if err != nil {
+		return err
+	}
+	pbuf := packet.NewBufferWithCmd(packet.CmdAdmit)
+	randomFillHeader(pbuf)
+	if err := pbuf.SetPayload(ciphertext); err != nil {
 		return err
 	}
 	return pc.WriteBuffer(pbuf)
 }
 
-func (resp *Response) ReadFrom(pc packet.Conn) error {
+func (resp *Response) ReadFrom(pc packet.Conn, password string) error {
 	pbuf, err := pc.ReadBuffer()
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(pbuf.Payload, resp)
+	plaintext, err := decrypt(pbuf.Payload, password)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(plaintext, resp)
 }

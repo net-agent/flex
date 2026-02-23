@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/net-agent/flex/v3/internal/admit"
+	"github.com/net-agent/flex/v3/packet"
 	"github.com/net-agent/flex/v3/stream"
 )
 
@@ -16,10 +18,19 @@ var (
 	ErrSessionDisconnected = errors.New("session disconnected")
 )
 
+type ConnectFunc func() (packet.Conn, error)
+
+type SessionConfig struct {
+	Domain   string
+	Password string
+	Mac      string
+}
+
 // Session 是一个带有断线重连能力的 Node 代理。
 // 对外提供与 Node 一致的 Listen/Dial 语义，内部管理 Node 的生命周期和自动重连。
 type Session struct {
-	connector func() (*Node, error)
+	connector ConnectFunc
+	config    SessionConfig
 
 	mu        sync.RWMutex
 	node      *Node
@@ -34,9 +45,10 @@ type Session struct {
 	logger    *slog.Logger
 }
 
-func NewSession(connector func() (*Node, error)) *Session {
+func NewSession(connector ConnectFunc, cfg SessionConfig) *Session {
 	return &Session{
 		connector: connector,
+		config:    cfg,
 		listeners: make(map[uint16]*SessionListener),
 		ready:     make(chan struct{}),
 		trigger:   make(chan struct{}),
@@ -148,7 +160,7 @@ func (s *Session) Serve() error {
 		default:
 		}
 
-		node, err := s.connector()
+		conn, err := s.connector()
 		if err != nil {
 			s.logger.Warn("connect failed", "error", err, "retry_in", backoff)
 			select {
@@ -159,6 +171,23 @@ func (s *Session) Serve() error {
 			backoff = min(backoff*2, 30*time.Second)
 			continue
 		}
+
+		ip, err := admit.Handshake(conn, s.config.Domain, s.config.Mac, s.config.Password)
+		if err != nil {
+			conn.Close()
+			s.logger.Warn("handshake failed", "error", err, "retry_in", backoff)
+			select {
+			case <-s.done:
+				return nil
+			case <-time.After(backoff):
+			}
+			backoff = min(backoff*2, 30*time.Second)
+			continue
+		}
+
+		node := New(conn)
+		node.SetIP(ip)
+		node.SetDomain(s.config.Domain)
 
 		backoff = time.Second // 连接成功，重置退避
 

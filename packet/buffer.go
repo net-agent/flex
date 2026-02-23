@@ -20,7 +20,9 @@ const (
 const MaxPayloadSize = 0xFFFF
 
 // 当数据包结构出现不兼容改动时，此处需要更新
-const VERSION = int(20260222)
+const VERSION = int(20260224)
+
+const CmdAdmit = byte(0)
 
 const (
 	CmdACKFlag    = byte(1)

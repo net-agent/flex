@@ -2,6 +2,7 @@ package admit
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -28,22 +29,36 @@ func (req *Request) Marshal() ([]byte, error) {
 	return json.Marshal(req)
 }
 
-func (req *Request) WriteTo(pc packet.Conn) error {
-	buf, err := req.Marshal()
+func (req *Request) WriteTo(pc packet.Conn, password string) error {
+	plaintext, err := req.Marshal()
 	if err != nil {
 		return err
 	}
-	pbuf := packet.NewBuffer()
-	if err := pbuf.SetPayload(buf); err != nil {
+	ciphertext, err := encrypt(plaintext, password)
+	if err != nil {
+		return err
+	}
+	pbuf := packet.NewBufferWithCmd(packet.CmdAdmit)
+	randomFillHeader(pbuf)
+	if err := pbuf.SetPayload(ciphertext); err != nil {
 		return err
 	}
 	return pc.WriteBuffer(pbuf)
 }
 
-func (req *Request) ReadFrom(pc packet.Conn) error {
+func (req *Request) ReadFrom(pc packet.Conn, password string) error {
 	pbuf, err := pc.ReadBuffer()
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(pbuf.Payload, req)
+	plaintext, err := decrypt(pbuf.Payload, password)
+	if err != nil {
+		return err
+	}
+	return json.Unmarshal(plaintext, req)
+}
+
+// randomFillHeader 对 Header[1:9] 填充随机字节（DistIP/DistPort/SrcIP/SrcPort）
+func randomFillHeader(pbuf *packet.Buffer) {
+	rand.Read(pbuf.Head[1:9])
 }

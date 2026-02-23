@@ -19,7 +19,7 @@ func TestHandshake(t *testing.T) {
 			return
 		}
 		resp := NewOKResponse(uint16(req.Version % 100))
-		resp.WriteTo(pc2)
+		resp.WriteTo(pc2, pswd)
 	}()
 
 	_, err := Handshake(pc1, "test", "", pswd)
@@ -54,14 +54,15 @@ func TestHandshake_ReadError(t *testing.T) {
 	}
 }
 
-func TestHandshake_UnmarshalError(t *testing.T) {
+func TestHandshake_BadResponsePayload(t *testing.T) {
 	pswd := "testpswd"
 	pc1, pc2 := packet.Pipe()
 
 	go func() {
 		pc2.ReadBuffer()
+		// 发送未加密的无效 payload,解密会失败
 		pbuf := packet.NewBuffer()
-		pbuf.SetPayload([]byte("a/2"))
+		pbuf.SetPayload([]byte("invalid"))
 		pc2.WriteBuffer(pbuf)
 	}()
 
@@ -80,7 +81,7 @@ func TestHandshake_ServerError(t *testing.T) {
 		_, err := Accept(pc2, pswd)
 		if err != nil {
 			resp := NewErrResponse(-1, "handshake rejected")
-			resp.WriteTo(pc2)
+			resp.WriteTo(pc2, pswd)
 			return
 		}
 	}()
@@ -100,7 +101,7 @@ func TestHandshake_VersionMismatch(t *testing.T) {
 		var resp Response
 		resp.ErrCode = 0
 		resp.Version = packet.VERSION + 1
-		resp.WriteTo(pc2)
+		resp.WriteTo(pc2, pswd)
 	}()
 
 	_, err := Handshake(pc1, "test", "", pswd)
@@ -120,13 +121,13 @@ func TestAccept_ReadError(t *testing.T) {
 	}
 }
 
-func TestAccept_UnmarshalError(t *testing.T) {
+func TestAccept_DecryptError(t *testing.T) {
 	pswd := "testpswd"
 	pc1, pc2 := packet.Pipe()
 
 	go func() {
 		pbuf := packet.NewBuffer()
-		pbuf.SetPayload([]byte("a/2"))
+		pbuf.SetPayload([]byte("not-encrypted"))
 		pc1.WriteBuffer(pbuf)
 	}()
 
@@ -145,7 +146,7 @@ func TestAccept_VersionMismatch(t *testing.T) {
 		req.Version = packet.VERSION + 1
 		req.Timestamp = time.Now().UnixNano()
 		req.Sum = req.CalcSum(pswd)
-		req.WriteTo(pc1)
+		req.WriteTo(pc1, pswd)
 	}()
 
 	_, err := Accept(pc2, pswd)
@@ -159,12 +160,13 @@ func TestAccept_InvalidPassword(t *testing.T) {
 	badPswd := pswd + "_bad"
 	pc1, pc2 := packet.Pipe()
 
+	// 用正确密码加密(这样服务端能解密),但 Sum 用错误密码计算
 	go func() {
 		var req Request
 		req.Version = packet.VERSION
 		req.Timestamp = time.Now().UnixNano()
 		req.Sum = req.CalcSum(badPswd)
-		req.WriteTo(pc1)
+		req.WriteTo(pc1, pswd)
 	}()
 
 	_, err := Accept(pc2, pswd)
@@ -187,7 +189,7 @@ func TestAccept_InvalidDomain(t *testing.T) {
 			req.Domain = domain
 			req.Timestamp = time.Now().UnixNano()
 			req.Sum = req.CalcSum(pswd)
-			req.WriteTo(pc1)
+			req.WriteTo(pc1, pswd)
 		}()
 
 		_, err := Accept(pc2, pswd)
@@ -216,7 +218,7 @@ func TestAccept_TimestampExpired(t *testing.T) {
 		req.Domain = "test"
 		req.Timestamp = time.Now().Add(-10 * time.Minute).UnixNano()
 		req.Sum = req.CalcSum(pswd)
-		req.WriteTo(pc1)
+		req.WriteTo(pc1, pswd)
 	}()
 
 	_, err := Accept(pc2, pswd)

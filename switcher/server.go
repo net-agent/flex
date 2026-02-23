@@ -144,7 +144,7 @@ func (s *Server) Serve(l net.Listener) error {
 			return err
 		}
 
-		pconn := sched.NewFairConn(packet.NewWithConn(conn))
+		pconn := packet.NewWithConn(conn)
 		go s.ServeConn(pconn)
 	}
 }
@@ -169,7 +169,7 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 	req, err := admit.Accept(pc, s.password)
 	if err != nil {
 		resp := admit.NewErrResponse(-1, "handshake rejected")
-		resp.WriteTo(pc)
+		resp.WriteTo(pc, s.password)
 		s.logger.Warn("handshake failed", "error", err)
 		return err
 	}
@@ -179,7 +179,7 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 	err = s.registry.attach(ctx)
 	if err != nil {
 		resp := admit.NewErrResponse(-2, "handshake rejected")
-		resp.WriteTo(pc)
+		resp.WriteTo(pc, s.password)
 		s.logger.Warn("attach context failed", "domain", req.Domain, "error", err)
 		return err
 	}
@@ -187,11 +187,14 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 
 	// 第三步：应答客户端
 	resp := admit.NewOKResponse(ctx.IP)
-	err = resp.WriteTo(pc)
+	err = resp.WriteTo(pc, s.password)
 	if err != nil {
 		s.logger.Warn("response client failed", "domain", ctx.Domain, "mac", ctx.Mac, "error", err)
 		return errHandlePCWriteFailed
 	}
+
+	// 第四步：启用公平调度，用于数据路由阶段
+	ctx.setConn(sched.NewFairConn(pc))
 
 	// 记录服务时长
 	start := time.Now()

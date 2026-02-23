@@ -34,12 +34,12 @@ func Handshake(pc packet.Conn, domain, mac, password string) (uint16, error) {
 	req.Timestamp = time.Now().UnixNano()
 	req.Sum = req.CalcSum(password)
 
-	if err := req.WriteTo(pc); err != nil {
+	if err := req.WriteTo(pc, password); err != nil {
 		return 0, fmt.Errorf("handshake: write request: %w", err)
 	}
 
 	var resp Response
-	if err := resp.ReadFrom(pc); err != nil {
+	if err := resp.ReadFrom(pc, password); err != nil {
 		return 0, fmt.Errorf("handshake: read response: %w", err)
 	}
 
@@ -61,7 +61,7 @@ func Accept(pc packet.Conn, pswd string) (*Request, error) {
 	defer pc.SetReadTimeout(0)
 
 	req := &Request{}
-	if err := req.ReadFrom(pc); err != nil {
+	if err := req.ReadFrom(pc, pswd); err != nil {
 		return nil, fmt.Errorf("handshake: read request: %w", err)
 	}
 
