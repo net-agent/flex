@@ -74,9 +74,9 @@ func TestPingErr_Timeout(t *testing.T) {
 
 	waitUpgradeReady.Add(1)
 	go func() {
-		ip, _ := admit.Handshake(pc3, "test2", "", pswd)
+		ip, obfKey, _ := admit.Handshake(pc3, "test2", "", pswd)
 		waitUpgradeReady.Done()
-		n := node.New(pc3)
+		n := node.New(packet.NewObfuscatedConn(pc3, obfKey))
 		n.SetIP(ip)
 		n.SetDomain("test2")
 		n.Serve()

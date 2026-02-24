@@ -1,6 +1,7 @@
 package admit
 
 import (
+	"crypto/rand"
 	"encoding/json"
 
 	"github.com/net-agent/flex/v3/packet"
@@ -11,6 +12,7 @@ type Response struct {
 	ErrMsg  string
 	IP      uint16
 	Version int
+	Nonce   []byte
 }
 
 func NewOKResponse(ip uint16) *Response {
@@ -22,6 +24,10 @@ func NewErrResponse(code int, msg string) *Response {
 }
 
 func (resp *Response) WriteTo(pc packet.Conn, password string) error {
+	if len(resp.Nonce) == 0 {
+		resp.Nonce = make([]byte, 16)
+		rand.Read(resp.Nonce)
+	}
 	plaintext, err := json.Marshal(resp)
 	if err != nil {
 		return err

@@ -73,7 +73,8 @@ func newTestConnector() (connector func() (packet.Conn, error), getServers func(
 				return
 			}
 
-			server := New(c2)
+			obfKey := admit.DeriveObfuscateKey(testPassword, req.Nonce, resp.Nonce)
+			server := New(packet.NewObfuscatedConn(c2, obfKey))
 			server.SetIP(2)
 			server.SetDomain(req.Domain)
 			go server.Serve()

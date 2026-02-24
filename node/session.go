@@ -172,7 +172,7 @@ func (s *Session) Serve() error {
 			continue
 		}
 
-		ip, err := admit.Handshake(conn, s.config.Domain, s.config.Mac, s.config.Password)
+		ip, obfKey, err := admit.Handshake(conn, s.config.Domain, s.config.Mac, s.config.Password)
 		if err != nil {
 			conn.Close()
 			s.logger.Warn("handshake failed", "error", err, "retry_in", backoff)
@@ -185,7 +185,8 @@ func (s *Session) Serve() error {
 			continue
 		}
 
-		node := New(conn)
+		wrappedConn := packet.NewObfuscatedConn(conn, obfKey)
+		node := New(wrappedConn)
 		node.SetIP(ip)
 		node.SetDomain(s.config.Domain)
 

@@ -17,14 +17,14 @@ func initTestEnv(domain1, domain2 string) (*Server, *node.Node, *node.Node) {
 	go s.ServeConn(pc2)
 	go s.ServeConn(pc4)
 
-	ip1, _ := admit.Handshake(pc1, domain1, "", pswd)
-	node1 := node.New(pc1)
+	ip1, obfKey1, _ := admit.Handshake(pc1, domain1, "", pswd)
+	node1 := node.New(packet.NewObfuscatedConn(pc1, obfKey1))
 	node1.SetIP(ip1)
 	node1.SetDomain(domain1)
 	go node1.Serve()
 
-	ip2, _ := admit.Handshake(pc3, domain2, "", pswd)
-	node2 := node.New(pc3)
+	ip2, obfKey2, _ := admit.Handshake(pc3, domain2, "", pswd)
+	node2 := node.New(packet.NewObfuscatedConn(pc3, obfKey2))
 	node2.SetIP(ip2)
 	node2.SetDomain(domain2)
 	go node2.Serve()

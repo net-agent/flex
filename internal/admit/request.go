@@ -17,6 +17,7 @@ type Request struct {
 	Mac       string
 	Timestamp int64
 	Sum       string
+	Nonce     []byte
 }
 
 func (req *Request) CalcSum(password string) string {
@@ -30,6 +31,12 @@ func (req *Request) Marshal() ([]byte, error) {
 }
 
 func (req *Request) WriteTo(pc packet.Conn, password string) error {
+	if len(req.Nonce) == 0 {
+		req.Nonce = make([]byte, 16)
+		if _, err := rand.Read(req.Nonce); err != nil {
+			return err
+		}
+	}
 	plaintext, err := req.Marshal()
 	if err != nil {
 		return err

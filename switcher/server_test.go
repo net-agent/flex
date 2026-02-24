@@ -69,12 +69,12 @@ func TestHandlePCErr_DomainExist(t *testing.T) {
 	go s.ServeConn(pc4)
 
 	// 先正常接入一个domain=test的连接
-	ip, err := admit.Handshake(pc1, "test", "", pswd)
+	ip, obfKey, err := admit.Handshake(pc1, "test", "", pswd)
 	if err != nil {
 		t.Errorf("unexpected err=%v\n", err)
 		return
 	}
-	node := node.New(pc1)
+	node := node.New(packet.NewObfuscatedConn(pc1, obfKey))
 	node.SetIP(ip)
 	node.SetDomain("test")
 	var waitNodeRun sync.WaitGroup
@@ -85,7 +85,7 @@ func TestHandlePCErr_DomainExist(t *testing.T) {
 	}()
 
 	// 模拟重复接入一个domain=test的连接
-	_, err = admit.Handshake(pc3, "test", "", pswd)
+	_, _, err = admit.Handshake(pc3, "test", "", pswd)
 	if err == nil {
 		t.Error("unexpected nil err")
 		return

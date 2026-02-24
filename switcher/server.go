@@ -193,8 +193,10 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 		return errHandlePCWriteFailed
 	}
 
-	// 第四步：启用公平调度，用于数据路由阶段
-	ctx.setConn(sched.NewFairConn(pc))
+	// 第四步：用混淆密钥包装连接，再启用公平调度
+	obfKey := admit.DeriveObfuscateKey(s.password, req.Nonce, resp.Nonce)
+	wrappedPC := packet.NewObfuscatedConn(pc, obfKey)
+	ctx.setConn(sched.NewFairConn(wrappedPC))
 
 	// 记录服务时长
 	start := time.Now()
