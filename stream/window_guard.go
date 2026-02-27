@@ -1,0 +1,62 @@
+package stream
+
+import "sync/atomic"
+
+// WindowGuard encapsulates the flow control window for a stream.
+//
+// It manages a sliding window of available capacity: the writer consumes
+// capacity when sending data, and the reader releases capacity when ACKs
+// arrive from the remote peer. An event channel notifies blocked writers
+// that capacity has been restored.
+type WindowGuard struct {
+	size  int32
+	event chan struct{}
+}
+
+// NewWindowGuard creates a WindowGuard with the given initial window size
+// and event channel capacity.
+func NewWindowGuard(initialSize int32, eventChanCap int) *WindowGuard {
+	return &WindowGuard{
+		size:  initialSize,
+		event: make(chan struct{}, eventChanCap),
+	}
+}
+
+// Available returns the current remaining window capacity.
+func (w *WindowGuard) Available() int32 {
+	return atomic.LoadInt32(&w.size)
+}
+
+// Consume decreases the window by n after sending data.
+func (w *WindowGuard) Consume(n int32) {
+	atomic.AddInt32(&w.size, -n)
+}
+
+// Release increases the window by n when an ACK is received,
+// and sends a non-blocking signal on the event channel.
+func (w *WindowGuard) Release(n int32) {
+	atomic.AddInt32(&w.size, n)
+	select {
+	case w.event <- struct{}{}:
+	default:
+	}
+}
+
+// Event returns the channel that signals capacity restoration.
+// Writers should select on this channel when the window is exhausted.
+func (w *WindowGuard) Event() <-chan struct{} {
+	return w.event
+}
+
+// SetSize directly sets the window size. For testing only.
+func (w *WindowGuard) SetSize(n int32) {
+	atomic.StoreInt32(&w.size, n)
+}
+
+// Signal manually sends an event. For testing only.
+func (w *WindowGuard) Signal() {
+	select {
+	case w.event <- struct{}{}:
+	default:
+	}
+}

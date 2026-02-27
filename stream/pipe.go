@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"io"
 	"log"
 
 	"github.com/net-agent/flex/v3/packet"
@@ -15,7 +16,7 @@ func Pipe() (*Stream, *Stream) {
 
 		go routeCmd(s, cmdCh)
 		go routeAck(s, ackCh)
-		readAndRoutePbuf(cmdCh, ackCh, pc)
+		demuxPackets(cmdCh, ackCh, pc)
 	}
 
 	s1 := NewDialStream(pc1, "test1", 1, 1, "test2", 2, 2, 0)
@@ -27,34 +28,43 @@ func Pipe() (*Stream, *Stream) {
 	return s1, s2
 }
 
-func routeCmd(s *Stream, ch chan *packet.Buffer) {
+func routeCmd(h Handler, ch chan *packet.Buffer) {
 	for pbuf := range ch {
 		switch pbuf.Cmd() {
 		case packet.CmdPushStreamData:
-			s.HandleCmdPushStreamData(pbuf)
+			h.HandleCmdPushStreamData(pbuf)
 		case packet.CmdCloseStream:
-			s.HandleCmdCloseStream(pbuf)
+			h.HandleCmdCloseStream(pbuf)
 		default:
 			log.Println("unexpected pbuf cmd:", pbuf.HeaderString())
 		}
 	}
 }
-func routeAck(s *Stream, ch chan *packet.Buffer) {
+func routeAck(h Handler, ch chan *packet.Buffer) {
 	for pbuf := range ch {
 		switch pbuf.Cmd() {
 		case packet.AckPushStreamData:
-			s.HandleAckPushStreamData(pbuf)
+			h.HandleAckPushStreamData(pbuf)
 		case packet.AckCloseStream:
-			s.HandleAckCloseStream(pbuf)
+			h.HandleAckCloseStream(pbuf)
 		default:
 			log.Println("unexpected pbuf ack", pbuf.HeaderString())
 		}
 	}
 }
-func readAndRoutePbuf(cmdCh, ackCh chan *packet.Buffer, pc packet.Reader) {
+func demuxPackets(cmdCh, ackCh chan *packet.Buffer, pc packet.Reader) {
+	if cmdCh == nil || ackCh == nil || pc == nil {
+		return
+	}
+	defer close(cmdCh)
+	defer close(ackCh)
+
 	for {
 		pbuf, err := pc.ReadBuffer()
 		if err != nil {
+			if err != io.EOF {
+				log.Println("demuxPackets: read error:", err)
+			}
 			return
 		}
 		if pbuf.IsACK() {

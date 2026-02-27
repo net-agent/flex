@@ -12,48 +12,48 @@ var (
 	ErrSendDataOversize = errors.New("send data oversize")
 )
 
-type Sender struct {
+type sender struct {
 	packet.Writer
 
-	dataPbuf     *packet.Buffer
-	dataAckPbuf  *packet.Buffer
-	closePbuf    *packet.Buffer
-	closeAckPbuf *packet.Buffer
+	dataBuf     *packet.Buffer
+	dataAckBuf  *packet.Buffer
+	closeBuf    *packet.Buffer
+	closeAckBuf *packet.Buffer
 
-	dataMut sync.Mutex
-	ackMut  sync.Mutex
+	dataMu sync.Mutex
+	ackMu  sync.Mutex
 
 	counter *int32
 }
 
-func NewSender(w packet.Writer, counter *int32) *Sender {
-	s := &Sender{}
+func newSender(w packet.Writer, counter *int32) *sender {
+	s := &sender{}
 
 	s.Writer = w
-	s.dataPbuf = packet.NewBufferWithCmd(packet.CmdPushStreamData)
-	s.dataAckPbuf = packet.NewBufferWithCmd(packet.AckPushStreamData)
-	s.closePbuf = packet.NewBufferWithCmd(packet.CmdCloseStream)
-	s.closeAckPbuf = packet.NewBufferWithCmd(packet.AckCloseStream)
+	s.dataBuf = packet.NewBufferWithCmd(packet.CmdPushStreamData)
+	s.dataAckBuf = packet.NewBufferWithCmd(packet.AckPushStreamData)
+	s.closeBuf = packet.NewBufferWithCmd(packet.CmdCloseStream)
+	s.closeAckBuf = packet.NewBufferWithCmd(packet.AckCloseStream)
 	s.counter = counter
 
 	return s
 }
 
-func (s *Sender) SetSrc(ip, port uint16) {
-	s.dataPbuf.SetSrc(ip, port)
-	s.dataAckPbuf.SetSrc(ip, port)
-	s.closePbuf.SetSrc(ip, port)
-	s.closeAckPbuf.SetSrc(ip, port)
+func (s *sender) SetSrc(ip, port uint16) {
+	s.dataBuf.SetSrc(ip, port)
+	s.dataAckBuf.SetSrc(ip, port)
+	s.closeBuf.SetSrc(ip, port)
+	s.closeAckBuf.SetSrc(ip, port)
 }
 
-func (s *Sender) SetDist(ip, port uint16) {
-	s.dataPbuf.SetDist(ip, port)
-	s.dataAckPbuf.SetDist(ip, port)
-	s.closePbuf.SetDist(ip, port)
-	s.closeAckPbuf.SetDist(ip, port)
+func (s *sender) SetDst(ip, port uint16) {
+	s.dataBuf.SetDist(ip, port)
+	s.dataAckBuf.SetDist(ip, port)
+	s.closeBuf.SetDist(ip, port)
+	s.closeAckBuf.SetDist(ip, port)
 }
 
-func (s *Sender) SendCmdData(buf []byte) error {
+func (s *sender) SendData(buf []byte) error {
 	if len(buf) == 0 {
 		return nil
 	}
@@ -61,34 +61,34 @@ func (s *Sender) SendCmdData(buf []byte) error {
 		return ErrSendDataOversize
 	}
 
-	s.dataMut.Lock()
-	defer s.dataMut.Unlock()
-	if err := s.dataPbuf.SetPayload(buf); err != nil {
+	s.dataMu.Lock()
+	defer s.dataMu.Unlock()
+	if err := s.dataBuf.SetPayload(buf); err != nil {
 		return err
 	}
 	atomic.AddInt32(s.counter, 1)
-	return s.WriteBuffer(s.dataPbuf)
+	return s.WriteBuffer(s.dataBuf)
 }
 
-// SendCmdDataAck 回复dataAck，调用频率很高，且需要保证线程安全
-func (s *Sender) SendCmdDataAck(n uint16) error {
-	s.ackMut.Lock()
-	defer s.ackMut.Unlock()
-	s.dataAckPbuf.SetDataACKSize(n)
+// SendDataAck 回复dataAck，调用频率很高，且需要保证线程安全
+func (s *sender) SendDataAck(n uint16) error {
+	s.ackMu.Lock()
+	defer s.ackMu.Unlock()
+	s.dataAckBuf.SetDataACKSize(n)
 	atomic.AddInt32(s.counter, 1)
-	return s.WriteBuffer(s.dataAckPbuf)
+	return s.WriteBuffer(s.dataAckBuf)
 }
 
-func (s *Sender) SendCmdClose() error {
-	s.dataMut.Lock()
-	defer s.dataMut.Unlock()
+func (s *sender) SendClose() error {
+	s.dataMu.Lock()
+	defer s.dataMu.Unlock()
 	atomic.AddInt32(s.counter, 1)
-	return s.WriteBuffer(s.closePbuf)
+	return s.WriteBuffer(s.closeBuf)
 }
 
-func (s *Sender) SendCmdCloseAck() error {
-	s.ackMut.Lock()
-	defer s.ackMut.Unlock()
+func (s *sender) SendCloseAck() error {
+	s.ackMu.Lock()
+	defer s.ackMu.Unlock()
 	atomic.AddInt32(s.counter, 1)
-	return s.WriteBuffer(s.closeAckPbuf)
+	return s.WriteBuffer(s.closeAckBuf)
 }

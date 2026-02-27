@@ -2,6 +2,7 @@ package stream
 
 import (
 	"errors"
+	"net"
 	"time"
 )
 
@@ -17,11 +18,15 @@ func (s *Stream) Close() error {
 
 	// 2. Mark Write as closed locally
 	if err := s.CloseWrite(); err != nil {
+		// Second call to Close: return net.ErrClosed per net.Conn contract (P3 fix)
+		if errors.Is(err, ErrWriterIsClosed) {
+			return net.ErrClosed
+		}
 		return err // defer will run CloseRead
 	}
 
 	// 3. Notify Remote
-	if err := s.SendCmdClose(); err != nil {
+	if err := s.sender.SendClose(); err != nil {
 		return err // defer will run CloseRead
 	}
 
@@ -35,30 +40,35 @@ func (s *Stream) Close() error {
 }
 
 func (s *Stream) CloseRead() error {
-	s.rmut.Lock()
-	defer s.rmut.Unlock()
+	s.rchanMu.Lock()
+	defer s.rchanMu.Unlock()
 
-	if s.rclosed {
+	if s.readClosed {
 		return ErrReaderIsClosed
 	}
 
-	s.rclosed = true
-	close(s.bytesChan)
+	s.readClosed = true
+	close(s.recvQueue)
 
 	return nil
 }
 
-// CloseWrite 设置写状态为不可写，并且告诉对端
+// CloseWrite sets the write state to closed and signals blocked Write operations
+// to wake up immediately via closeCh.
 func (s *Stream) CloseWrite() error {
-	s.wmut.Lock()
-	defer s.wmut.Unlock()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 
-	if s.wclosed {
+	if s.writeClosed {
 		return ErrWriterIsClosed
 	}
 
-	s.wclosed = true
+	s.writeClosed = true
 	s.state.Closed = time.Now()
 	s.state.IsClosed = true
+
+	// Signal blocked Write to wake up immediately (P1 fix)
+	close(s.closeCh)
+
 	return nil
 }

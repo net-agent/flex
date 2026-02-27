@@ -11,38 +11,54 @@ type State struct {
 	Created  time.Time
 	Closed   time.Time
 
-	Direction    int
+	Direction    Direction
 	LocalDomain  string
 	LocalAddr    Addr
 	RemoteDomain string
 	RemoteAddr   Addr
 
-	WritedBufferCount  int32
-	HandledBufferCount int32
-	HandledDataSize    int64
-	HandledDataAckSum  int64
-	SendDataAckSum     int64
+	SentBufferCount int32
+	RecvBufferCount int32
+	RecvDataSize    int64
+	RecvAckTotal    int64
+	SentAckTotal    int64
 
-	ConnReadSize  int64
-	ConnWriteSize int64
+	BytesRead    int64
+	BytesWritten int64
 }
 
 func (st *State) String() string {
-	// 收到数据包的总大小 -> 被读取出去的数据总大小 -> 应答给对端ack的总和 -> 写出去的数据总大小 -> 对端应答ack的总和
-	return fmt.Sprintf("HandledDataSize=%v ConnReadSize=%v SendDataAckSum=%v ConnWriteSize=%v HandledDataAckSum=%v",
-		st.HandledDataSize, st.ConnReadSize, st.SendDataAckSum, st.ConnWriteSize, st.HandledDataAckSum,
+	return fmt.Sprintf("RecvDataSize=%v BytesRead=%v SentAckTotal=%v BytesWritten=%v RecvAckTotal=%v",
+		st.RecvDataSize, st.BytesRead, st.SentAckTotal, st.BytesWritten, st.RecvAckTotal,
 	)
 }
 
 func (st *State) Local() string {
 	if st.LocalDomain == "" {
-		return st.LocalAddr.str
+		return st.LocalAddr.text
 	}
 	return fmt.Sprintf("%v:%v", st.LocalDomain, st.LocalAddr.Port)
 }
 func (st *State) Remote() string {
 	if st.RemoteDomain == "" {
-		return st.RemoteAddr.str
+		return st.RemoteAddr.text
 	}
 	return fmt.Sprintf("%v:%v", st.RemoteDomain, st.RemoteAddr.Port)
+}
+
+type Addr struct {
+	network string
+	text    string
+	IP      uint16
+	Port    uint16
+}
+
+func (a *Addr) String() string  { return a.text }
+func (a *Addr) Network() string { return a.network }
+
+func (a *Addr) SetNetwork(name string) { a.network = name }
+func (a *Addr) SetIPPort(ip, port uint16) {
+	a.text = fmt.Sprintf("%v:%v", ip, port)
+	a.IP = ip
+	a.Port = port
 }

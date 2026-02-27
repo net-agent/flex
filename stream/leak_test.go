@@ -1,23 +1,18 @@
 package stream
 
 import (
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/net-agent/flex/v3/packet"
+	"github.com/stretchr/testify/assert"
 )
 
-type MockWriter struct{}
-
-func (m *MockWriter) WriteBuffer(buf *packet.Buffer) error { return nil }
-func (m *MockWriter) SetWriteTimeout(dur time.Duration)    {}
-
 func TestCloseLeakOnTimeout(t *testing.T) {
-	s := New(&MockWriter{}, 0)
-	// Reduce timeout for testing
-	s.closeAckTimeout = time.Millisecond * 100
+	s := New(&mockWriter{}, 0)
+	s.closeAckTimeout = testMedTimeout
 
-	// Start a consumer that reads
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -25,53 +20,67 @@ func TestCloseLeakOnTimeout(t *testing.T) {
 		for {
 			_, err := s.Read(buf)
 			if err != nil {
-				// We expect an error (EOF or closed)
 				return
 			}
 		}
 	}()
 
-	// Perform Close.
-	// Since MockWriter doesn't reply with ACK, this WILL timeout.
 	startTime := time.Now()
 	err := s.Close()
 	dur := time.Since(startTime)
 
-	if err == nil {
-		t.Error("expected timeout error, got nil")
-	}
+	assert.NotNil(t, err, "expected timeout error")
+	assert.GreaterOrEqual(t, dur, testMedTimeout, "close should wait for timeout")
 
-	// Verify durability
-	if dur < time.Millisecond*100 {
-		t.Errorf("expected close to wait for timeout, but returned in %v", dur)
-	}
-
-	// MOST IMPORTANT: Verify consumer unblocked
 	select {
 	case <-done:
-		// Success: Read unblocked meaning bytesChan was closed
-	case <-time.After(time.Millisecond * 200):
-		t.Error("consumer goroutine leaked! Read() is still blocked")
+		// consumer goroutine exited normally
+	case <-time.After(testLongTimeout):
+		t.Error("consumer goroutine leaked: Read() is still blocked")
 	}
 }
 
 func TestConcurrentClose(t *testing.T) {
-	s := New(&MockWriter{}, 0)
-	s.closeAckTimeout = time.Millisecond * 50
+	s := New(&mockWriter{}, 0)
+	s.closeAckTimeout = testShortTimeout
 
-	// Simulate concurrent close
-	go s.Close()
-	go s.Close()
+	var wg sync.WaitGroup
 
-	// Simulate concurrent passive close
-	go s.HandleCmdCloseStream(packet.NewBuffer())
-
-	// Simulate late ACK
+	wg.Add(1)
 	go func() {
-		time.Sleep(time.Millisecond * 10)
+		defer wg.Done()
+		s.Close()
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.Close()
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		s.HandleCmdCloseStream(packet.NewBuffer())
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		time.Sleep(10 * time.Millisecond)
 		s.HandleAckCloseStream(packet.NewBuffer())
 	}()
 
-	time.Sleep(time.Millisecond * 200)
-	// If no panic, we good.
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// all goroutines exited — no panic, no deadlock
+	case <-time.After(2 * time.Second):
+		t.Fatal("TestConcurrentClose deadlocked")
+	}
 }
