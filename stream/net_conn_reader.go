@@ -9,7 +9,7 @@ func (s *Stream) Read(dist []byte) (int, error) {
 	s.readMu.Lock()
 	defer s.readMu.Unlock()
 
-	if len(s.readBuf) == 0 {
+	for len(s.readBuf) == 0 {
 		select {
 		case buf, ok := <-s.recvQueue:
 			if !ok {
@@ -18,7 +18,15 @@ func (s *Stream) Read(dist []byte) (int, error) {
 			s.readBuf = buf
 
 		case <-s.readDeadline.Done():
-			return 0, ErrTimeout
+			// Could be a real timeout OR a deadline reset (Set closed old channel).
+			// Re-read Done(): if the NEW channel is still closed → real timeout.
+			// If the new channel is open → deadline was reset, retry.
+			select {
+			case <-s.readDeadline.Done():
+				return 0, ErrTimeout
+			default:
+				continue
+			}
 		}
 	}
 

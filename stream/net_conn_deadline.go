@@ -17,6 +17,10 @@ func (e *timeoutError) Temporary() bool { return true }
 // ErrTimeout is the sentinel timeout error returned when a deadline expires.
 var ErrTimeout error = &timeoutError{}
 
+// neverCloseCh is a shared channel that is never closed.
+// Used by Done() when no deadline is set, avoiding per-call allocation.
+var neverCloseCh = make(chan struct{})
+
 // DeadlineGuard manages a deadline for Read or Write operations.
 //
 // It uses a channel-based approach: when the deadline expires, the internal
@@ -28,21 +32,24 @@ var ErrTimeout error = &timeoutError{}
 //     allowing the stream to be used again.
 //   - Past time: Setting a deadline in the past immediately closes the channel.
 //   - Zero time: Cancels the deadline (Done() returns a never-closing channel).
+//   - Interrupt: Setting a new deadline closes the old channel, waking up any
+//     blocked select. Callers must re-check Done() to distinguish a real
+//     timeout from a deadline reset.
 type DeadlineGuard struct {
 	mu     sync.Mutex
-	doneCh chan struct{} // closed when deadline expires; nil means no deadline
+	doneCh chan struct{} // closed when deadline expires or replaced; nil means no deadline
 	timer  *time.Timer
 }
 
 // Done returns a channel that is closed when the deadline expires.
-// If no deadline is set, returns a channel that never closes.
+// If no deadline is set, returns a shared never-closing channel.
 // This method is safe to call concurrently.
 func (guard *DeadlineGuard) Done() <-chan struct{} {
 	guard.mu.Lock()
 	ch := guard.doneCh
 	guard.mu.Unlock()
 	if ch == nil {
-		return make(chan struct{}) // never closes
+		return neverCloseCh
 	}
 	return ch
 }
@@ -52,8 +59,9 @@ func (guard *DeadlineGuard) Done() <-chan struct{} {
 //   - Past time: immediately expires. Done() channel is closed right away.
 //   - Future time: starts a timer. Done() channel will be closed when the timer fires.
 //
-// Each call to Set creates a new channel, making the deadline reversible.
-// After a deadline expires, calling Set with a future time restores usability.
+// Each call to Set closes the previous channel (if any), waking up blocked
+// selects. Callers should re-check Done() after waking to distinguish a real
+// timeout from a deadline reset.
 func (guard *DeadlineGuard) Set(t time.Time) {
 	guard.mu.Lock()
 	defer guard.mu.Unlock()
@@ -64,8 +72,13 @@ func (guard *DeadlineGuard) Set(t time.Time) {
 		guard.timer = nil
 	}
 
+	// Close old channel to wake up any blocked select.
+	// This is safe even if the channel was already closed (e.g., expired deadline),
+	// because we use closeSafe.
+	guard.closePrev()
+
 	if t.IsZero() {
-		// Cancel deadline: create nil doneCh (Done() will return never-closing channel)
+		// Cancel deadline: nil doneCh → Done() returns neverCloseCh
 		guard.doneCh = nil
 		return
 	}
@@ -91,6 +104,20 @@ func (guard *DeadlineGuard) Set(t time.Time) {
 			close(ch)
 		}
 	})
+}
+
+// closePrev closes the previous doneCh if it exists and hasn't been closed yet.
+// Must be called with guard.mu held.
+func (guard *DeadlineGuard) closePrev() {
+	if guard.doneCh == nil {
+		return
+	}
+	select {
+	case <-guard.doneCh:
+		// Already closed, nothing to do
+	default:
+		close(guard.doneCh)
+	}
 }
 
 func (s *Stream) SetDeadline(t time.Time) error {
