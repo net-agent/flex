@@ -16,10 +16,12 @@ type Dispatcher struct {
 	cmdHandlers  map[byte]func(*packet.Buffer)
 	dataHandlers map[byte]func(*packet.Buffer)
 	logger       *slog.Logger
+	domain       string // for tracing
 }
 
 func (d *Dispatcher) init(host *Node) {
 	d.logger = host.logger
+	d.domain = host.domain
 	d.cmdHandlers = map[byte]func(*packet.Buffer){
 		packet.AckPushStreamData: host.StreamHub.handleAckPushStreamData,
 		packet.CmdOpenStream:     host.ListenHub.handleCmdOpenStream,

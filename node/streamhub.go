@@ -36,6 +36,23 @@ func (hub *StreamHub) attachStream(s *stream.Stream, sid uint64) error {
 		// 已经存在还未释放的stream
 		return ErrSidIsAttached
 	}
+
+	// 当 stream 双向都关闭时自动从 hub 中移除，并回收资源。
+	s.SetOnDetach(func() {
+		// Guard against SID reuse: only remove if this SID still points to the same stream.
+		if cur, ok := hub.streams.Load(sid); ok && cur == s {
+			hub.streams.Delete(sid)
+		}
+		if hub.portm != nil {
+			if port := s.GetBoundPort(); port > 0 {
+				if err := hub.portm.Release(port); err != nil && hub.host != nil {
+					hub.host.logger.Warn("release port failed", "port", port, "error", err)
+				}
+			}
+		}
+		hub.recordClosedState(s.GetState())
+	})
+
 	return nil
 }
 
@@ -110,7 +127,7 @@ func (hub *StreamHub) handleCmdPushStreamData(pbuf *packet.Buffer) {
 	c, err := hub.getStream(pbuf.SID())
 	if err != nil {
 		if hub.host != nil {
-			hub.host.logger.Warn("push data: stream not found, possibly closed", "sid", pbuf.SID())
+			hub.host.logger.Warn("push data: stream not found, possibly closed", "sid", pbuf.SID(), "header", pbuf.HeaderString())
 		}
 		return
 	}
@@ -123,7 +140,7 @@ func (hub *StreamHub) handleAckPushStreamData(pbuf *packet.Buffer) {
 	c, err := hub.getStream(pbuf.SID())
 	if err != nil {
 		if hub.host != nil {
-			hub.host.logger.Warn("push data ack: stream not found, possibly closed", "sid", pbuf.SID())
+			hub.host.logger.Warn("push data ack: stream not found, possibly closed", "sid", pbuf.SIDStr())
 		}
 		return
 	}
@@ -131,25 +148,26 @@ func (hub *StreamHub) handleAckPushStreamData(pbuf *packet.Buffer) {
 }
 
 func (hub *StreamHub) handleCmdCloseStream(pbuf *packet.Buffer) {
-	hub.closeStream(pbuf, func(s *stream.Stream) { s.HandleCmdCloseStream(pbuf) })
+	c, err := hub.getStream(pbuf.SID())
+	if err != nil {
+		// Stream already detached — still reply CloseAck so remote doesn't hang
+		if hub.host != nil {
+			ack := packet.NewBufferWithCmd(packet.AckCloseStream)
+			ack.SetSrc(pbuf.DistIP(), pbuf.DistPort())
+			ack.SetDist(pbuf.SrcIP(), pbuf.SrcPort())
+			hub.host.WriteBuffer(ack)
+		}
+		return
+	}
+	c.HandleCmdCloseStream(pbuf)
 }
 
 func (hub *StreamHub) handleAckCloseStream(pbuf *packet.Buffer) {
-	hub.closeStream(pbuf, func(s *stream.Stream) { s.HandleAckCloseStream(pbuf) })
-}
-
-func (hub *StreamHub) closeStream(pbuf *packet.Buffer, handle func(*stream.Stream)) {
-	s, err := hub.detachStream(pbuf.SID())
+	c, err := hub.getStream(pbuf.SID())
 	if err != nil {
 		return
 	}
-
-	handle(s)
-	if err := hub.portm.Release(s.GetUsedPort()); err != nil {
-		hub.host.logger.Warn("release port failed", "port", s.GetUsedPort(), "error", err)
-	}
-
-	hub.recordClosedState(s.GetState())
+	c.HandleAckCloseStream(pbuf)
 }
 
 func (hub *StreamHub) recordClosedState(state *stream.State) {

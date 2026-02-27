@@ -128,6 +128,7 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 		}
 		s := res.Val
 		s.SetRemoteDomain(remoteDomain)
+		srcPort = 0 // 端口所有权转移给stream，阻止defer释放
 		return s, nil
 	case <-time.After(d.timeout):
 		return nil, pending.ErrTimeout

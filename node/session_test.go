@@ -73,8 +73,7 @@ func newTestConnector() (connector func() (packet.Conn, error), getServers func(
 				return
 			}
 
-			obfKey := admit.DeriveObfuscateKey(testPassword, req.Nonce, resp.Nonce)
-			server := New(packet.NewObfuscatedConn(c2, obfKey))
+			server := New(c2)
 			server.SetIP(2)
 			server.SetDomain(req.Domain)
 			go server.Serve()
@@ -546,7 +545,12 @@ func TestSessionBridgeListenerDone(t *testing.T) {
 	// 先关闭 sl.done，再送入 stream
 	close(sl.done)
 	st1, st2 := stream.Pipe()
-	defer st2.Close()
+	// st2 在后台响应 CmdClose，避免 st1.Close() 等待 CloseAck 超时
+	go func() {
+		buf := make([]byte, 1)
+		st2.Read(buf)
+		st2.CloseWrite()
+	}()
 	fl.ch <- st1
 
 	select {
@@ -576,7 +580,12 @@ func TestSessionBridgeSessionDone(t *testing.T) {
 	// 先关闭 session.done，再送入 stream
 	s.Close()
 	st1, st2 := stream.Pipe()
-	defer st2.Close()
+	// st2 在后台响应 CmdClose，避免 st1.Close() 等待 CloseAck 超时
+	go func() {
+		buf := make([]byte, 1)
+		st2.Read(buf)
+		st2.CloseWrite()
+	}()
 	fl.ch <- st1
 
 	select {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/net-agent/flex/v3/internal/admit"
+	"github.com/net-agent/flex/v3/internal/sched"
 	"github.com/net-agent/flex/v3/packet"
 	"github.com/net-agent/flex/v3/stream"
 )
@@ -32,6 +33,8 @@ type Session struct {
 	connector ConnectFunc
 	config    SessionConfig
 
+	enableFairConn bool
+
 	mu        sync.RWMutex
 	node      *Node
 	listeners map[uint16]*SessionListener
@@ -47,15 +50,18 @@ type Session struct {
 
 func NewSession(connector ConnectFunc, cfg SessionConfig) *Session {
 	return &Session{
-		connector: connector,
-		config:    cfg,
-		listeners: make(map[uint16]*SessionListener),
-		ready:     make(chan struct{}),
-		trigger:   make(chan struct{}),
-		done:      make(chan struct{}),
-		logger:    slog.Default(),
+		connector:      connector,
+		config:         cfg,
+		enableFairConn: true,
+		listeners:      make(map[uint16]*SessionListener),
+		ready:          make(chan struct{}),
+		trigger:        make(chan struct{}),
+		done:           make(chan struct{}),
+		logger:         slog.Default(),
 	}
 }
+
+func (s *Session) SetEnableFairConn(v bool) { s.enableFairConn = v }
 
 func (s *Session) SetLogger(l *slog.Logger) {
 	if l != nil {
@@ -172,7 +178,7 @@ func (s *Session) Serve() error {
 			continue
 		}
 
-		ip, obfKey, err := admit.Handshake(conn, s.config.Domain, s.config.Mac, s.config.Password)
+		ip, err := admit.Handshake(conn, s.config.Domain, s.config.Mac, s.config.Password)
 		if err != nil {
 			conn.Close()
 			s.logger.Warn("handshake failed", "error", err, "retry_in", backoff)
@@ -185,7 +191,10 @@ func (s *Session) Serve() error {
 			continue
 		}
 
-		wrappedConn := packet.NewObfuscatedConn(conn, obfKey)
+		var wrappedConn packet.Conn = conn
+		if s.enableFairConn {
+			wrappedConn = sched.NewFairConn(wrappedConn)
+		}
 		node := New(wrappedConn)
 		node.SetIP(ip)
 		node.SetDomain(s.config.Domain)
