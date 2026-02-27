@@ -171,6 +171,14 @@ func (d *Dialer) handleAckOpenStream(pbuf *packet.Buffer) {
 
 	err = d.pending.Complete(evKey, s, nil)
 	if err != nil {
+		if errors.Is(err, pending.ErrNotFound) {
+			// Dial caller already timed out/cancelled. Reclaim the stream immediately
+			// to avoid orphaned entries staying in StreamHub.
+			_ = s.CloseRead()
+			_ = s.CloseWrite()
+			d.host.logger.Warn("late open-stream ack discarded", "sid", pbuf.SIDStr())
+			return
+		}
 		d.host.logger.Warn("dispatch ack failed", "error", err)
 	}
 }

@@ -41,14 +41,15 @@ func (s *Stream) Close() error {
 
 func (s *Stream) CloseRead() error {
 	s.rchanMu.Lock()
-	defer s.rchanMu.Unlock()
-
 	if s.readClosed {
+		s.rchanMu.Unlock()
 		return ErrReaderIsClosed
 	}
 
 	s.readClosed = true
 	close(s.recvQueue)
+	s.rchanMu.Unlock()
+	s.markReadClosed()
 
 	return nil
 }
@@ -64,8 +65,10 @@ func (s *Stream) CloseWrite() error {
 	}
 
 	s.writeClosed = true
+	s.stateMu.Lock()
 	s.state.Closed = time.Now()
 	s.state.IsClosed = true
+	s.stateMu.Unlock()
 
 	// Signal blocked Write to wake up immediately (P1 fix)
 	close(s.closeCh)
@@ -73,6 +76,7 @@ func (s *Stream) CloseWrite() error {
 
 	// Best effort: also interrupt an in-flight blocking send.
 	s.sender.InterruptWrite()
+	s.markWriteClosed()
 
 	return nil
 }

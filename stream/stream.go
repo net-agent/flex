@@ -30,9 +30,10 @@ var (
 )
 
 type Stream struct {
-	sender *sender
-	state  *State
-	boundPort uint16 // 占用的端口。应当在Dial时进行绑定
+	sender    *sender
+	state     *State
+	stateMu   sync.RWMutex // protects non-atomic state fields
+	boundPort uint16       // 占用的端口。应当在Dial时进行绑定
 
 	// for reader
 	rchanMu      sync.RWMutex // 保护 recvQueue 的生命周期（RLock=写入chan, Lock=close chan）
@@ -56,13 +57,39 @@ type Stream struct {
 	// variables
 	recvPushTimeout time.Duration
 
+	// lifecycle hook: called once when both read+write are closed.
+	closeMask  atomic.Uint32
+	detachDone atomic.Bool
+	onDetachMu sync.RWMutex
+	onDetachFn func()
+
 	logger *slog.Logger
 }
 
 func (s *Stream) GetState() *State {
-	state := &State{}
-	*state = *s.state
-	return state
+	st := &State{}
+
+	s.stateMu.RLock()
+	st.Index = s.state.Index
+	st.IsClosed = s.state.IsClosed
+	st.Created = s.state.Created
+	st.Closed = s.state.Closed
+	st.Direction = s.state.Direction
+	st.LocalDomain = s.state.LocalDomain
+	st.LocalAddr = s.state.LocalAddr
+	st.RemoteDomain = s.state.RemoteDomain
+	st.RemoteAddr = s.state.RemoteAddr
+	s.stateMu.RUnlock()
+
+	st.SentBufferCount = atomic.LoadInt32(&s.state.SentBufferCount)
+	st.RecvBufferCount = atomic.LoadInt32(&s.state.RecvBufferCount)
+	st.RecvDataSize = atomic.LoadInt64(&s.state.RecvDataSize)
+	st.RecvAckTotal = atomic.LoadInt64(&s.state.RecvAckTotal)
+	st.SentAckTotal = atomic.LoadInt64(&s.state.SentAckTotal)
+	st.BytesRead = atomic.LoadInt64(&s.state.BytesRead)
+	st.BytesWritten = atomic.LoadInt64(&s.state.BytesWritten)
+
+	return st
 }
 
 func (s *Stream) String() string {
@@ -132,9 +159,13 @@ func (s *Stream) GetReadWriteSize() (int64, int64) {
 	return atomic.LoadInt64(&s.state.BytesRead), atomic.LoadInt64(&s.state.BytesWritten)
 }
 
-func (s *Stream) SetBoundPort(port uint16)       { s.boundPort = port }
-func (s *Stream) GetBoundPort() uint16           { return s.boundPort }
-func (s *Stream) SetRemoteDomain(domain string) { s.state.RemoteDomain = domain }
+func (s *Stream) SetBoundPort(port uint16) { s.boundPort = port }
+func (s *Stream) GetBoundPort() uint16     { return s.boundPort }
+func (s *Stream) SetRemoteDomain(domain string) {
+	s.stateMu.Lock()
+	s.state.RemoteDomain = domain
+	s.stateMu.Unlock()
+}
 func (s *Stream) SetLogger(l *slog.Logger) {
 	if l != nil {
 		s.logger = l

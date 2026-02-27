@@ -40,8 +40,8 @@ func TestServe(t *testing.T) {
 
 	<-time.After(time.Millisecond * 50)
 
-	assert.True(t, n1.Dispatcher.running, "node1 running state should be true")
-	assert.True(t, n2.Dispatcher.running, "node2 running state should be true")
+	assert.True(t, n1.Dispatcher.isRunning(), "node1 running state should be true")
+	assert.True(t, n2.Dispatcher.isRunning(), "node2 running state should be true")
 }
 
 func TestAttachStream(t *testing.T) {

@@ -14,6 +14,17 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func waitForCondition(t *testing.T, timeout time.Duration, cond func() bool, msg string) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	assert.Fail(t, msg)
+}
+
 func TestGetStreamBySID(t *testing.T) {
 	hub := &StreamHub{}
 	var err error
@@ -125,14 +136,20 @@ func TestStreamList(t *testing.T) {
 	close(testStep1Done) // 关闭后，所有等待的地方都会收到消息，进入下一阶段
 
 	closeWaiter.Wait()
-	// echo 侧的 c.Close() 是异步的（半关闭后 CloseRead 中触发 detach），等待其完成
-	time.Sleep(500 * time.Millisecond)
+	// 关闭后 StreamHub 会保留一段时间用于消化晚到包，等待延迟清理完成。
+	waitForCondition(t, 5*time.Second, func() bool {
+		return len(n1.GetStreamStates()) == 0 && len(n2.GetStreamStates()) == 0
+	}, "all streams should be detached after retention period")
+
 	list1 = n1.GetStreamStates()
 	list2 = n2.GetStreamStates()
 	assert.Equal(t, len(list1), len(list2))
 	assert.Equal(t, len(list1), 0)
 	log.Println("len(list1)=", len(list1))
 
+	waitForCondition(t, 5*time.Second, func() bool {
+		return len(n1.GetClosedStates(0)) == times
+	}, "closed states should be eventually recorded")
 	closed1 = n1.GetClosedStates(0)
 	assert.Equal(t, times, len(closed1))
 
@@ -161,10 +178,21 @@ func TestAttachStream_OnDetachReleasesPortAndRecordsState(t *testing.T) {
 	err = s.CloseWrite()
 	assert.Nil(t, err)
 
+	waitForCondition(t, 5*time.Second, func() bool {
+		_, err = hub.getStream(sid)
+		return err == errStreamNotFound
+	}, "stream should be auto-detached on full close")
 	_, err = hub.getStream(sid)
 	assert.Equal(t, errStreamNotFound, err, "stream should be auto-detached on full close")
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		return pool.InUse() == 0
+	}, "bound port should be released on detach")
 	assert.Equal(t, 0, pool.InUse(), "bound port should be released on detach")
 
+	waitForCondition(t, 5*time.Second, func() bool {
+		return len(hub.GetClosedStates(0)) == 1
+	}, "closed state should be eventually recorded")
 	closed := hub.GetClosedStates(0)
 	assert.Equal(t, 1, len(closed), "closed state should be recorded once")
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/net-agent/flex/v3/internal/idpool"
 	"github.com/net-agent/flex/v3/packet"
@@ -16,6 +17,9 @@ var (
 	ErrListenerClosed        = errors.New("listener closed")
 	ErrListenerNotFound      = errors.New("listener not found")
 	ErrConvertListenerFailed = errors.New("convert listener failed")
+	ErrListenerBacklogFull   = errors.New("listener backlog full")
+
+	listenerEnqueueTimeout = time.Second
 )
 
 type ListenHub struct {
@@ -34,6 +38,7 @@ func (hub *ListenHub) Listen(port uint16) (net.Listener, error) {
 		hub:     hub,
 		port:    port,
 		streams: make(chan *stream.Stream, 32),
+		done:    make(chan struct{}),
 		closed:  false,
 		str:     fmt.Sprintf("%v:%v", hub.host.GetIP(), port),
 	}
@@ -152,8 +157,17 @@ func (hub *ListenHub) handleCmdOpenStream(pbuf *packet.Buffer) {
 	}
 
 	// todo: maybe error with push channel
-	l.streams <- s
-	s = nil
+	timer := time.NewTimer(listenerEnqueueTimeout)
+	defer timer.Stop()
+
+	select {
+	case l.streams <- s:
+		s = nil
+	case <-l.done:
+		ackMessage = ErrListenerClosed.Error()
+	case <-timer.C:
+		ackMessage = ErrListenerBacklogFull.Error()
+	}
 }
 
 // 实现net.Listener的协议
@@ -161,6 +175,7 @@ type Listener struct {
 	port    uint16
 	hub     *ListenHub
 	streams chan *stream.Stream
+	done    chan struct{}
 
 	closed bool
 	locker sync.RWMutex
@@ -168,18 +183,15 @@ type Listener struct {
 }
 
 func (l *Listener) Accept() (net.Conn, error) {
-	l.locker.RLock()
-	closed := l.closed
-	l.locker.RUnlock()
-
-	if closed {
+	select {
+	case s := <-l.streams:
+		if s == nil {
+			return nil, ErrListenerClosed
+		}
+		return s, nil
+	case <-l.done:
 		return nil, ErrListenerClosed
 	}
-	s := <-l.streams
-	if s == nil {
-		return nil, ErrListenerClosed
-	}
-	return s, nil
 }
 
 func (l *Listener) Close() error {
@@ -192,7 +204,7 @@ func (l *Listener) Close() error {
 
 	l.closed = true
 	l.hub.listeners.Delete(l.port)
-	close(l.streams)
+	close(l.done)
 	return nil
 }
 

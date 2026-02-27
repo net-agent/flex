@@ -3,6 +3,7 @@ package node
 import (
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/net-agent/flex/v3/internal/idpool"
 	"github.com/net-agent/flex/v3/packet"
@@ -14,6 +15,9 @@ var (
 	errInvalidStreamType = errors.New("invalid stream type")
 
 	maxClosedStates = 1024
+	// DetachRetention keeps a fully-closed stream addressable by SID for a short
+	// period so late packets can still be handled by stream-level logic.
+	DetachRetention = 2 * time.Second
 )
 
 type StreamHub struct {
@@ -39,18 +43,7 @@ func (hub *StreamHub) attachStream(s *stream.Stream, sid uint64) error {
 
 	// 当 stream 双向都关闭时自动从 hub 中移除，并回收资源。
 	s.SetOnDetach(func() {
-		// Guard against SID reuse: only remove if this SID still points to the same stream.
-		if cur, ok := hub.streams.Load(sid); ok && cur == s {
-			hub.streams.Delete(sid)
-		}
-		if hub.portm != nil {
-			if port := s.GetBoundPort(); port > 0 {
-				if err := hub.portm.Release(port); err != nil && hub.host != nil {
-					hub.host.logger.Warn("release port failed", "port", port, "error", err)
-				}
-			}
-		}
-		hub.recordClosedState(s.GetState())
+		hub.scheduleStreamCleanup(sid, s)
 	})
 
 	return nil
@@ -78,6 +71,28 @@ func (hub *StreamHub) detachStream(sid uint64) (*stream.Stream, error) {
 		return nil, errInvalidStreamType
 	}
 	return c, nil
+}
+
+func (hub *StreamHub) scheduleStreamCleanup(sid uint64, s *stream.Stream) {
+	doCleanup := func() {
+		// Guard against SID reuse: only remove if this SID still points to the same stream.
+		if cur, ok := hub.streams.Load(sid); ok && cur == s {
+			hub.streams.Delete(sid)
+		}
+		if hub.portm != nil {
+			if port := s.GetBoundPort(); port > 0 {
+				if err := hub.portm.Release(port); err != nil && hub.host != nil {
+					hub.host.logger.Warn("release port failed", "port", port, "error", err)
+				}
+			}
+		}
+		hub.recordClosedState(s.GetState())
+	}
+	if DetachRetention <= 0 {
+		doCleanup()
+		return
+	}
+	time.AfterFunc(DetachRetention, doCleanup)
 }
 
 func (hub *StreamHub) closeAllStreams() {

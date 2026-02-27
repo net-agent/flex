@@ -229,6 +229,27 @@ func TestHandleAckOpen(t *testing.T) {
 	n.handleAckOpenStream(pbuf)
 }
 
+func TestHandleAckOpen_LateAckDoesNotLeakStream(t *testing.T) {
+	old := DetachRetention
+	DetachRetention = 0
+	defer func() { DetachRetention = old }()
+
+	n := New(nil)
+	n.SetDomain("test1")
+	n.SetIP(1)
+
+	pbuf := packet.NewBufferWithCmd(packet.AckOpenStream)
+	pbuf.SetDist(1, 1000) // evKey = DistPort = 1000 (not registered)
+	pbuf.SetSrc(2, 80)
+	ack := packet.OpenStreamACK{OK: true, WindowSize: 1024}
+	pbuf.SetPayload(ack.Encode())
+
+	n.handleAckOpenStream(pbuf)
+
+	_, err := n.getStream(pbuf.SID())
+	assert.Equal(t, errStreamNotFound, err, "late ack should not leave an attached orphan stream")
+}
+
 func TestDialBufErr_portmAndRepsonse(t *testing.T) {
 	portm, err := idpool.New(1, 2)
 	assert.Nil(t, err)

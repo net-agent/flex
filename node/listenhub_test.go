@@ -3,6 +3,7 @@ package node
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/net-agent/flex/v3/packet"
 	"github.com/net-agent/flex/v3/stream"
@@ -104,4 +105,23 @@ func TestAcceptErr(t *testing.T) {
 	l.streams <- nil
 	_, err := l.Accept()
 	assert.Equal(t, ErrListenerClosed, err)
+}
+
+func TestHandleCmdOpenStream_BacklogFullReturnsAckError(t *testing.T) {
+	oldTimeout := listenerEnqueueTimeout
+	listenerEnqueueTimeout = 20 * time.Millisecond
+	defer func() { listenerEnqueueTimeout = oldTimeout }()
+
+	n1, n2 := Pipe("test1", "test2")
+	l, err := n2.Listen(80)
+	assert.Nil(t, err)
+
+	ll := l.(*Listener)
+	for i := 0; i < cap(ll.streams); i++ {
+		ll.streams <- stream.New(nil, 0)
+	}
+
+	_, err = n1.Dial("test2:80")
+	assert.NotNil(t, err)
+	assert.Equal(t, ErrListenerBacklogFull.Error(), err.Error())
 }

@@ -73,6 +73,12 @@ func (d *Dispatcher) stop() {
 	d.chanMut.Unlock()
 }
 
+func (d *Dispatcher) isRunning() bool {
+	d.chanMut.RLock()
+	defer d.chanMut.RUnlock()
+	return d.running
+}
+
 func (d *Dispatcher) dispatch(pbuf *packet.Buffer) error {
 	d.chanMut.RLock()
 	defer d.chanMut.RUnlock()
