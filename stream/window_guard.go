@@ -9,16 +9,23 @@ import "sync/atomic"
 // arrive from the remote peer. An event channel notifies blocked writers
 // that capacity has been restored.
 type WindowGuard struct {
-	size  int32
-	event chan struct{}
+	size      int32
+	maxWindow int32
+	event     chan struct{}
 }
 
 // NewWindowGuard creates a WindowGuard with the given initial window size
 // and event channel capacity.
 func NewWindowGuard(initialSize int32, eventChanCap int) *WindowGuard {
+	maxWindow := initialSize
+	if maxWindow <= 0 {
+		// Keep test helpers usable when constructed with 0.
+		maxWindow = 1<<31 - 1
+	}
 	return &WindowGuard{
-		size:  initialSize,
-		event: make(chan struct{}, eventChanCap),
+		size:      initialSize,
+		maxWindow: maxWindow,
+		event:     make(chan struct{}, eventChanCap),
 	}
 }
 
@@ -35,7 +42,25 @@ func (w *WindowGuard) Consume(n int32) {
 // Release increases the window by n when an ACK is received,
 // and sends a non-blocking signal on the event channel.
 func (w *WindowGuard) Release(n int32) {
-	atomic.AddInt32(&w.size, n)
+	if n <= 0 {
+		return
+	}
+	var changed bool
+	for {
+		cur := atomic.LoadInt32(&w.size)
+		max := atomic.LoadInt32(&w.maxWindow)
+		next := cur + n
+		if next < cur || next > max {
+			next = max
+		}
+		if atomic.CompareAndSwapInt32(&w.size, cur, next) {
+			changed = next > cur
+			break
+		}
+	}
+	if !changed {
+		return
+	}
 	select {
 	case w.event <- struct{}{}:
 	default:
@@ -51,6 +76,15 @@ func (w *WindowGuard) Event() <-chan struct{} {
 // SetSize directly sets the window size. For testing only.
 func (w *WindowGuard) SetSize(n int32) {
 	atomic.StoreInt32(&w.size, n)
+	for {
+		curMax := atomic.LoadInt32(&w.maxWindow)
+		if n <= curMax {
+			return
+		}
+		if atomic.CompareAndSwapInt32(&w.maxWindow, curMax, n) {
+			return
+		}
+	}
 }
 
 // Signal manually sends an event. For testing only.

@@ -57,9 +57,9 @@ func (s *Stream) CloseRead() error {
 // to wake up immediately via closeCh.
 func (s *Stream) CloseWrite() error {
 	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
 
 	if s.writeClosed {
+		s.writeMu.Unlock()
 		return ErrWriterIsClosed
 	}
 
@@ -69,6 +69,10 @@ func (s *Stream) CloseWrite() error {
 
 	// Signal blocked Write to wake up immediately (P1 fix)
 	close(s.closeCh)
+	s.writeMu.Unlock()
+
+	// Best effort: also interrupt an in-flight blocking send.
+	s.sender.InterruptWrite()
 
 	return nil
 }

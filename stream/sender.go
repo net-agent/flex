@@ -92,3 +92,23 @@ func (s *sender) SendCloseAck() error {
 	atomic.AddInt32(s.counter, 1)
 	return s.WriteBuffer(s.closeAckBuf)
 }
+
+// InterruptWrite is intentionally a no-op for now.
+//
+// NOTE(shared-conn):
+// Multiple streams may multiplex over one shared net.Conn. A transport-level
+// interrupt can impact unrelated streams, so we intentionally do not expose
+// interrupt behavior from the default sender path until a stream-isolated
+// cancellation mechanism is available.
+func (s *sender) InterruptWrite() {
+	// if iw, ok := s.Writer.(packet.InterruptWriter); ok {
+	// 	iw.InterruptWrite()
+	// }
+}
+
+func (s *sender) CanInterruptWrite() bool {
+	// NOTE(shared-conn): keep disabled; see InterruptWrite comment above.
+	// _, ok := s.Writer.(packet.InterruptWriter)
+	// return ok
+	return false
+}
