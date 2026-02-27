@@ -3,8 +3,6 @@ package packet
 import (
 	"io"
 	"net"
-
-	"github.com/gorilla/websocket"
 )
 
 type Conn interface {
@@ -27,15 +25,6 @@ func NewWithConn(conn net.Conn) Conn {
 		Closer: conn,
 		Reader: NewConnReader(conn),
 		Writer: NewConnWriter(conn),
-	}
-}
-
-func NewWithWs(wsconn *websocket.Conn) Conn {
-	return &connImpl{
-		raw:    wsconn.UnderlyingConn(),
-		Closer: wsconn,
-		Reader: NewWsReader(wsconn),
-		Writer: NewWsWriter(wsconn),
 	}
 }
 

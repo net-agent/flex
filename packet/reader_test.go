@@ -1,139 +1,153 @@
 package packet
 
 import (
-	"bytes"
 	"crypto/rand"
 	"encoding/binary"
 	"net"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func TestRead(t *testing.T) {
-	LOG_READ_BUFFER_HEADER = true
-	LOG_WRITE_BUFFER_HEADER = true
-
-	makeCase := func(cmd byte, payload []byte) *Buffer {
-		pbuf := NewBuffer()
-		pbuf.SetCmd(cmd)
-		pbuf.SetPayload(payload)
-		return pbuf
+func TestReader_ReadBuffer(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload []byte
+	}{
+		{"empty payload", nil},
+		{"small payload", []byte("hello world")},
+		{"max payload", make([]byte, MaxPayloadSize)},
 	}
 
-	runCase := func(index int, payload *Buffer) bool {
-		c1, c2 := Pipe()
-		var wg sync.WaitGroup
+	// 填充 max payload 随机数据
+	rand.Read(tests[2].payload)
 
-		writeOK := true
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			err := c1.WriteBuffer(payload)
-			if err != nil {
-				t.Error(err, " index=", index)
-				writeOK = false
-				return
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c1, c2 := Pipe()
+
+			sent := NewBufferWithCmd(CmdPushStreamData)
+			if tt.payload != nil {
+				require.NoError(t, sent.SetPayload(tt.payload))
 			}
-			writeOK = true
+
+			go func() {
+				require.NoError(t, c1.WriteBuffer(sent))
+			}()
+
+			recv, err := c2.ReadBuffer()
+			require.NoError(t, err)
+			assert.Equal(t, sent.Head, recv.Head)
+			assert.Equal(t, sent.Payload, recv.Payload)
+		})
+	}
+}
+
+func TestReader_SetReadTimeout(t *testing.T) {
+	t.Run("clear timeout", func(t *testing.T) {
+		c1, _ := net.Pipe()
+		r := NewConnReader(c1)
+		assert.NoError(t, r.SetReadTimeout(0))
+	})
+
+	t.Run("set timeout", func(t *testing.T) {
+		c1, _ := net.Pipe()
+		r := NewConnReader(c1)
+		assert.NoError(t, r.SetReadTimeout(time.Second))
+	})
+
+	t.Run("error after close", func(t *testing.T) {
+		c1, c2 := net.Pipe()
+		r := NewConnReader(c1)
+
+		go func() {
+			NewConnWriter(c2).WriteBuffer(NewBuffer())
 		}()
 
-		pbuf, err := c2.ReadBuffer()
-		if err != nil {
-			t.Error(err)
-			return false
-		}
-
-		if !bytes.Equal(pbuf.Head[:], payload.Head[:]) {
-			t.Error("read head not equal, index=", index)
-			return false
-		}
-		if !bytes.Equal(pbuf.Payload, payload.Payload) {
-			t.Error("read payload not equal, index=", index)
-			return false
-		}
-
-		wg.Wait()
-		return writeOK
-	}
-
-	bigBuf := make([]byte, 0xFFFF)
-	rand.Read(bigBuf)
-
-	cases := []*Buffer{
-		makeCase(CmdPushStreamData, []byte("hello world")),
-		makeCase(CmdPushStreamData, []byte("hello world")),
-		makeCase(CmdPushStreamData, []byte("hello world")),
-		makeCase(CmdPushStreamData, bigBuf),
-	}
-
-	for i, c := range cases {
-		if !runCase(i, c) {
-			return
-		}
-	}
+		c1.Close()
+		assert.Error(t, r.SetReadTimeout(0))
+	})
 }
 
-func TestReadErr_SetDeadline(t *testing.T) {
+func TestReader_ErrReadHeaderFailed(t *testing.T) {
 	c1, c2 := net.Pipe()
-
-	w := NewConnWriter(c2)
 	r := NewConnReader(c1)
+
 	go func() {
-		w.WriteBuffer(NewBuffer())
-	}()
-
-	c1.Close()
-	r.SetReadTimeout(time.Second * 15)
-	err := r.SetReadTimeout(time.Duration(0))
-	assert.NotNil(t, err)
-}
-
-func TestReadErr_Header(t *testing.T) {
-	c1, c2 := net.Pipe()
-
-	w := NewConnWriter(c2)
-	r := NewConnReader(c1)
-	go func() {
-		w.WriteBuffer(NewBuffer())
+		// 写一个完整包，再写不完整的 header
+		NewConnWriter(c2).WriteBuffer(NewBuffer())
 		c2.Write([]byte{0x01})
 	}()
 
-	var err error
+	r.SetReadTimeout(time.Millisecond * 200)
 
-	// 设置超时时间，加快超时
-	r.SetReadTimeout(time.Millisecond * 100)
-
-	_, err = r.ReadBuffer()
-	assert.Nil(t, err)
+	_, err := r.ReadBuffer()
+	require.NoError(t, err, "first read should succeed")
 
 	_, err = r.ReadBuffer()
-	assert.Equal(t, err, ErrReadHeaderFailed)
+	assert.ErrorIs(t, err, ErrReadHeaderFailed)
 }
 
-func TestReadErr_Payload(t *testing.T) {
+func TestReader_ErrReadPayloadFailed(t *testing.T) {
 	c1, c2 := net.Pipe()
-
-	w := NewConnWriter(c2)
 	r := NewConnReader(c1)
+
 	go func() {
-		w.WriteBuffer(NewBuffer())
+		// 写一个完整包，再写一个 header 声称有 10 字节 payload 但不发送
+		NewConnWriter(c2).WriteBuffer(NewBuffer())
 
 		var h Header
 		binary.BigEndian.PutUint16(h[9:11], 10)
 		c2.Write(h[:])
 	}()
 
-	var err error
+	r.SetReadTimeout(time.Millisecond * 200)
 
-	// 设置超时时间，加快超时
-	r.SetReadTimeout(time.Millisecond * 100)
-
-	_, err = r.ReadBuffer()
-	assert.Nil(t, err)
+	_, err := r.ReadBuffer()
+	require.NoError(t, err, "first read should succeed")
 
 	_, err = r.ReadBuffer()
-	assert.Equal(t, err, ErrReadPayloadFailed)
+	assert.ErrorIs(t, err, ErrReadPayloadFailed)
+}
+
+func TestReader_ReadTimeout(t *testing.T) {
+	// 设置短超时，不写入任何数据，ReadBuffer 应超时返回错误
+	c1, _ := net.Pipe()
+	r := NewConnReader(c1)
+	require.NoError(t, r.SetReadTimeout(time.Millisecond*50))
+
+	_, err := r.ReadBuffer()
+	assert.ErrorIs(t, err, ErrReadHeaderFailed)
+}
+
+func TestReader_ReadAfterClose(t *testing.T) {
+	c1, _ := net.Pipe()
+	r := NewConnReader(c1)
+	c1.Close()
+
+	_, err := r.ReadBuffer()
+	assert.ErrorIs(t, err, ErrReadHeaderFailed)
+}
+
+func TestReader_MultipleSequentialReads(t *testing.T) {
+	c1, c2 := Pipe()
+	const n = 10
+
+	go func() {
+		for i := range n {
+			buf := NewBufferWithCmd(CmdPushStreamData)
+			buf.SetSrcPort(uint16(i))
+			require.NoError(t, buf.SetPayload([]byte("data")))
+			require.NoError(t, c1.WriteBuffer(buf))
+		}
+	}()
+
+	for i := range n {
+		recv, err := c2.ReadBuffer()
+		require.NoError(t, err)
+		assert.Equal(t, uint16(i), recv.SrcPort(), "packet %d", i)
+		assert.Equal(t, []byte("data"), recv.Payload, "packet %d", i)
+	}
 }

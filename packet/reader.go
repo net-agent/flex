@@ -5,12 +5,9 @@ import (
 	"io"
 	"net"
 	"time"
-
-	"github.com/gorilla/websocket"
 )
 
 var (
-	ErrBadDataType       = errors.New("err: bad data type")
 	ErrSetDeadlineFailed = errors.New("set deadline failed")
 	ErrReadHeaderFailed  = errors.New("read header failed")
 	ErrReadPayloadFailed = errors.New("read payload failed")
@@ -57,42 +54,4 @@ func (reader *connReader) ReadBuffer() (retBuf *Buffer, retErr error) {
 	}
 
 	return pb, nil
-}
-
-//
-// Reader implements with websocket.Conn
-//
-
-type wsReader struct {
-	wsconn *websocket.Conn
-}
-
-func NewWsReader(wsconn *websocket.Conn) Reader {
-	return &wsReader{wsconn}
-}
-
-func (reader *wsReader) SetReadTimeout(timeout time.Duration) error {
-	if timeout == 0 {
-		return reader.wsconn.SetReadDeadline(time.Time{})
-	}
-	return reader.wsconn.SetReadDeadline(time.Now().Add(timeout))
-}
-
-func (reader *wsReader) ReadBuffer() (retBuf *Buffer, retErr error) {
-	buf := GetBuffer()
-
-	mtype, data, err := reader.wsconn.ReadMessage()
-	if err != nil {
-		PutBuffer(buf)
-		return nil, err
-	}
-	if mtype != websocket.BinaryMessage {
-		PutBuffer(buf)
-		return nil, ErrBadDataType
-	}
-
-	copy(buf.Head[:], data[:HeaderSz])
-	buf.Payload = data[HeaderSz:]
-
-	return buf, nil
 }

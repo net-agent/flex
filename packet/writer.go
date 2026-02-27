@@ -5,8 +5,6 @@ import (
 	"net"
 	"sync"
 	"time"
-
-	"github.com/gorilla/websocket"
 )
 
 var (
@@ -70,42 +68,5 @@ func (w *connWriter) WriteBufferBatch(bufs []*Buffer) error {
 		}
 	}
 	_, err := vecs.WriteTo(w.conn)
-	return err
-}
-
-// Writer implements with websocket.Conn
-type wsWriter struct {
-	wsconn *websocket.Conn
-	mu     sync.Mutex
-}
-
-func NewWsWriter(wsconn *websocket.Conn) Writer {
-	return &wsWriter{
-		wsconn: wsconn,
-	}
-}
-
-func (w *wsWriter) SetWriteTimeout(timeout time.Duration) {
-	if timeout == 0 {
-		w.wsconn.SetWriteDeadline(time.Time{})
-	} else {
-		w.wsconn.SetWriteDeadline(time.Now().Add(timeout))
-	}
-}
-
-func (w *wsWriter) WriteBuffer(buf *Buffer) (retErr error) {
-	if buf == nil {
-		return nil
-	}
-
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	nw, err := w.wsconn.NextWriter(websocket.BinaryMessage)
-	if err != nil {
-		return err
-	}
-	defer nw.Close()
-
-	_, err = buf.WriteTo(nw)
 	return err
 }

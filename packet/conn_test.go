@@ -2,110 +2,58 @@ package packet
 
 import (
 	"bytes"
-	"net/http"
-	"net/url"
 	"sync"
 	"testing"
-	"time"
 
-	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-func doTestDataTranasfer(name string, t *testing.T, pc1, pc2 Conn) {
-	msg := []byte("hello world")
-	buf := NewBuffer()
-	buf.SetHeader(CmdCloseStream, 0, 1, 2, 3)
-	buf.SetPayload(msg)
-
-	t.Run(name, func(t *testing.T) {
-		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			recvBuf, err := pc1.ReadBuffer()
-			assert.Nil(t, err)
-			assert.EqualValues(t, recvBuf.Head, buf.Head)
-			assert.EqualValues(t, recvBuf.Payload, buf.Payload)
-		}()
-
-		err := pc2.WriteBuffer(buf)
-		assert.Nil(t, err)
-
-		wg.Wait()
-	})
-}
-
-func TestNetConn(t *testing.T) {
+func TestConn_DataTransfer(t *testing.T) {
 	pc1, pc2 := Pipe()
-	pc3, pc4 := Pipe()
-	doTestDataTranasfer("test Pipe", t, pc1, pc2)
-	doTestDataTranasfer("test wsPipe", t, pc3, pc4)
-}
-
-func TestWebsocket(t *testing.T) {
-	LOG_READ_BUFFER_HEADER = true
-	LOG_WRITE_BUFFER_HEADER = true
-	DefaultReadTimeout = time.Millisecond * 50
 
 	msg := []byte("hello world")
 	buf := NewBuffer()
 	buf.SetHeader(CmdCloseStream, 0, 1, 2, 3)
-	buf.SetPayload(msg)
+	require.NoError(t, buf.SetPayload(msg))
 
-	addr := "localhost:12003"
-	upgrader := websocket.Upgrader{}
-	http.HandleFunc("/echo", func(w http.ResponseWriter, r *http.Request) {
-		c, err := upgrader.Upgrade(w, r, nil)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		defer c.Close()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		require.NoError(t, pc2.WriteBuffer(buf))
+	}()
 
-		pc := NewWithWs(c)
-		recvBuf, err := pc.ReadBuffer()
-		if err == nil {
-			pc.WriteBuffer(recvBuf)
-		}
-	})
-	go http.ListenAndServe(addr, nil)
+	recvBuf, err := pc1.ReadBuffer()
+	require.NoError(t, err)
+	assert.Equal(t, buf.Head, recvBuf.Head)
+	assert.True(t, bytes.Equal(buf.Payload, recvBuf.Payload))
 
-	<-time.After(time.Millisecond * 100)
+	wg.Wait()
+}
 
-	//
-	// client side code
-	//
-	u := url.URL{Scheme: "ws", Host: addr, Path: "/echo"}
+func TestConn_GetRawConn(t *testing.T) {
+	pc1, _ := Pipe()
+	assert.NotNil(t, pc1.GetRawConn())
+}
 
-	t.Run("websocket ok test case", func(t *testing.T) {
-		c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
-		assert.Nil(t, err)
-		defer c.Close()
-		pc := NewWithWs(c)
+func TestConn_WriteBufferBatch(t *testing.T) {
+	pc1, pc2 := Pipe()
 
-		err = pc.WriteBuffer(buf)
-		assert.Nil(t, err)
+	bufs := make([]*Buffer, 3)
+	for i := range bufs {
+		bufs[i] = NewBufferWithCmd(CmdPushStreamData)
+		bufs[i].SetSrcPort(uint16(i))
+	}
 
-		recvBuf, err := pc.ReadBuffer()
-		assert.Nil(t, err)
-		assert.True(t, bytes.Equal(buf.Head[:], recvBuf.Head[:]))
-		assert.True(t, bytes.Equal(buf.Payload, recvBuf.Payload))
-	})
+	go func() {
+		impl := pc2.(*connImpl)
+		require.NoError(t, impl.WriteBufferBatch(bufs))
+	}()
 
-	t.Run("websocket ErrBadDataType", func(t *testing.T) {
-		c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
-		assert.Nil(t, err)
-		defer c.Close()
-
-		c.WriteMessage(websocket.TextMessage, []byte("hello world"))
-	})
-
-	t.Run("websocket ReadMessage timeout", func(t *testing.T) {
-		c, _, err := websocket.DefaultDialer.Dial(u.String(), nil)
-		assert.Nil(t, err)
-		defer c.Close()
-
-		<-time.After(DefaultReadTimeout + time.Millisecond*100)
-	})
+	for i := range bufs {
+		recv, err := pc1.ReadBuffer()
+		require.NoError(t, err)
+		assert.Equal(t, uint16(i), recv.SrcPort(), "packet %d", i)
+	}
 }
