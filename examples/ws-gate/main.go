@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v3/packet/ws"
 	"github.com/net-agent/flex/v3/switcher"
 )
 
@@ -83,7 +83,7 @@ func handleWS(s *switcher.Server) http.HandlerFunc {
 		log.Printf("new ws connection from %s", c.RemoteAddr())
 
 		// Wrap WS connection with packet.Conn
-		pConn := packet.NewWithWs(c)
+		pConn := ws.NewConn(c)
 
 		// Handover to switcher
 		go s.ServeConn(pConn)

@@ -48,11 +48,11 @@ func main() {
 func connectNode(addr, domain, password string) *node.Node {
 	conn, _ := net.Dial("tcp", addr)
 	pc := packet.NewWithConn(conn)
-	ip, obfKey, err := admit.Handshake(pc, domain, "", password)
+	ip, err := admit.Handshake(pc, domain, "", password)
 	if err != nil {
 		log.Fatal(err)
 	}
-	n := node.New(packet.NewObfuscatedConn(pc, obfKey))
+	n := node.New(pc)
 	n.SetDomain(domain)
 	n.SetIP(ip)
 	go n.Serve()
