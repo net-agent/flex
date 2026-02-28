@@ -21,7 +21,7 @@ var (
 	ErrTimestampExpired = errors.New("timestamp expired")
 )
 
-func Handshake(pc packet.Conn, domain, mac, password string) (uint16, []byte, error) {
+func Handshake(pc packet.Conn, domain, mac, password string) (uint16, error) {
 	pc.SetWriteTimeout(handshakeTimeout)
 	pc.SetReadTimeout(handshakeTimeout)
 	defer pc.SetWriteTimeout(0)
@@ -35,24 +35,23 @@ func Handshake(pc packet.Conn, domain, mac, password string) (uint16, []byte, er
 	req.Sum = req.CalcSum(password)
 
 	if err := req.WriteTo(pc, password); err != nil {
-		return 0, nil, fmt.Errorf("handshake: write request: %w", err)
+		return 0, fmt.Errorf("handshake: write request: %w", err)
 	}
 
 	var resp Response
 	if err := resp.ReadFrom(pc, password); err != nil {
-		return 0, nil, fmt.Errorf("handshake: read response: %w", err)
+		return 0, fmt.Errorf("handshake: read response: %w", err)
 	}
 
 	if resp.ErrCode != 0 {
-		return 0, nil, fmt.Errorf("handshake: server rejected: %v", resp.ErrMsg)
+		return 0, fmt.Errorf("handshake: server rejected: %v", resp.ErrMsg)
 	}
 
 	if resp.Version != packet.VERSION {
-		return 0, nil, fmt.Errorf("handshake: %w: local=%v remote=%v", ErrVersionMismatch, packet.VERSION, resp.Version)
+		return 0, fmt.Errorf("handshake: %w: local=%v remote=%v", ErrVersionMismatch, packet.VERSION, resp.Version)
 	}
 
-	obfKey := DeriveObfuscateKey(password, req.Nonce, resp.Nonce)
-	return resp.IP, obfKey, nil
+	return resp.IP, nil
 }
 
 func Accept(pc packet.Conn, pswd string) (*Request, error) {

@@ -48,14 +48,6 @@ func encrypt(plaintext []byte, password string) ([]byte, error) {
 	return out, nil
 }
 
-// DeriveObfuscateKey 使用 HMAC-SHA256 从 password 和双方 nonce 派生混淆密钥。
-func DeriveObfuscateKey(password string, clientNonce, serverNonce []byte) []byte {
-	h := hmac.New(sha256.New, []byte(password))
-	h.Write(clientNonce)
-	h.Write(serverNonce)
-	return h.Sum(nil) // 32 bytes
-}
-
 // decrypt 解密 encrypt 产生的数据
 func decrypt(data []byte, password string) ([]byte, error) {
 	if len(data) < saltSize {

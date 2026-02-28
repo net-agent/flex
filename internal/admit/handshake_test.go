@@ -22,7 +22,7 @@ func TestHandshake(t *testing.T) {
 		resp.WriteTo(pc2, pswd)
 	}()
 
-	_, _, err := Handshake(pc1, "test", "", pswd)
+	_, err := Handshake(pc1, "test", "", pswd)
 	if err != nil {
 		t.Errorf("unexpected err=%v\n", err)
 	}
@@ -33,7 +33,7 @@ func TestHandshake_WriteError(t *testing.T) {
 	pc1, pc2 := packet.Pipe()
 	pc2.Close()
 
-	_, _, err := Handshake(pc1, "test", "", pswd)
+	_, err := Handshake(pc1, "test", "", pswd)
 	if err == nil {
 		t.Error("expected error")
 	}
@@ -48,7 +48,7 @@ func TestHandshake_ReadError(t *testing.T) {
 		pc2.Close()
 	}()
 
-	_, _, err := Handshake(pc1, "test", "", pswd)
+	_, err := Handshake(pc1, "test", "", pswd)
 	if err == nil {
 		t.Error("expected error")
 	}
@@ -66,7 +66,7 @@ func TestHandshake_BadResponsePayload(t *testing.T) {
 		pc2.WriteBuffer(pbuf)
 	}()
 
-	_, _, err := Handshake(pc1, "test", "", pswd)
+	_, err := Handshake(pc1, "test", "", pswd)
 	if err == nil {
 		t.Error("expected error")
 	}
@@ -86,7 +86,7 @@ func TestHandshake_ServerError(t *testing.T) {
 		}
 	}()
 
-	_, _, err := Handshake(pc1, "test", "", badPswd)
+	_, err := Handshake(pc1, "test", "", badPswd)
 	if err == nil {
 		t.Error("expected error")
 	}
@@ -104,7 +104,7 @@ func TestHandshake_VersionMismatch(t *testing.T) {
 		resp.WriteTo(pc2, pswd)
 	}()
 
-	_, _, err := Handshake(pc1, "test", "", pswd)
+	_, err := Handshake(pc1, "test", "", pswd)
 	if !errors.Is(err, ErrVersionMismatch) {
 		t.Errorf("unexpected err=%v\n", err)
 	}
