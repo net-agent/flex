@@ -40,8 +40,7 @@ func TestContextPing(t *testing.T) {
 	log.Println(err)
 
 	// 错误分支：WriteBuffer failed
-	// FairConn 异步写入，底层 conn 关闭后写入错误被缓冲，
-	// 表现为 ping timeout 而非 errPingWriteFailed
+	// 关闭底层连接后，ping 期望返回错误（通常为 timeout）
 	node1.Conn.Close()
 	_, err = ctx1.ping(time.Second)
 	if err == nil {
@@ -74,9 +73,9 @@ func TestPingErr_Timeout(t *testing.T) {
 
 	waitUpgradeReady.Add(1)
 	go func() {
-		ip, obfKey, _ := admit.Handshake(pc3, "test2", "", pswd)
+		ip, _ := admit.Handshake(pc3, "test2", "", pswd)
 		waitUpgradeReady.Done()
-		n := node.New(packet.NewObfuscatedConn(pc3, obfKey))
+		n := node.New(pc3)
 		n.SetIP(ip)
 		n.SetDomain("test2")
 		n.Serve()

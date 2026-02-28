@@ -10,7 +10,6 @@ import (
 
 	"github.com/net-agent/flex/v3/internal/admit"
 	"github.com/net-agent/flex/v3/internal/idpool"
-	"github.com/net-agent/flex/v3/internal/sched"
 	"github.com/net-agent/flex/v3/packet"
 )
 
@@ -193,10 +192,8 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 		return errHandlePCWriteFailed
 	}
 
-	// 第四步：用混淆密钥包装连接，再启用公平调度
-	obfKey := admit.DeriveObfuscateKey(s.password, req.Nonce, resp.Nonce)
-	wrappedPC := packet.NewObfuscatedConn(pc, obfKey)
-	ctx.setConn(sched.NewFairConn(wrappedPC))
+	// 第四步：绑定底层连接
+	ctx.setConn(pc)
 
 	// 记录服务时长
 	start := time.Now()
