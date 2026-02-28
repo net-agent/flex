@@ -6,9 +6,11 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/net-agent/flex/v3/internal/admit"
+	"github.com/net-agent/flex/v3/internal/sched"
 	"github.com/net-agent/flex/v3/packet"
 	"github.com/net-agent/flex/v3/stream"
 )
@@ -32,6 +34,8 @@ type Session struct {
 	connector ConnectFunc
 	config    SessionConfig
 
+	enableFairConn atomic.Bool
+
 	mu        sync.RWMutex
 	node      *Node
 	listeners map[uint16]*SessionListener
@@ -46,7 +50,7 @@ type Session struct {
 }
 
 func NewSession(connector ConnectFunc, cfg SessionConfig) *Session {
-	return &Session{
+	s := &Session{
 		connector: connector,
 		config:    cfg,
 		listeners: make(map[uint16]*SessionListener),
@@ -55,6 +59,15 @@ func NewSession(connector ConnectFunc, cfg SessionConfig) *Session {
 		done:      make(chan struct{}),
 		logger:    slog.Default(),
 	}
+	s.enableFairConn.Store(true)
+	return s
+}
+
+// SetEnableFairConn controls whether the Session wraps its connection with
+// sched.FairConn for fair stream scheduling. Default is true (enabled).
+// Must be called before Serve.
+func (s *Session) SetEnableFairConn(enable bool) {
+	s.enableFairConn.Store(enable)
 }
 
 func (s *Session) SetLogger(l *slog.Logger) {
@@ -183,6 +196,10 @@ func (s *Session) Serve() error {
 			}
 			backoff = min(backoff*2, 30*time.Second)
 			continue
+		}
+
+		if s.enableFairConn.Load() {
+			conn = sched.NewFairConn(conn)
 		}
 
 		node := New(conn)

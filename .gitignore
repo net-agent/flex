@@ -1,2 +1,7 @@
 coverage.txt
 profile.out
+.gocache/
+.gomodcache/
+*.test
+*.out
+.DS_Store

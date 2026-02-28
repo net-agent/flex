@@ -10,6 +10,7 @@ import (
 
 	"github.com/net-agent/flex/v3/internal/admit"
 	"github.com/net-agent/flex/v3/internal/idpool"
+	"github.com/net-agent/flex/v3/internal/sched"
 	"github.com/net-agent/flex/v3/packet"
 )
 
@@ -25,6 +26,8 @@ type Server struct {
 	listener   net.Listener
 	password   string
 	nextCtxID  int32
+
+	enableFairConn atomic.Bool
 
 	OnContextStart OnContextStartHandler
 	OnContextStop  OnContextStopHandler
@@ -83,8 +86,15 @@ func NewServer(password string, logger *slog.Logger, logCfg *LogConfig) *Server 
 		logger:    newModuleLogger(logger, cfg.Server, "server"),
 		ctxLogger: newModuleLogger(logger, cfg.Context, "context"),
 	}
+	s.enableFairConn.Store(true)
 	s.router = newPacketRouter(reg, newModuleLogger(logger, cfg.Router, "router"))
 	return s
+}
+
+// SetEnableFairConn controls whether incoming connections are wrapped with
+// sched.FairConn for fair stream scheduling. Default is true (enabled).
+func (s *Server) SetEnableFairConn(enable bool) {
+	s.enableFairConn.Store(enable)
 }
 
 func (s *Server) GetStats() *StatsResponse {
@@ -144,6 +154,9 @@ func (s *Server) Serve(l net.Listener) error {
 		}
 
 		pconn := packet.NewWithConn(conn)
+		if s.enableFairConn.Load() {
+			pconn = sched.NewFairConn(pconn)
+		}
 		go s.ServeConn(pconn)
 	}
 }

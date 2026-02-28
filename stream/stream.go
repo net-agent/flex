@@ -16,7 +16,7 @@ const (
 	KB = 1024
 	MB = 1024 * KB
 
-	DefaultSplitSize = 63 * KB
+	DefaultSplitSize = 16 * KB
 
 	DirectionOutbound Direction = 1 // local → remote
 	DirectionInbound  Direction = 2 // remote → local
