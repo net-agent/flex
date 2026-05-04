@@ -8,6 +8,21 @@ import (
 )
 
 func (s *Stream) Write(buf []byte) (int, error) {
+	s.writeCallMu.Lock()
+	defer s.writeCallMu.Unlock()
+	return s.writeLoop(buf)
+}
+
+// WriteFast provides throughput-oriented writes.
+//
+// It is concurrency-safe but does not guarantee call-order FIFO across
+// concurrent callers; payload chunks from different calls may interleave.
+// Callers that require strict stream-ordered call semantics should use Write.
+func (s *Stream) WriteFast(buf []byte) (int, error) {
+	return s.writeLoop(buf)
+}
+
+func (s *Stream) writeLoop(buf []byte) (int, error) {
 	if len(buf) == 0 {
 		return 0, nil
 	}

@@ -44,7 +44,8 @@ type Stream struct {
 	readDeadline *DeadlineGuard
 
 	// for writer
-	writeMu       sync.Mutex // 序列化 write/CloseWrite，保护 writeClosed 和 closeCh
+	writeCallMu   sync.Mutex // serializes Write call-order for stream-ordered semantics
+	writeMu       sync.Mutex // serializes write/CloseWrite, protects writeClosed and closeCh
 	writeClosed   bool
 	window        *WindowGuard
 	writeDeadline *DeadlineGuard

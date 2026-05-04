@@ -605,3 +605,153 @@ func TestSessionRemoveListenerNilNode(t *testing.T) {
 	s.removeListener(80)
 	assert.Empty(t, s.listeners)
 }
+
+// --- SessionState ---
+
+func TestSessionStateString(t *testing.T) {
+	assert.Equal(t, "ready", SessionReady.String())
+	assert.Equal(t, "idle", SessionIdle.String())
+	assert.Equal(t, "connecting", SessionConnecting.String())
+	assert.Equal(t, "online", SessionOnline.String())
+	assert.Equal(t, "closed", SessionClosed.String())
+	assert.Equal(t, "unknown", SessionState(99).String())
+}
+
+func TestSessionInitialState(t *testing.T) {
+	s := NewSession(nil, SessionConfig{})
+	assert.Equal(t, SessionReady, s.GetState())
+	assert.Equal(t, "", s.GetLastErr())
+}
+
+func TestSessionStateConnectingToOnline(t *testing.T) {
+	connector, _ := newTestConnector()
+	s := NewSession(connector, testSessionConfig())
+
+	var mu sync.Mutex
+	var transitions []struct{ old, new_ SessionState }
+
+	s.OnStateChange(func(old, new_ SessionState) {
+		mu.Lock()
+		transitions = append(transitions, struct{ old, new_ SessionState }{old, new_})
+		mu.Unlock()
+	})
+
+	s.ensureServing()
+	go s.Serve()
+
+	assert.Nil(t, s.WaitReady(time.Second))
+	assert.Equal(t, SessionOnline, s.GetState())
+	assert.Equal(t, "", s.GetLastErr())
+
+	mu.Lock()
+	// Ready→Idle, Idle→Connecting, Connecting→Online
+	assert.Len(t, transitions, 3)
+	assert.Equal(t, SessionIdle, transitions[1].old)
+	assert.Equal(t, SessionOnline, transitions[2].new_)
+	mu.Unlock()
+
+	s.Close()
+}
+
+func TestSessionStateOnlineToConnectingOnDisconnect(t *testing.T) {
+	connector, getServers := newTestConnector()
+	s := NewSession(connector, testSessionConfig())
+
+	var mu sync.Mutex
+	var transitions []struct{ old, new_ SessionState }
+
+	s.OnStateChange(func(old, new_ SessionState) {
+		mu.Lock()
+		transitions = append(transitions, struct{ old, new_ SessionState }{old, new_})
+		mu.Unlock()
+	})
+
+	s.ensureServing()
+	go s.Serve()
+	defer s.Close()
+
+	assert.Nil(t, s.WaitReady(time.Second))
+
+	// 关闭 server 端触发断线
+	servers := getServers()
+	servers[0].Close()
+
+	// 等待重连成功
+	time.Sleep(100 * time.Millisecond)
+	assert.Nil(t, s.WaitReady(5*time.Second))
+
+	mu.Lock()
+	// 应至少有 5 次状态转换: ready→idle, idle→connecting, connecting→online, online→connecting, connecting→online
+	assert.GreaterOrEqual(t, len(transitions), 5)
+	assert.Equal(t, SessionOnline, transitions[2].new_)      // 首次上线
+	assert.Equal(t, SessionConnecting, transitions[3].new_)  // 断线
+	assert.Equal(t, SessionOnline, transitions[4].new_)      // 重连上线
+	mu.Unlock()
+}
+
+func TestSessionStateCloseCallback(t *testing.T) {
+	s := NewSession(nil, SessionConfig{})
+
+	var called bool
+	var oldState, newState SessionState
+
+	s.OnStateChange(func(old, new_ SessionState) {
+		called = true
+		oldState = old
+		newState = new_
+	})
+
+	s.Close()
+
+	assert.True(t, called)
+	assert.Equal(t, SessionReady, oldState)
+	assert.Equal(t, SessionClosed, newState)
+	assert.Equal(t, SessionClosed, s.GetState())
+}
+
+func TestSessionLastErrOnConnectFailure(t *testing.T) {
+	connector := func() (packet.Conn, error) {
+		return nil, errors.New("dial tcp: connection refused")
+	}
+	s := NewSession(connector, testSessionConfig())
+
+	s.ensureServing()
+	go s.Serve()
+
+	// 等待 connector 被调用
+	time.Sleep(100 * time.Millisecond)
+
+	assert.Equal(t, SessionConnecting, s.GetState())
+	assert.Equal(t, "dial tcp: connection refused", s.GetLastErr())
+
+	s.Close()
+}
+
+func TestSessionLastErrClearedOnOnline(t *testing.T) {
+	callCount := 0
+	connector, _ := newTestConnector()
+	wrappedConnector := func() (packet.Conn, error) {
+		callCount++
+		if callCount == 1 {
+			return nil, errors.New("first attempt fails")
+		}
+		return connector()
+	}
+	s := NewSession(wrappedConnector, testSessionConfig())
+
+	s.ensureServing()
+	go s.Serve()
+	defer s.Close()
+
+	// 等待重连成功
+	assert.Nil(t, s.WaitReady(5*time.Second))
+	assert.Equal(t, SessionOnline, s.GetState())
+	assert.Equal(t, "", s.GetLastErr())
+}
+
+func TestSessionNoCallbackWithoutRegistration(t *testing.T) {
+	// 没有注册 OnStateChange 不应 panic
+	s := NewSession(nil, SessionConfig{})
+	s.Close()
+	assert.Equal(t, SessionClosed, s.GetState())
+}

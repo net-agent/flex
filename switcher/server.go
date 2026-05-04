@@ -155,6 +155,7 @@ func (s *Server) Serve(l net.Listener) error {
 
 		pconn := packet.NewWithConn(conn)
 		if s.enableFairConn.Load() {
+			s.logger.Info("enabling fair connection scheduling")
 			pconn = sched.NewFairConn(pconn)
 		}
 		go s.ServeConn(pconn)

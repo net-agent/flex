@@ -2,6 +2,7 @@ package stream
 
 import (
 	"io"
+	"math"
 	"sync/atomic"
 )
 
@@ -9,7 +10,27 @@ func (s *Stream) Read(dist []byte) (int, error) {
 	s.readMu.Lock()
 	defer s.readMu.Unlock()
 
-	for len(s.readBuf) == 0 {
+	if len(dist) == 0 {
+		return 0, nil
+	}
+
+	total := 0
+
+	copyFromReadBuf := func() {
+		if len(s.readBuf) == 0 || total >= len(dist) {
+			return
+		}
+		n := copy(dist[total:], s.readBuf)
+		total += n
+		s.readBuf = s.readBuf[n:]
+	}
+
+	for total == 0 {
+		copyFromReadBuf()
+		if total > 0 {
+			break
+		}
+
 		select {
 		case buf, ok := <-s.recvQueue:
 			if !ok {
@@ -30,20 +51,46 @@ func (s *Stream) Read(dist []byte) (int, error) {
 		}
 	}
 
-	n := copy(dist, s.readBuf)
-	atomic.AddInt64(&s.state.BytesRead, int64(n))
-	s.readBuf = s.readBuf[n:]
-	if n > 0 {
-		// 发送ack不能阻塞Read，所以放在协程里
-		// 确保发送ack的操作不会因为网络问题而阻塞Read，从而导致连接无法正常关闭或数据无法及时读取
-		go func() {
-			err := s.sender.SendDataAck(uint16(n))
-			if err != nil {
-				s.logger.Warn("SendDataAck failed", "error", err.Error())
-				return
+	for total < len(dist) {
+		copyFromReadBuf()
+		if total >= len(dist) || len(s.readBuf) > 0 {
+			continue
+		}
+
+		select {
+		case buf, ok := <-s.recvQueue:
+			if !ok {
+				goto ACK
 			}
-			atomic.AddInt64(&s.state.SentAckTotal, int64(n))
-		}()
+			s.readBuf = buf
+		default:
+			goto ACK
+		}
 	}
-	return n, nil
+
+ACK:
+	atomic.AddInt64(&s.state.BytesRead, int64(total))
+	if total > 0 {
+		// TODO(low-priority): ACK is sent in a goroutine per Read call.
+		// Under extreme slow-network conditions this can accumulate goroutines.
+		// Keep current behavior for simplicity; optimize later if needed.
+		go func(n int) {
+			remaining := n
+			for remaining > 0 {
+				chunk := remaining
+				if chunk > math.MaxUint16 {
+					chunk = math.MaxUint16
+				}
+
+				err := s.sender.SendDataAck(uint16(chunk))
+				if err != nil {
+					s.logger.Warn("SendDataAck failed", "error", err.Error())
+					return
+				}
+				atomic.AddInt64(&s.state.SentAckTotal, int64(chunk))
+				remaining -= chunk
+			}
+		}(total)
+	}
+	return total, nil
 }

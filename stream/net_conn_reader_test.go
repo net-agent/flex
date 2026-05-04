@@ -87,6 +87,176 @@ func TestPartialRead(t *testing.T) {
 	assert.Equal(t, []byte(" world"), buf2[:n])
 }
 
+func TestReadPartialFromReadBufKeepsRemainder(t *testing.T) {
+	s := New(&mockWriter{}, 0)
+	s.readBuf = []byte("abcdef")
+
+	buf := make([]byte, 3)
+	n, err := s.Read(buf)
+	assert.Nil(t, err)
+	assert.Equal(t, 3, n)
+	assert.Equal(t, []byte("abc"), buf[:n])
+	assert.Equal(t, []byte("def"), s.readBuf)
+}
+
+func TestReadExactFitThenEOFAfterCloseRead(t *testing.T) {
+	s := New(&mockWriter{}, 0)
+	s.recvQueue <- []byte("abc")
+	s.recvQueue <- []byte("def")
+	assert.Nil(t, s.CloseRead())
+
+	buf := make([]byte, 6)
+	n, err := s.Read(buf)
+	assert.Nil(t, err)
+	assert.Equal(t, 6, n)
+	assert.Equal(t, []byte("abcdef"), buf[:n])
+
+	n, err = s.Read(buf)
+	assert.Equal(t, 0, n)
+	assert.Equal(t, io.EOF, err)
+}
+
+func TestReadSkipsEmptyPacketsThenReadsData(t *testing.T) {
+	s := New(&mockWriter{}, 0)
+	s.recvQueue <- []byte{}
+	s.recvQueue <- []byte{}
+	s.recvQueue <- []byte("xyz")
+
+	buf := make([]byte, 8)
+	n, err := s.Read(buf)
+	assert.Nil(t, err)
+	assert.Equal(t, 3, n)
+	assert.Equal(t, []byte("xyz"), buf[:n])
+}
+
+func TestReadOnlyEmptyPacketsThenEOF(t *testing.T) {
+	s := New(&mockWriter{}, 0)
+	s.recvQueue <- []byte{}
+	s.recvQueue <- []byte{}
+	assert.Nil(t, s.CloseRead())
+
+	buf := make([]byte, 8)
+	n, err := s.Read(buf)
+	assert.Equal(t, 0, n)
+	assert.Equal(t, io.EOF, err)
+}
+
+func TestReadTimeoutWhenNoDataAndDeadlineExceeded(t *testing.T) {
+	s := New(&mockWriter{}, 0)
+	s.SetReadDeadline(time.Now().Add(-time.Second))
+
+	n, err := s.Read(make([]byte, 1))
+	assert.Equal(t, 0, n)
+	assert.Equal(t, ErrTimeout, err)
+}
+
+func TestReadReturnsBufferedDataEvenWhenDeadlineExceeded(t *testing.T) {
+	s := New(&mockWriter{}, 0)
+	s.readBuf = []byte("hello")
+	s.SetReadDeadline(time.Now().Add(-time.Second))
+
+	buf := make([]byte, 8)
+	n, err := s.Read(buf)
+	assert.Nil(t, err)
+	assert.Equal(t, 5, n)
+	assert.Equal(t, []byte("hello"), buf[:n])
+}
+
+func TestReadBytesReadAccountingAcrossReads(t *testing.T) {
+	s := New(&mockWriter{}, 0)
+	s.recvQueue <- []byte("ab")
+	s.recvQueue <- []byte("cde")
+	s.recvQueue <- []byte("fg")
+	assert.Nil(t, s.CloseRead())
+
+	buf1 := make([]byte, 4)
+	n, err := s.Read(buf1)
+	assert.Nil(t, err)
+	assert.Equal(t, 4, n)
+	assert.Equal(t, []byte("abcd"), buf1[:n])
+
+	buf2 := make([]byte, 8)
+	n, err = s.Read(buf2)
+	assert.Nil(t, err)
+	assert.Equal(t, 3, n)
+	assert.Equal(t, []byte("efg"), buf2[:n])
+
+	n, err = s.Read(buf2)
+	assert.Equal(t, 0, n)
+	assert.Equal(t, io.EOF, err)
+
+	st := s.GetState()
+	assert.Equal(t, int64(7), st.BytesRead)
+}
+
+func TestReadDataIntegritySmallReadsVsLargeRead(t *testing.T) {
+	buildStream := func() *Stream {
+		s := New(&mockWriter{}, 0)
+		s.recvQueue <- []byte("ab")
+		s.recvQueue <- []byte("cd")
+		s.recvQueue <- []byte("ef")
+		assert.Nil(t, s.CloseRead())
+		return s
+	}
+
+	small := buildStream()
+	large := buildStream()
+
+	var smallOut []byte
+	smallBuf := make([]byte, 1)
+	for {
+		n, err := small.Read(smallBuf)
+		if n > 0 {
+			smallOut = append(smallOut, smallBuf[:n]...)
+		}
+		if err != nil {
+			assert.Equal(t, io.EOF, err)
+			break
+		}
+	}
+
+	largeBuf := make([]byte, 16)
+	n, err := large.Read(largeBuf)
+	assert.Nil(t, err)
+	largeOut := append([]byte(nil), largeBuf[:n]...)
+	n, err = large.Read(largeBuf)
+	assert.Equal(t, 0, n)
+	assert.Equal(t, io.EOF, err)
+
+	assert.Equal(t, []byte("abcdef"), smallOut)
+	assert.Equal(t, []byte("abcdef"), largeOut)
+}
+
+func TestReadDrainsMultipleQueuedPacketsInSingleCall(t *testing.T) {
+	s := New(&mockWriter{}, 0)
+	s.recvQueue <- []byte("aa")
+	s.recvQueue <- []byte("bb")
+	s.recvQueue <- []byte("cc")
+
+	buf := make([]byte, 16)
+	n, err := s.Read(buf)
+	assert.Nil(t, err)
+	assert.Equal(t, 6, n)
+	assert.Equal(t, []byte("aabbcc"), buf[:n])
+}
+
+func TestReadReturnsBufferedDataBeforeEOFInSingleCall(t *testing.T) {
+	s := New(&mockWriter{}, 0)
+	s.recvQueue <- []byte("aaa")
+	s.recvQueue <- []byte("bbb")
+	assert.Nil(t, s.CloseRead())
+
+	buf := make([]byte, 16)
+	n, err := s.Read(buf)
+	assert.Nil(t, err)
+	assert.Equal(t, 6, n)
+	assert.Equal(t, []byte("aaabbb"), buf[:n])
+
+	n, err = s.Read(buf)
+	assert.Equal(t, 0, n)
+	assert.Equal(t, io.EOF, err)
+}
+
 func TestCloseInterruptsBlockedRead(t *testing.T) {
 	s := New(&mockWriter{}, 0)
 
@@ -122,8 +292,10 @@ func TestParallelIndependentStreamsRead(t *testing.T) {
 	for i := 0; i < goroutines; i++ {
 		go func(s *Stream) {
 			buf := make([]byte, 10)
-			s.Read(buf)
-			s.Read(buf)
+			n, err := s.Read(buf)
+			assert.Nil(t, err)
+			assert.Equal(t, 10, n)
+			assert.Equal(t, []byte("data1data2"), buf[:n])
 			done <- struct{}{}
 		}(streams[i])
 	}

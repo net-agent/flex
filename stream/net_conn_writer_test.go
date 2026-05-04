@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"bytes"
 	"net"
 	"sync"
 	"testing"
@@ -212,39 +213,34 @@ func TestWriteInterruptedByRemoteClose(t *testing.T) {
 
 func TestWriteBoundaryValues(t *testing.T) {
 	tests := []struct {
-		name          string
-		payloadSize   int
-		minChunks     int
-		maxChunks     int
-		firstChunkMax int
+		name           string
+		payloadSize    int
+		expectedChunks int
+		firstChunkMax  int
 	}{
 		{
-			name:          "exactly DefaultSplitSize",
-			payloadSize:   DefaultSplitSize,
-			minChunks:     1,
-			maxChunks:     1,
-			firstChunkMax: DefaultSplitSize,
+			name:           "exactly DefaultSplitSize",
+			payloadSize:    DefaultSplitSize,
+			expectedChunks: 1,
+			firstChunkMax:  DefaultSplitSize,
 		},
 		{
-			name:          "DefaultSplitSize + 1",
-			payloadSize:   DefaultSplitSize + 1,
-			minChunks:     2,
-			maxChunks:     2,
-			firstChunkMax: DefaultSplitSize,
+			name:           "DefaultSplitSize + 1",
+			payloadSize:    DefaultSplitSize + 1,
+			expectedChunks: 2,
+			firstChunkMax:  DefaultSplitSize,
 		},
 		{
-			name:          "exactly MaxPayloadSize",
-			payloadSize:   packet.MaxPayloadSize,
-			minChunks:     1,
-			maxChunks:     2,
-			firstChunkMax: DefaultSplitSize,
+			name:           "exactly MaxPayloadSize",
+			payloadSize:    packet.MaxPayloadSize,
+			expectedChunks: (packet.MaxPayloadSize + DefaultSplitSize - 1) / DefaultSplitSize,
+			firstChunkMax:  DefaultSplitSize,
 		},
 		{
-			name:          "MaxPayloadSize + 1",
-			payloadSize:   packet.MaxPayloadSize + 1,
-			minChunks:     2,
-			maxChunks:     2,
-			firstChunkMax: DefaultSplitSize,
+			name:           "MaxPayloadSize + 1",
+			payloadSize:    packet.MaxPayloadSize + 1,
+			expectedChunks: (packet.MaxPayloadSize + 1 + DefaultSplitSize - 1) / DefaultSplitSize,
+			firstChunkMax:  DefaultSplitSize,
 		},
 	}
 
@@ -259,9 +255,12 @@ func TestWriteBoundaryValues(t *testing.T) {
 			assert.Equal(t, tt.payloadSize, wn)
 
 			sizes := sw.getSizes()
-			assert.GreaterOrEqual(t, len(sizes), tt.minChunks, "too few chunks")
-			assert.LessOrEqual(t, len(sizes), tt.maxChunks, "too many chunks")
+			assert.Equal(t, tt.expectedChunks, len(sizes), "unexpected chunk count")
 			assert.LessOrEqual(t, sizes[0], tt.firstChunkMax, "first chunk too large")
+			for _, sz := range sizes {
+				assert.LessOrEqual(t, sz, DefaultSplitSize, "chunk exceeds split size")
+				assert.LessOrEqual(t, sz, packet.MaxPayloadSize, "chunk exceeds payload max")
+			}
 			assert.Equal(t, tt.payloadSize, sw.totalBytes(), "total bytes mismatch")
 		})
 	}
@@ -279,4 +278,89 @@ func TestWriteDeadlineReturnsNetError(t *testing.T) {
 	var netErr net.Error
 	assert.ErrorAs(t, err, &netErr)
 	assert.True(t, netErr.Timeout(), "should be a timeout error")
+}
+
+type seqChunkWriter struct {
+	mu      sync.Mutex
+	markers []byte
+	delay   time.Duration
+}
+
+func (w *seqChunkWriter) WriteBuffer(buf *packet.Buffer) error {
+	if w.delay > 0 {
+		time.Sleep(w.delay)
+	}
+	w.mu.Lock()
+	if len(buf.Payload) > 0 {
+		w.markers = append(w.markers, buf.Payload[0])
+	}
+	w.mu.Unlock()
+	return nil
+}
+
+func (w *seqChunkWriter) SetWriteTimeout(dur time.Duration) {}
+
+func (w *seqChunkWriter) getMarkers() []byte {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make([]byte, len(w.markers))
+	copy(out, w.markers)
+	return out
+}
+
+func TestWriteSerializesConcurrentCallsByInvocationOrder(t *testing.T) {
+	sw := &seqChunkWriter{delay: time.Millisecond}
+	s := New(sw, int32(4*MB))
+
+	payloadA := bytes.Repeat([]byte{'A'}, DefaultSplitSize+8)
+	payloadB := bytes.Repeat([]byte{'B'}, DefaultSplitSize+8)
+
+	done1 := make(chan error, 1)
+	done2 := make(chan error, 1)
+	started1 := make(chan struct{})
+
+	go func() {
+		close(started1)
+		_, err := s.Write(payloadA)
+		done1 <- err
+	}()
+	<-started1
+	go func() {
+		_, err := s.Write(payloadB)
+		done2 <- err
+	}()
+
+	assert.Nil(t, <-done1)
+	assert.Nil(t, <-done2)
+
+	assert.Equal(t, []byte{'A', 'A', 'B', 'B'}, sw.getMarkers())
+}
+
+func TestWriteFastConcurrentWritesCompleteWithoutOrderGuarantee(t *testing.T) {
+	sw := &seqChunkWriter{delay: time.Millisecond}
+	s := New(sw, int32(4*MB))
+
+	payloadA := bytes.Repeat([]byte{'A'}, DefaultSplitSize+8)
+	payloadB := bytes.Repeat([]byte{'B'}, DefaultSplitSize+8)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		n, err := s.WriteFast(payloadA)
+		assert.Nil(t, err)
+		assert.Equal(t, len(payloadA), n)
+	}()
+	go func() {
+		defer wg.Done()
+		n, err := s.WriteFast(payloadB)
+		assert.Nil(t, err)
+		assert.Equal(t, len(payloadB), n)
+	}()
+	wg.Wait()
+
+	markers := sw.getMarkers()
+	assert.Equal(t, 4, len(markers))
+	assert.Equal(t, 2, bytes.Count(markers, []byte{'A'}))
+	assert.Equal(t, 2, bytes.Count(markers, []byte{'B'}))
 }

@@ -20,6 +20,34 @@ var (
 	ErrSessionDisconnected = errors.New("session disconnected")
 )
 
+// SessionState 表示 Session 的连接状态
+type SessionState int32
+
+const (
+	SessionReady     SessionState = iota // 已创建，Serve 尚未启动
+	SessionIdle                          // 已进入 Serve loop，等待首次 Listen/Dial 触发
+	SessionConnecting                    // 连接中 / 重连中
+	SessionOnline                        // 已连接
+	SessionClosed                        // 已关闭
+)
+
+func (s SessionState) String() string {
+	switch s {
+	case SessionReady:
+		return "ready"
+	case SessionIdle:
+		return "idle"
+	case SessionConnecting:
+		return "connecting"
+	case SessionOnline:
+		return "online"
+	case SessionClosed:
+		return "closed"
+	default:
+		return "unknown"
+	}
+}
+
 type ConnectFunc func() (packet.Conn, error)
 
 type SessionConfig struct {
@@ -47,6 +75,11 @@ type Session struct {
 	done      chan struct{}
 	onceClose sync.Once
 	logger    *slog.Logger
+
+	// 状态管理
+	state         atomic.Int32 // SessionState，lock-free 读取
+	lastErr       atomic.Value // string，最近一次错误
+	onStateChange func(oldState, newState SessionState)
 }
 
 func NewSession(connector ConnectFunc, cfg SessionConfig) *Session {
@@ -73,6 +106,41 @@ func (s *Session) SetEnableFairConn(enable bool) {
 func (s *Session) SetLogger(l *slog.Logger) {
 	if l != nil {
 		s.logger = l
+	}
+}
+
+// GetState 返回当前 Session 状态（lock-free）
+func (s *Session) GetState() SessionState {
+	return SessionState(s.state.Load())
+}
+
+// GetLastErr 返回最近一次错误信息
+func (s *Session) GetLastErr() string {
+	v := s.lastErr.Load()
+	if v == nil {
+		return ""
+	}
+	return v.(string)
+}
+
+// OnStateChange 注册状态变更回调。必须在 Serve 之前调用。
+func (s *Session) OnStateChange(fn func(oldState, newState SessionState)) {
+	s.onStateChange = fn
+}
+
+// setState 更新状态，仅在状态实际变化时触发回调。
+// 如果 err 非 nil，更新 lastErr；如果 err 为 nil，清空 lastErr。
+// 必须在 s.mu 锁外调用，避免回调中调用 GetNode() 死锁。
+func (s *Session) setState(newState SessionState, err error) {
+	if err != nil {
+		s.lastErr.Store(err.Error())
+	} else {
+		s.lastErr.Store("")
+	}
+
+	old := SessionState(s.state.Swap(int32(newState)))
+	if old != newState && s.onStateChange != nil {
+		s.onStateChange(old, newState)
 	}
 }
 
@@ -156,13 +224,36 @@ func (s *Session) ensureServing() {
 
 // Serve 启动重连循环。阻塞直到 Close 被调用。
 // 实际连接在首次 Listen 或 Dial 调用时才开始（懒连接）。
+//
+// 状态流转：
+//
+//	                 ┌─────────────────────────────────────────┐
+//	                 │                  Close()                │
+//	                 ▼                                         │
+//	  NewSession → Ready → [Serve()] → Idle → Connecting → Online
+//	                                              ▲   │
+//	                                              └───┘  (断线自动重连)
+//	                                              │
+//	                                            Closed  (Close() 可在任意状态触发)
+//
+// 各状态说明：
+//
+//	  Ready      — Session 已创建，Serve 尚未启动
+//	  Idle       — 已进入 Serve loop，等待首次 Listen/Dial 触发（懒连接）
+//	  Connecting — 连接中或断线重连中
+//	  Online     — 与服务器成功建立连接，Node 可用
+//	  Closed     — Session 已永久关闭，不可复用
 func (s *Session) Serve() error {
+	s.setState(SessionIdle, nil) // ★ 已进入 Serve loop，等待首次触发
+
 	// 等待首次使用触发
 	select {
 	case <-s.trigger:
 	case <-s.done:
 		return nil
 	}
+
+	s.setState(SessionConnecting, nil) // ★ 触发连接：Idle → Connecting
 
 	backoff := time.Second
 
@@ -176,6 +267,7 @@ func (s *Session) Serve() error {
 		conn, err := s.connector()
 		if err != nil {
 			s.logger.Warn("connect failed", "error", err, "retry_in", backoff)
+			s.setState(SessionConnecting, err) // 状态不变，仅更新 lastErr
 			select {
 			case <-s.done:
 				return nil
@@ -189,6 +281,7 @@ func (s *Session) Serve() error {
 		if err != nil {
 			conn.Close()
 			s.logger.Warn("handshake failed", "error", err, "retry_in", backoff)
+			s.setState(SessionConnecting, err) // 状态不变，仅更新 lastErr
 			select {
 			case <-s.done:
 				return nil
@@ -199,6 +292,7 @@ func (s *Session) Serve() error {
 		}
 
 		if s.enableFairConn.Load() {
+			s.logger.Info("enabling fair connection scheduling")
 			conn = sched.NewFairConn(conn)
 		}
 
@@ -221,12 +315,16 @@ func (s *Session) Serve() error {
 		close(s.ready) // 唤醒所有等待者
 		s.mu.Unlock()
 
-		node.Serve() // 阻塞直到断线
+		s.setState(SessionOnline, nil) // ★ 触发回调：Connecting → Online
+
+		serveErr := node.Serve() // 阻塞直到断线
 
 		s.mu.Lock()
 		s.node = nil
 		s.ready = make(chan struct{}) // 为下一轮重连准备新的 ready channel
 		s.mu.Unlock()
+
+		s.setState(SessionConnecting, serveErr) // ★ 触发回调：Online → Connecting
 
 		s.logger.Info("node disconnected, reconnecting...")
 	}
@@ -241,6 +339,7 @@ func (s *Session) Close() error {
 			s.node = nil
 		}
 		s.mu.Unlock()
+		s.setState(SessionClosed, nil) // ★ 触发回调
 	})
 	return nil
 }
