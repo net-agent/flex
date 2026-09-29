@@ -10,16 +10,19 @@ import (
 	"github.com/net-agent/flex/v3/packet"
 )
 
-var pipeInst *wsPiper
-
-func init() {
-	pipeInst = &wsPiper{}
-	pipeInst.init()
-	go pipeInst.run()
-}
+var (
+	pipeInst *wsPiper
+	pipeOnce sync.Once
+)
 
 // Pipe creates a pair of packet.Conn backed by an in-process WebSocket connection.
+// The underlying listener is started lazily on first call.
 func Pipe() (packet.Conn, packet.Conn) {
+	pipeOnce.Do(func() {
+		pipeInst = &wsPiper{}
+		pipeInst.init()
+		go pipeInst.run()
+	})
 	return pipeInst.pipe()
 }
 

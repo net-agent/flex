@@ -56,14 +56,14 @@ func (p *Pinger) PingDomain(domain string, timeout time.Duration) (time.Duration
 	select {
 	case res, ok := <-ch:
 		if !ok {
-			return 0, pending.ErrTimeout
+			return 0, ErrPingDomainTimeout
 		}
 		if res.Err != nil {
 			return 0, res.Err
 		}
 		return time.Since(pingStart), nil
 	case <-time.After(timeout):
-		return 0, pending.ErrTimeout
+		return 0, ErrPingDomainTimeout
 	}
 }
 

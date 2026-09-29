@@ -6,8 +6,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/net-agent/flex/v3/packet"
 )
 
 type Direction int
@@ -99,7 +97,7 @@ func (s *Stream) String() string {
 
 var streamIndex int32 = 0
 
-func New(pwriter packet.Writer, initialWindowSize int32) *Stream {
+func New(pwriter Writer, initialWindowSize int32) *Stream {
 	if initialWindowSize <= 0 {
 		initialWindowSize = DefaultWindowSize
 	}
@@ -129,7 +127,7 @@ func New(pwriter packet.Writer, initialWindowSize int32) *Stream {
 	}
 }
 
-func NewDialStream(w packet.Writer,
+func NewDialStream(w Writer,
 	localDomain string, localIP, localPort uint16,
 	remoteDomain string, remoteIP, remotePort uint16,
 	initialWindowSize int32) *Stream {
@@ -143,7 +141,7 @@ func NewDialStream(w packet.Writer,
 	return s
 }
 
-func NewAcceptStream(w packet.Writer,
+func NewAcceptStream(w Writer,
 	localDomain string, localIP, localPort uint16,
 	remoteDomain string, remoteIP, remotePort uint16,
 	initialWindowSize int32) *Stream {

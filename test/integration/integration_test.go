@@ -6,7 +6,7 @@
 //   - Churn：持续循环建连/收发/关闭 — 重点覆盖连接复用与生命周期压力
 //
 // 推荐执行参数：
-//   - go test -timeout 30s ./examples/integration -count=1
+//   - go test -timeout 30s ./test/integration -count=1
 //   - 当前默认参数下，全量通常在 8s~18s 内完成（取决于机器负载）
 //
 // 关键压力参数（可按需调整）：

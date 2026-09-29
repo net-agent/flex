@@ -40,8 +40,8 @@ func TestContextPing(t *testing.T) {
 	log.Println(err)
 
 	// 错误分支：WriteBuffer failed
-	// 关闭底层连接后，ping 期望返回错误（通常为 timeout）
-	node1.Conn.Close()
+	// 关闭节点（含底层连接）后，ping 期望返回错误（通常为 timeout）
+	node1.Close()
 	_, err = ctx1.ping(time.Second)
 	if err == nil {
 		t.Error("unexpected nil err")

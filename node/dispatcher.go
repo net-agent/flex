@@ -23,16 +23,16 @@ func (d *Dispatcher) init(host *Node) {
 	d.logger = host.logger
 	d.domain = host.domain
 	d.cmdHandlers = map[byte]func(*packet.Buffer){
-		packet.AckPushStreamData: host.StreamHub.handleAckPushStreamData,
-		packet.CmdOpenStream:     host.ListenHub.handleCmdOpenStream,
-		packet.CmdPingDomain:     host.Pinger.handleCmdPingDomain,
-		packet.AckPingDomain:     host.Pinger.handleAckPingDomain,
+		packet.AckPushStreamData: host.streamHub.handleAckPushStreamData,
+		packet.CmdOpenStream:     host.listenHub.handleCmdOpenStream,
+		packet.CmdPingDomain:     host.pinger.handleCmdPingDomain,
+		packet.AckPingDomain:     host.pinger.handleAckPingDomain,
 	}
 	d.dataHandlers = map[byte]func(*packet.Buffer){
-		packet.CmdPushStreamData: host.StreamHub.handleCmdPushStreamData,
-		packet.AckOpenStream:     host.Dialer.handleAckOpenStream,
-		packet.CmdCloseStream:    host.StreamHub.handleCmdCloseStream,
-		packet.AckCloseStream:    host.StreamHub.handleAckCloseStream,
+		packet.CmdPushStreamData: host.streamHub.handleCmdPushStreamData,
+		packet.AckOpenStream:     host.dialer.handleAckOpenStream,
+		packet.CmdCloseStream:    host.streamHub.handleCmdCloseStream,
+		packet.AckCloseStream:    host.streamHub.handleAckCloseStream,
 	}
 }
 

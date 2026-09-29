@@ -210,6 +210,35 @@ func Test_parseAddress(t *testing.T) {
 	}
 }
 
+func TestDialRemoteDomain(t *testing.T) {
+	n1, n2 := Pipe("test1", "test2")
+	defer n1.Close()
+	defer n2.Close()
+
+	port := uint16(80)
+	l, err := n2.Listen(port)
+	assert.Nil(t, err, "listen should be ok")
+	go runEchoForListener(l)
+
+	// DialDomain：remoteDomain 应取 payload 中编码的域名
+	s1, err := n1.Dial("test2:80")
+	assert.Nil(t, err, "dial domain should be ok")
+	assert.Equal(t, "test2", s1.GetState().RemoteDomain, "remote domain should come from open-stream request")
+	s1.Close()
+
+	// DialIP：payload 中无域名，应回退为对端 IP 字符串
+	s2, err := n1.DialIP(n2.GetIP(), port)
+	assert.Nil(t, err, "dial ip should be ok")
+	assert.Equal(t, "2", s2.GetState().RemoteDomain, "remote domain should fallback to remote ip")
+	s2.Close()
+
+	// 本地回环（local）：应回退为本节点域名
+	s3, err := n2.Dial("local:80")
+	assert.Nil(t, err, "dial local should be ok")
+	assert.Equal(t, "test2", s3.GetState().RemoteDomain, "remote domain should fallback to local domain")
+	s3.Close()
+}
+
 func TestHandleAckOpen(t *testing.T) {
 	n := New(nil)
 	port := uint16(1234)
@@ -217,16 +246,16 @@ func TestHandleAckOpen(t *testing.T) {
 	pbuf.SetDistPort(port)
 
 	// branch: not found error
-	n.handleAckOpenStream(pbuf)
+	n.dialer.handleAckOpenStream(pbuf)
 	// branch: ok
-	n.handleAckOpenStream(pbuf)
+	n.dialer.handleAckOpenStream(pbuf)
 
 	// branch: attach stream failed（上一个branch中，sid已经被登记）
-	n.handleAckOpenStream(pbuf)
+	n.dialer.handleAckOpenStream(pbuf)
 
 	// branch: ackmessage
 	pbuf.Payload = []byte{1, 2, 3}
-	n.handleAckOpenStream(pbuf)
+	n.dialer.handleAckOpenStream(pbuf)
 }
 
 func TestHandleAckOpen_LateAckDoesNotLeakStream(t *testing.T) {
@@ -244,9 +273,9 @@ func TestHandleAckOpen_LateAckDoesNotLeakStream(t *testing.T) {
 	ack := packet.OpenStreamACK{OK: true, WindowSize: 1024}
 	pbuf.SetPayload(ack.Encode())
 
-	n.handleAckOpenStream(pbuf)
+	n.dialer.handleAckOpenStream(pbuf)
 
-	_, err := n.getStream(pbuf.SID())
+	_, err := n.streamHub.getStream(pbuf.SID())
 	assert.Equal(t, errStreamNotFound, err, "late ack should not leave an attached orphan stream")
 }
 
@@ -301,7 +330,7 @@ func TestDialBuffErr_timeoutAndWriteFailed(t *testing.T) {
 	pbuf.SetDistIP(0) // 默认0，会进入本地循环，触发timeout
 	d1.SetDialTimeout(time.Millisecond * 100)
 	_, err = d1.dialPbuf(pbuf)
-	assert.Equal(t, pending.ErrTimeout, err)
+	assert.Equal(t, ErrWaitResponseTimeout, err)
 
 	// 测试用例：关闭pipe，触发write错误
 	// portm(2)

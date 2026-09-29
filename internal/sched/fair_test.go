@@ -413,7 +413,14 @@ func controlPositions(entries []RecordEntry) []float64 {
 	return pos
 }
 
+// TestGenerateReport 生成公平调度对比 HTML 报告。
+// 默认跳过（属于报告生成器而非断言测试），设置 FLEX_FAIRNESS_REPORT=1 后运行，
+// 报告默认写入临时目录，可用 FLEX_FAIRNESS_REPORT_PATH 指定输出路径。
 func TestGenerateReport(t *testing.T) {
+	if os.Getenv("FLEX_FAIRNESS_REPORT") == "" {
+		t.Skip("set FLEX_FAIRNESS_REPORT=1 to generate the HTML report")
+	}
+
 	t.Log("Running fairness scenarios...")
 	fair2 := runFairness(2, 100)
 	fair5 := runFairness(5, 100)
@@ -467,9 +474,10 @@ func TestGenerateReport(t *testing.T) {
 		t.Fatalf("template parse: %v", err)
 	}
 
-	outDir := filepath.Join("..", "..", "docs")
-	os.MkdirAll(outDir, 0o755)
-	outPath := filepath.Join(outDir, "fair_scheduling_report.html")
+	outPath := filepath.Join(os.TempDir(), "flex_fair_scheduling_report.html")
+	if v := os.Getenv("FLEX_FAIRNESS_REPORT_PATH"); v != "" {
+		outPath = v
+	}
 	f, err := os.Create(outPath)
 	if err != nil {
 		t.Fatalf("create file: %v", err)

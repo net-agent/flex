@@ -15,8 +15,8 @@ import (
 func TestNew(t *testing.T) {
 	n := New(nil)
 	assert.NotNil(t, n, "new node should return no nil object")
-	assert.False(t, n.Dispatcher.running, "running state should false")
-	assert.Nil(t, n.Conn, "conn should be nil")
+	assert.False(t, n.dispatcher.running, "running state should false")
+	assert.Nil(t, n.pconn, "conn should be nil")
 }
 
 func TestSet(t *testing.T) {
@@ -40,8 +40,8 @@ func TestServe(t *testing.T) {
 
 	<-time.After(time.Millisecond * 50)
 
-	assert.True(t, n1.Dispatcher.isRunning(), "node1 running state should be true")
-	assert.True(t, n2.Dispatcher.isRunning(), "node2 running state should be true")
+	assert.True(t, n1.dispatcher.isRunning(), "node1 running state should be true")
+	assert.True(t, n2.dispatcher.isRunning(), "node2 running state should be true")
 }
 
 func TestAttachStream(t *testing.T) {
@@ -49,25 +49,25 @@ func TestAttachStream(t *testing.T) {
 	var err error
 
 	sid := uint64(100)
-	_, err = n.getStream(sid)
+	_, err = n.streamHub.getStream(sid)
 	assert.Equal(t, err, errStreamNotFound, "test not found case")
 
 	ctx := stream.New(nil, 0)
-	err = n.attachStream(ctx, sid)
+	err = n.streamHub.attachStream(ctx, sid)
 	assert.Nil(t, err, "want nil err")
 
-	err = n.attachStream(ctx, sid)
+	err = n.streamHub.attachStream(ctx, sid)
 	assert.Equal(t, err, ErrSidIsAttached, "sid is attached")
 
-	ret1, err := n.getStream(sid)
+	ret1, err := n.streamHub.getStream(sid)
 	assert.Nil(t, err, "want nil err")
 	assert.Equal(t, ret1, ctx, "return value should be ctx")
 
-	ret2, err := n.detachStream(sid)
+	ret2, err := n.streamHub.detachStream(sid)
 	assert.Nil(t, err, "want nil err")
 	assert.Equal(t, ret2, ctx, "return value should be ctx")
 
-	_, err = n.getStream(sid)
+	_, err = n.streamHub.getStream(sid)
 	assert.Equal(t, err, errStreamNotFound, "getAndDelete flag should work")
 }
 
@@ -78,11 +78,11 @@ func TestKeepalive(t *testing.T) {
 	pc2 := packet.NewWithConn(c2)
 	n1 := New(pc1)
 	n2 := New(pc2)
-	n1.Heartbeat.interval = beat * 5
-	n2.Heartbeat.interval = beat * 5
+	n1.heartbeat.interval = beat * 5
+	n2.heartbeat.interval = beat * 5
 
 	count := 0
-	n2.Heartbeat.SetChecker(func() error {
+	n2.heartbeat.SetChecker(func() error {
 		count++
 		if count < 2 {
 			return nil
@@ -93,18 +93,18 @@ func TestKeepalive(t *testing.T) {
 	var waiter sync.WaitGroup
 	waiter.Add(2)
 	go func() {
-		n1.Heartbeat.run(time.NewTicker(beat*1), n1.done, func() { n1.Close() })
+		n1.heartbeat.run(time.NewTicker(beat*1), n1.done, func() { n1.Close() })
 		waiter.Done()
 	}()
 	go func() {
-		n2.Heartbeat.run(time.NewTicker(beat*1), n2.done, func() { n2.Close() })
+		n2.heartbeat.run(time.NewTicker(beat*1), n2.done, func() { n2.Close() })
 		waiter.Done()
 	}()
 
 	waiter.Wait()
 
-	n1.Heartbeat.SetChecker(nil)
-	n1.Heartbeat.run(time.NewTicker(beat*1), n1.done, func() { n1.Close() })
+	n1.heartbeat.SetChecker(nil)
+	n1.heartbeat.run(time.NewTicker(beat*1), n1.done, func() { n1.Close() })
 }
 
 func TestCoverWriteBuffer(t *testing.T) {
@@ -123,14 +123,14 @@ func TestCoverWriteBuffer(t *testing.T) {
 // 覆盖route的default分支测试
 func TestCoverRoutePbufDefaultBranch(t *testing.T) {
 	n := New(nil)
-	n.Dispatcher.start()
-	go n.Dispatcher.processCmdChan()
-	go n.Dispatcher.processDataChan()
+	n.dispatcher.start()
+	go n.dispatcher.processCmdChan()
+	go n.dispatcher.processDataChan()
 
-	n.Dispatcher.dispatch(packet.NewBufferWithCmd(0))
-	n.Dispatcher.dispatch(packet.NewBufferWithCmd(packet.CmdOpenStream))
+	n.dispatcher.dispatch(packet.NewBufferWithCmd(0))
+	n.dispatcher.dispatch(packet.NewBufferWithCmd(packet.CmdOpenStream))
 
 	// give goroutines time to process
 	<-time.After(time.Millisecond * 50)
-	n.Dispatcher.stop()
+	n.dispatcher.stop()
 }

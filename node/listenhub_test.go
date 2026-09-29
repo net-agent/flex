@@ -69,7 +69,7 @@ func TestHandleCmdOpenErr(t *testing.T) {
 	n := New(nil)
 	pbuf := packet.NewBuffer()
 	pbuf.SetSrc(100, 100)
-	n.handleCmdOpenStream(pbuf)
+	n.listenHub.handleCmdOpenStream(pbuf)
 
 	// 覆盖测试：SID已经存在的情况
 	n1, n2 := Pipe("test1", "test2")
@@ -90,7 +90,7 @@ func TestHandleCmdOpenErr(t *testing.T) {
 	pbuf.SetSrc(1, 1000)
 	pbuf.SetPayload([]byte("test2"))
 
-	s, err := n1.dialPbuf(pbuf)
+	s, err := n1.dialer.dialPbuf(pbuf)
 	assert.Nil(t, err)
 	assert.NotNil(t, s)
 

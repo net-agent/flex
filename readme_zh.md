@@ -6,13 +6,14 @@
 
 ## 核心特性
 
--   **流式多路复用**: 在单个物理连接（如 WebSocket）上运行几乎无限的逻辑流。
+-   **流式多路复用**: 在单个物理连接（TCP、WebSocket）上运行几乎无限的逻辑流。
 -   **Node & Switcher 架构**:
     -   **Node (节点)**: 作为客户端或代理。支持在虚拟端口上进行 Dial（拨号）或 Listen（监听）。
     -   **Switcher (交换机)**: 作为中继服务器。根据虚拟域名 (Domain) 和 IP 在节点间路由流量。
--   **公平调度**: 内置 **公平队列 (Fair Queuing)**，确保单个高带宽流不会阻塞控制信号（ACK、Ping）或其他小流量流。
--   **可观测性**: 为 Node 和 Switcher 集成了 **Admin API**，可实时监控流量、活跃流和延迟信息。
--   **可靠性**: 健壮的连接管理，拥有完善的主动/被动关闭处理及保活机制。
+-   **Session 自动重连**: `node.Session` 在 Node 之上提供懒连接、指数退避自动重连，监听器在重连后自动恢复。
+-   **公平调度**: 内置基于 DRR 的**公平队列**（见 `internal/sched`），确保单个高带宽流不会阻塞控制信号（ACK、Ping）或其他小流量流。`switcher.Server` 与 `node.Session` 默认启用。
+-   **状态查询 API**: `Node.GetInfo()` / `Node.GetListeners()`、`Switcher.GetStats()` / `Switcher.GetClients()`、`Stream.GetState()` 可实时获取流量统计、活跃流与 RTT。
+-   **可靠性**: 健壮的连接管理，拥有心跳保活及完善的主动/被动关闭处理机制。
 
 ## 架构图
 
@@ -20,7 +21,7 @@
 graph LR
     A[Node: ClientA] -- Websocket --> S[Switcher]
     B[Node: ClientB] -- Websocket --> S
-    
+
     A -- "虚拟流 (Dial)" --> B
     B -- "虚拟流 (Accept)" --> A
 ```
@@ -33,68 +34,107 @@ graph LR
 go get github.com/net-agent/flex/v3
 ```
 
-### 1. 最小化 Node-to-Node (直连模式)
+### 1. 最小化 Node-to-Node（直连模式）
 
-你可以使用 `flex` 对任何 `net.Conn` 进行多路复用。
+你可以使用 `flex` 对任何 `net.Conn` 进行多路复用。直连模式下两端各自设置域名和虚拟 IP：
 
 ```go
-package main
+// 服务端
+server := node.New(packet.NewWithConn(srvConn))
+server.SetDomain("server-node")
+server.SetIP(1)
+go server.Serve()
 
-import (
-	"log"
-	"net"
-	"github.com/net-agent/flex/v3/node"
-	"github.com/net-agent/flex/v3/packet"
-)
-
-func main() {
-    // 假设建立了一个物理连接 (TCP/WS)
-    conn, _ := net.Dial("tcp", "127.0.0.1:8080")
-    
-    // 创建 Node
-    n := node.New(packet.NewWithConn(conn))
-    
-    // 启动服务循环
-    go n.Serve()
-    
-    // 打开一个虚拟流
-    stream, err := n.Dial("remote-domain:80")
-    if err != nil {
-        log.Fatal(err)
-    }
-    
-    // 像使用 net.Conn 一样使用 stream
-    stream.Write([]byte("Hello"))
-}
+ln, _ := server.Listen(80)
+conn, _ := ln.Accept() // conn 是 *stream.Stream，实现了 net.Conn
 ```
 
-### 2. 使用 Switcher (中继模式)
+```go
+// 客户端
+client := node.New(packet.NewWithConn(conn))
+client.SetDomain("client-node")
+client.SetIP(2)
+go client.Serve()
 
-请参考 [examples/ws-gate](examples/ws-gate/main.go) 查看完整的 Switcher 网关运行示例。
+s, err := client.Dial("server-node:80") // 或 client.DialIP(1, 80)
+if err != nil {
+    log.Fatal(err)
+}
+s.Write([]byte("Hello"))
+```
+
+### 2. 使用 Switcher（中继模式）
+
+Switcher 通过密码认证节点、分配虚拟 IP，并在域名之间路由数据包：
 
 ```go
 // 启动 Switcher
-s := switcher.NewServer("password")
-// 处理传入连接
-go s.ServeConn(pconn, ...)
+srv := switcher.NewServer("password", nil, nil)
+ln, _ := net.Listen("tcp", ":8080")
+log.Fatal(srv.Serve(ln))
 ```
+
+节点使用 `node.Connect` 接入网络：它会完成认证握手并返回一个可直接 Serve 的 Node：
+
+```go
+conn, _ := net.Dial("tcp", "127.0.0.1:8080")
+n, err := node.Connect(packet.NewWithConn(conn), "client-a", "", "password")
+if err != nil {
+    log.Fatal(err)
+}
+go n.Serve()
+
+// 通过域名 Dial 另一个节点
+s, err := n.Dial("client-b:80")
+```
+
+通过 WebSocket 运行 Switcher 的完整示例请参考 [examples/ws-gate](examples/ws-gate/main.go)。
+
+### 3. Session（自动重连）
+
+`node.Session` 让逻辑节点在网络故障后保持存活：按指数退避自动重连，并在每次重连后自动重新注册所有监听器。
+
+```go
+sess := node.NewSession(func() (packet.Conn, error) {
+    conn, err := net.Dial("tcp", "127.0.0.1:8080")
+    if err != nil {
+        return nil, err
+    }
+    return packet.NewWithConn(conn), nil
+}, node.SessionConfig{Domain: "client-a", Password: "password"})
+go sess.Serve()
+
+// 首次 Listen/Dial 会触发连接（懒连接）；
+// 监听器在每次重连后自动恢复。
+ln, err := sess.Listen(80)
+```
+
+## 示例
+
+| 示例 | 说明 |
+| --- | --- |
+| [examples/echo](examples/echo/main.go) | 最基本的 Switcher + 双 Node，虚拟流 echo |
+| [examples/ping](examples/ping/main.go) | 通过 `PingDomain` 测量节点间 RTT |
+| [examples/tcp-proxy](examples/tcp-proxy/main.go) | 经过 flex 网络做 TCP 端口转发 |
+| [examples/ws-gate](examples/ws-gate/main.go) | WebSocket 上的 Switcher 网关 |
+| [examples/web-client](examples/web-client) | 浏览器（Vue）通过 WebSocket 使用 flex 的演示 |
 
 ## 文档
 
 关于详细的使用方法、配置和 API 参考，请参阅 **[开发者手册](docs/manual_zh.md)**。
 
-## 可观测性
+## 状态查询 API
 
-Flex 内置了一个 HTTP Admin Server。
+Node 和 Switcher 都以编程方式暴露运行时状态：
 
 ```go
-// 为 Node 启动 Admin
-admin := node.NewAdminServer(n, ":8081")
-go admin.Start()
-```
+info := n.GetInfo()         // 节点域名、IP、网络类型、收发字节数
+listeners := n.GetListeners()
 
-访问 `http://localhost:8081/api/v1/info` 或 `.../streams` 获取指标。
+stats := srv.GetStats()     // Switcher 活跃连接数
+clients := srv.GetClients() // 在线节点：域名、IP、流数量、流量、RTT
+```
 
 ## 许可证
 
-MIT
+MIT，详见 [LICENSE](LICENSE)。

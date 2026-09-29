@@ -370,7 +370,7 @@ func (s *Session) removeListener(port uint16) {
 	defer s.mu.Unlock()
 	delete(s.listeners, port)
 	if s.node != nil {
-		if nl, err := s.node.getListenerByPort(port); err == nil {
+		if nl, err := s.node.listenHub.getListenerByPort(port); err == nil {
 			nl.Close()
 		}
 	}

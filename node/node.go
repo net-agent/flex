@@ -3,12 +3,14 @@ package node
 import (
 	"errors"
 	"log/slog"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/net-agent/flex/v3/internal/idpool"
 	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v3/stream"
 )
 
 var (
@@ -29,16 +31,15 @@ type FlowConfig struct {
 }
 
 type Node struct {
-	packet.Conn
+	pconn packet.Conn
 
-	Dispatcher
-	Heartbeat
-
-	ListenHub // 提供Listen实现
-	Dialer    // 提供Dial、DialDomain、DialIP实现
-	Pinger    // 提供PingDomain实现
-	StreamHub // 处理Data、DataAck、Close、CloseAck
-	logger    *slog.Logger
+	dispatcher Dispatcher
+	heartbeat  Heartbeat
+	listenHub  ListenHub
+	dialer     Dialer
+	pinger     Pinger
+	streamHub  StreamHub
+	logger     *slog.Logger
 
 	network string
 	domain  string
@@ -68,38 +69,50 @@ type ListenerInfo struct {
 }
 
 func New(conn packet.Conn) *Node {
-	portm, _ := idpool.New(1000, 0xFFFF)
-	return NewWithOptions(conn, portm, DefaultHeartbeatInterval)
+	// 端口范围是合法常量，error 只会来自非法范围，此处可安全忽略
+	n, _ := NewWithOptions(conn, 1000, 0xFFFF, DefaultHeartbeatInterval)
+	return n
 }
 
-func NewWithOptions(conn packet.Conn, portm *idpool.Pool, heartbeatInterval time.Duration) *Node {
+// NewWithOptions 创建 Node，并允许自定义虚拟端口分配范围与心跳间隔。
+// 端口范围非法（portMin > portMax）时返回 idpool.ErrInvalidRange。
+func NewWithOptions(conn packet.Conn, portMin, portMax uint16, heartbeatInterval time.Duration) (*Node, error) {
+	portm, err := idpool.New(portMin, portMax)
+	if err != nil {
+		return nil, err
+	}
 	node := &Node{
-		Conn:   conn,
+		pconn:  conn,
 		done:   make(chan struct{}),
 		logger: slog.Default(),
 	}
 
-	node.ListenHub.init(node, portm)
-	node.Dialer.init(node, portm)
-	node.Pinger.init(node)
-	node.StreamHub.init(node, portm)
-	node.Heartbeat.init(node, heartbeatInterval)
-	node.Dispatcher.init(node)
+	node.listenHub.init(node, portm)
+	node.dialer.init(node, portm)
+	node.pinger.init(node)
+	node.streamHub.init(node, portm)
+	node.heartbeat.init(node, heartbeatInterval)
+	node.dispatcher.init(node)
 
-	node.Heartbeat.SetChecker(func() error {
+	node.heartbeat.SetChecker(func() error {
 		_, err := node.PingDomain("", time.Second*2)
 		return err
 	})
 
-	return node
+	return node, nil
 }
 
-func (node *Node) SetNetwork(n string)     { node.network = n }
-func (node *Node) GetNetwork() string      { return node.network }
+// SetNetwork 设置网络类型标识。仅应在 Serve 之前调用。
+func (node *Node) SetNetwork(n string) { node.network = n }
+func (node *Node) GetNetwork() string  { return node.network }
+
+// SetDomain 设置节点域名。仅应在 Serve 之前调用，运行期间修改会破坏路由身份。
 func (node *Node) SetDomain(domain string) { node.domain = domain }
 func (node *Node) GetDomain() string       { return node.domain }
-func (node *Node) SetIP(ip uint16)         { node.ip = ip }
-func (node *Node) GetIP() uint16           { return node.ip }
+
+// SetIP 设置节点虚拟 IP。仅应在 Serve 之前调用，运行期间修改会破坏路由身份。
+func (node *Node) SetIP(ip uint16)     { node.ip = ip }
+func (node *Node) GetIP() uint16       { return node.ip }
 func (node *Node) SetLogger(l *slog.Logger) {
 	if l != nil {
 		node.logger = l
@@ -121,7 +134,7 @@ func (node *Node) GetInfo() *NodeInfo {
 }
 
 func (node *Node) GetListeners() []ListenerInfo {
-	listeners := node.getActiveListeners()
+	listeners := node.listenHub.getActiveListeners()
 	infos := make([]ListenerInfo, 0, len(listeners))
 	for _, l := range listeners {
 		infos = append(infos, ListenerInfo{
@@ -136,7 +149,7 @@ func (node *Node) SetFlowConfig(cfg FlowConfig) {
 	node.flowConfig = cfg
 }
 
-func (node *Node) GetWindowSize() int32 {
+func (node *Node) getWindowSize() int32 {
 	if node.flowConfig.MaxWindowSize > 0 {
 		return node.flowConfig.MaxWindowSize
 	}
@@ -147,19 +160,66 @@ func (node *Node) GetWindowSize() int32 {
 	return 0 // uses default in stream package
 }
 
+//
+// 面向用户的转发方法：底层能力由 listenHub/dialer/pinger/streamHub 提供
+//
+
+// Listen 在虚拟端口上监听，返回标准 net.Listener。
+// Accept 得到的连接是 *stream.Stream，实现了 net.Conn。
+func (node *Node) Listen(port uint16) (net.Listener, error) {
+	return node.listenHub.Listen(port)
+}
+
+// Dial 通过 "domain:port" 或 "ip:port" 地址创建虚拟流。
+// "local"/"localhost" 表示本节点。
+func (node *Node) Dial(addr string) (*stream.Stream, error) {
+	return node.dialer.Dial(addr)
+}
+
+// DialDomain 通过域名创建虚拟流。
+func (node *Node) DialDomain(domain string, port uint16) (*stream.Stream, error) {
+	return node.dialer.DialDomain(domain, port)
+}
+
+// DialIP 通过虚拟 IP 创建虚拟流。
+func (node *Node) DialIP(ip, port uint16) (*stream.Stream, error) {
+	return node.dialer.DialIP(ip, port)
+}
+
+// SetDialTimeout 设置 Dial 等待应答的超时时间。
+func (node *Node) SetDialTimeout(timeout time.Duration) {
+	node.dialer.SetDialTimeout(timeout)
+}
+
+// PingDomain 对指定节点进行连通性测试并返回 RTT。domain 为空时返回到中转节点的 RTT。
+func (node *Node) PingDomain(domain string, timeout time.Duration) (time.Duration, error) {
+	return node.pinger.PingDomain(domain, timeout)
+}
+
+// GetStreamStates 返回当前所有活跃流的状态快照。
+func (node *Node) GetStreamStates() []*stream.State {
+	return node.streamHub.GetStreamStates()
+}
+
+// GetClosedStates 返回已关闭流的状态快照（环形缓冲区），pos 为起始偏移。
+func (node *Node) GetClosedStates(pos int) []*stream.State {
+	return node.streamHub.GetClosedStates(pos)
+}
+
+// Serve 启动节点的读循环、分发与心跳，阻塞直到连接断开或 Close 被调用。
 func (node *Node) Serve() error {
-	err := node.Dispatcher.start()
+	err := node.dispatcher.start()
 	if err != nil {
 		return err
 	}
 	defer node.Close()
 
-	go node.Dispatcher.processCmdChan()
-	go node.Dispatcher.processDataChan()
+	go node.dispatcher.processCmdChan()
+	go node.dispatcher.processDataChan()
 
-	ticker := time.NewTicker(node.Heartbeat.interval)
+	ticker := time.NewTicker(node.heartbeat.interval)
 	defer ticker.Stop()
-	go node.Heartbeat.run(ticker, node.done, func() { node.Close() })
+	go node.heartbeat.run(ticker, node.done, func() { node.Close() })
 
 	return node.readLoop()
 }
@@ -170,47 +230,51 @@ func (node *Node) Close() error {
 		close(node.done)
 
 		// 2. 停止 Dispatcher，不再接受新的 dispatch
-		node.Dispatcher.stop()
+		node.dispatcher.stop()
 
 		// 3. 关闭所有 Listener，解除阻塞在 Accept() 上的 goroutine
-		node.ListenHub.closeAllListeners()
+		node.listenHub.closeAllListeners()
 
 		// 4. 关闭所有活跃 Stream，释放本地资源（不走网络协商）
-		node.StreamHub.closeAllStreams()
+		node.streamHub.closeAllStreams()
 
 		// 5. 关闭底层连接，使 readLoop 退出
-		node.Conn.Close()
+		if node.pconn != nil {
+			node.pconn.Close()
+		}
 	})
 	return nil
 }
 
-// WriteBuffer goroutine safe writer
+// WriteBuffer 实现 packet.Writer，供 stream 层及包内组件写入协议包。
+// DistIP 为本机或未设置时包会被就地分发，否则写入底层连接。
+// 该方法属于协议内部实现，业务代码不应直接调用。
 func (node *Node) WriteBuffer(pbuf *packet.Buffer) error {
 	if pbuf.DistIP() == 0 || pbuf.DistIP() == node.ip {
-		node.Dispatcher.dispatch(pbuf)
+		node.dispatcher.dispatch(pbuf)
 		return nil
 	}
-	if node.Conn == nil {
+	if node.pconn == nil {
 		return ErrWriterIsNil
 	}
 
-	node.Heartbeat.Touch()
+	node.heartbeat.Touch()
 	atomic.AddInt64(&node.writtenDataSize, int64(pbuf.PayloadSize()))
 
-	return node.Conn.WriteBuffer(pbuf)
+	return node.pconn.WriteBuffer(pbuf)
 }
 
 func (node *Node) readLoop() error {
 	for {
-		node.SetReadTimeout(time.Minute * 15)
-		pbuf, err := node.ReadBuffer()
+		node.pconn.SetReadTimeout(time.Minute * 15)
+		pbuf, err := node.pconn.ReadBuffer()
 		if err != nil {
 			return err
 		}
 
 		atomic.AddInt64(&node.readDataSize, int64(pbuf.PayloadSize()))
 
-		err = node.Dispatcher.dispatch(pbuf)
+		err = node.dispatcher.dispatch(pbuf)
 		if err != nil {
 			return err
 		}

@@ -27,7 +27,7 @@ func TestPingDomainErr_GetFreeNum(t *testing.T) {
 
 	// 耗尽portm的资源
 	for {
-		_, err = n1.Pinger.portm.Allocate()
+		_, err = n1.pinger.portm.Allocate()
 		if err != nil {
 			break
 		}
@@ -47,17 +47,17 @@ func TestPingDomainErr_Write(t *testing.T) {
 
 func TestPingDomainErr_timeout(t *testing.T) {
 	n1, n2 := Pipe("test1", "test2")
-	n2.SetIgnorePing(true)
+	n2.pinger.SetIgnorePing(true)
 
 	_, err := n1.PingDomain("test2", time.Millisecond*20)
-	assert.Equal(t, err, pending.ErrTimeout, "test: ping timeout")
+	assert.Equal(t, ErrPingDomainTimeout, err, "test: ping timeout")
 }
 
 func TestPingErr(t *testing.T) {
 	n1, _ := Pipe("test1", "test2")
 
 	// 提前监听：ping port 是从1开始计数
-	n1.Pinger.pending.Register(uint16(1))
+	n1.pinger.pending.Register(uint16(1))
 	_, err := n1.PingDomain("test2", time.Second)
 	assert.Equal(t, pending.ErrAlreadyRegistered, err)
 }

@@ -470,7 +470,7 @@ func TestSessionListenerCloseWithActiveNode(t *testing.T) {
 	n := s.node
 	s.mu.RUnlock()
 
-	_, err := n.getListenerByPort(80)
+	_, err := n.listenHub.getListenerByPort(80)
 	assert.Equal(t, ErrListenerNotFound, err)
 }
 

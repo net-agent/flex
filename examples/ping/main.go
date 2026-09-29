@@ -7,7 +7,6 @@ import (
 	"net"
 	"time"
 
-	"github.com/net-agent/flex/v3/internal/admit"
 	"github.com/net-agent/flex/v3/node"
 	"github.com/net-agent/flex/v3/packet"
 	"github.com/net-agent/flex/v3/switcher"
@@ -48,13 +47,10 @@ func main() {
 func connectNode(addr, domain, password string) *node.Node {
 	conn, _ := net.Dial("tcp", addr)
 	pc := packet.NewWithConn(conn)
-	ip, err := admit.Handshake(pc, domain, "", password)
+	n, err := node.Connect(pc, domain, "", password)
 	if err != nil {
 		log.Fatal(err)
 	}
-	n := node.New(pc)
-	n.SetDomain(domain)
-	n.SetIP(ip)
 	go n.Serve()
 	time.Sleep(50 * time.Millisecond)
 	return n

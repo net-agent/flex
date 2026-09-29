@@ -12,8 +12,14 @@ var (
 	ErrSendDataOversize = errors.New("send data oversize")
 )
 
+// Writer 是 stream 写路径所需的最小能力，任何能写 packet.Buffer 的对象都可充当。
+// 相比 packet.Writer 不要求 SetWriteTimeout，便于上层以组合方式实现。
+type Writer interface {
+	WriteBuffer(buf *packet.Buffer) error
+}
+
 type sender struct {
-	packet.Writer
+	Writer
 
 	dataBuf     *packet.Buffer
 	dataAckBuf  *packet.Buffer
@@ -26,7 +32,7 @@ type sender struct {
 	counter *int32
 }
 
-func newSender(w packet.Writer, counter *int32) *sender {
+func newSender(w Writer, counter *int32) *sender {
 	s := &sender{}
 
 	s.Writer = w

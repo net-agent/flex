@@ -61,7 +61,7 @@ func (d *Dialer) DialDomain(domain string, port uint16) (*stream.Stream, error) 
 	pbuf.SetCmd(packet.CmdOpenStream)
 	pbuf.SetSrc(d.host.GetIP(), 0)
 	pbuf.SetDist(packet.SwitcherIP, port)
-	req := packet.OpenStreamRequest{Domain: domain, WindowSize: uint32(d.host.GetWindowSize())}
+	req := packet.OpenStreamRequest{Domain: domain, WindowSize: uint32(d.host.getWindowSize())}
 	_ = pbuf.SetPayload(req.Encode())
 	return d.dialPbuf(pbuf)
 }
@@ -72,7 +72,7 @@ func (d *Dialer) DialIP(ip, port uint16) (*stream.Stream, error) {
 	pbuf.SetCmd(packet.CmdOpenStream)
 	pbuf.SetSrc(d.host.GetIP(), 0)
 	pbuf.SetDist(ip, port)
-	req := packet.OpenStreamRequest{WindowSize: uint32(d.host.GetWindowSize())}
+	req := packet.OpenStreamRequest{WindowSize: uint32(d.host.getWindowSize())}
 	_ = pbuf.SetPayload(req.Encode())
 	return d.dialPbuf(pbuf)
 }
@@ -80,7 +80,7 @@ func (d *Dialer) DialIP(ip, port uint16) (*stream.Stream, error) {
 // DialPbuf dial的底层实现
 // 注意：pbuf里的srcPort还需要在writeBuffer前进行确认
 func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
-	remoteDomain := string(pbuf.Payload)
+	remoteDomain := packet.DecodeOpenStreamRequest(pbuf.Payload).Domain
 	if remoteDomain == "" {
 		distIP := pbuf.DistIP()
 		if distIP == d.host.ip {
@@ -121,7 +121,7 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 	select {
 	case res, ok := <-ch:
 		if !ok {
-			return nil, pending.ErrTimeout
+			return nil, ErrWaitResponseTimeout
 		}
 		if res.Err != nil {
 			return nil, res.Err
@@ -131,7 +131,7 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 		srcPort = 0 // 端口所有权转移给stream，阻止defer释放
 		return s, nil
 	case <-time.After(d.timeout):
-		return nil, pending.ErrTimeout
+		return nil, ErrWaitResponseTimeout
 	}
 }
 
@@ -159,7 +159,7 @@ func (d *Dialer) handleAckOpenStream(pbuf *packet.Buffer) {
 		negotiatedWindowSize,
 	)
 
-	err := d.host.attachStream(s, pbuf.SID())
+	err := d.host.streamHub.attachStream(s, pbuf.SID())
 	if err != nil {
 		d.host.logger.Warn("attach stream to node failed", "error", err)
 		err = d.pending.Complete(evKey, nil, err)

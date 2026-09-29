@@ -127,7 +127,7 @@ func (hub *ListenHub) handleCmdOpenStream(pbuf *packet.Buffer) {
 	}
 
 	// Negotiate Window Size
-	localWindowSize := hub.host.GetWindowSize()
+	localWindowSize := hub.host.getWindowSize()
 	negotiatedWindowSize = localWindowSize // Default to local
 	if remoteWindowSize > 0 {
 		if localWindowSize <= 0 || remoteWindowSize < localWindowSize {
@@ -150,7 +150,7 @@ func (hub *ListenHub) handleCmdOpenStream(pbuf *packet.Buffer) {
 
 	// ack发出后理论上就会马上有数据从对端发送过来
 	// 因此需要先完成stream和sid的绑定，然后再应答ack，避免因时序问题出现的数据包丢失
-	err = hub.host.attachStream(s, pbuf.SID())
+	err = hub.host.streamHub.attachStream(s, pbuf.SID())
 	if err != nil {
 		ackMessage = err.Error()
 		return

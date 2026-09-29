@@ -28,7 +28,7 @@
 //  3. 各 SID 包数分布
 //  4. 前若干数据包的 SID 时间线色块
 //     - 启用方式：
-//     FLEX_FAIRNESS_REPORT=1 go test -run TestIntegration_SchedulingFairness ./examples/integration
+//     FLEX_FAIRNESS_REPORT=1 go test -run TestIntegration_SchedulingFairness ./test/integration
 //     - 可选路径：
 //     FLEX_FAIRNESS_REPORT_PATH=/abs/or/rel/path/report.html
 package integration
@@ -83,8 +83,8 @@ func defaultFairnessTestProfile() fairnessTestProfile {
 		WaitReadyTimeout: 5 * time.Second,
 		DrainTimeout:     15 * time.Second,
 
-		ExportReport:      envBool("FLEX_FAIRNESS_REPORT", true),
-		ReportPath:        "../../docs/scheduling_fairness_integration_report.html",
+		ExportReport:      envBool("FLEX_FAIRNESS_REPORT", false),
+		ReportPath:        filepath.Join(os.TempDir(), "flex_scheduling_fairness_report.html"),
 		ReportPreviewSize: 360,
 	}
 	p.WindowSize = p.StreamCount * 16
@@ -680,7 +680,7 @@ func exportFairnessReport(cfg fairnessTestProfile, metrics fairnessMetrics, even
 func resolveReportPath(path string) (string, error) {
 	clean := strings.TrimSpace(path)
 	if clean == "" {
-		clean = "../../docs/scheduling_fairness_integration_report.html"
+		clean = filepath.Join(os.TempDir(), "flex_scheduling_fairness_report.html")
 	}
 	if filepath.IsAbs(clean) {
 		return clean, nil

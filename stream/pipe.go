@@ -2,7 +2,7 @@ package stream
 
 import (
 	"io"
-	"log"
+	"log/slog"
 
 	"github.com/net-agent/flex/v3/packet"
 )
@@ -36,7 +36,7 @@ func routeCmd(h Handler, ch chan *packet.Buffer) {
 		case packet.CmdCloseStream:
 			h.HandleCmdCloseStream(pbuf)
 		default:
-			log.Println("unexpected pbuf cmd:", pbuf.HeaderString())
+			slog.Warn("unexpected pbuf cmd", "header", pbuf.HeaderString())
 		}
 	}
 }
@@ -48,7 +48,7 @@ func routeAck(h Handler, ch chan *packet.Buffer) {
 		case packet.AckCloseStream:
 			h.HandleAckCloseStream(pbuf)
 		default:
-			log.Println("unexpected pbuf ack", pbuf.HeaderString())
+			slog.Warn("unexpected pbuf ack", "header", pbuf.HeaderString())
 		}
 	}
 }
@@ -63,7 +63,7 @@ func demuxPackets(cmdCh, ackCh chan *packet.Buffer, pc packet.Reader) {
 		pbuf, err := pc.ReadBuffer()
 		if err != nil {
 			if err != io.EOF {
-				log.Println("demuxPackets: read error:", err)
+				slog.Warn("demuxPackets read error", "error", err)
 			}
 			return
 		}
