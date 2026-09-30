@@ -119,9 +119,9 @@ func TestWriter_BatchWrite(t *testing.T) {
 		// 有些 buffer 有 payload，有些没有
 		pc1, pc2 := Pipe()
 		bufs := []*Buffer{
-			NewBufferWithCmd(CmdPushStreamData),                                                  // 无 payload
+			NewBufferWithCmd(CmdPushStreamData), // 无 payload
 			func() *Buffer { b := NewBufferWithCmd(CmdPushStreamData); b.SetPayload([]byte("a")); return b }(), // 有 payload
-			NewBufferWithCmd(CmdCloseStream),                                                     // 无 payload
+			NewBufferWithCmd(CmdCloseStream), // 无 payload
 			func() *Buffer { b := NewBufferWithCmd(CmdPushStreamData); b.SetPayload([]byte("bc")); return b }(), // 有 payload
 		}
 

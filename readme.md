@@ -128,12 +128,32 @@ For detailed usage, configuration, and API reference, please see the **[Develope
 Both Node and Switcher expose their runtime state programmatically:
 
 ```go
-info := n.GetInfo()         // node domain, IP, network, bytes read/written
+info := n.GetInfo()         // node domain, IP, network, uptime, bytes read/written
 listeners := n.GetListeners()
 
-stats := srv.GetStats()     // switcher active connections
+running := n.IsRunning()    // whether the node's dispatcher is serving
+snap := n.Inspect()         // consistent snapshot: info, listeners, streams,
+                            // port pools, pending requests, heartbeat state
+                            // (incl. last RTT), cumulative failure counters
+
+rates := snap2.RatesSince(snap1) // per-second rates between two snapshots
+                                 // (node-level and per-stream)
+
+closed, pos := n.GetClosedStates(pos) // incremental pull of closed-stream
+                                      // records (ring buffer, latest 1024)
+
+n.SetTrace(&node.Trace{     // lifecycle hooks (nil fields are disabled);
+    StreamOpen:    func(st *stream.State) { /* ... */ }, // call before Serve
+    StreamClosed:  func(st *stream.State) { /* ... */ },
+    HeartbeatFail: func(err error) { /* ... */ },
+    PortExhausted: func(pool string, err error) { /* ... */ },
+})
+
+stats := srv.GetStats()     // switcher active connections, total contexts, uptime
 clients := srv.GetClients() // online nodes: domain, IP, stream count, bytes, RTT
 ```
+
+Session exposes its connection lifecycle via `GetState()`, `GetLastErr()`, `GetReconnectCount()` and `OnStateChange()`, and provides `SetLogger`/`SetTrace`, which are automatically injected into every Node rebuilt across reconnects. See the [Developer Manual](docs/manual.md#observability) for details.
 
 ## License
 

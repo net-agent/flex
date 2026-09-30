@@ -6,25 +6,25 @@ import (
 )
 
 type State struct {
-	Index    int32
-	IsClosed bool
-	Created  time.Time
-	Closed   time.Time
+	Index    int32     `json:"index"`
+	IsClosed bool      `json:"is_closed"`
+	Created  time.Time `json:"created"`
+	Closed   time.Time `json:"closed"`
 
-	Direction    Direction
-	LocalDomain  string
-	LocalAddr    Addr
-	RemoteDomain string
-	RemoteAddr   Addr
+	Direction    Direction `json:"direction"` // 1=outbound(local→remote)，2=inbound(remote→local)
+	LocalDomain  string    `json:"local_domain"`
+	LocalAddr    Addr      `json:"local_addr"`
+	RemoteDomain string    `json:"remote_domain"`
+	RemoteAddr   Addr      `json:"remote_addr"`
 
-	SentBufferCount int32
-	RecvBufferCount int32
-	RecvDataSize    int64
-	RecvAckTotal    int64
-	SentAckTotal    int64
+	SentBufferCount int32 `json:"sent_buffer_count"`
+	RecvBufferCount int32 `json:"recv_buffer_count"`
+	RecvDataSize    int64 `json:"recv_data_size"`
+	RecvAckTotal    int64 `json:"recv_ack_total"`
+	SentAckTotal    int64 `json:"sent_ack_total"`
 
-	BytesRead    int64
-	BytesWritten int64
+	BytesRead    int64 `json:"bytes_read"`
+	BytesWritten int64 `json:"bytes_written"`
 }
 
 func (st *State) String() string {
@@ -49,8 +49,8 @@ func (st *State) Remote() string {
 type Addr struct {
 	network string
 	text    string
-	IP      uint16
-	Port    uint16
+	IP      uint16 `json:"ip"`
+	Port    uint16 `json:"port"`
 }
 
 func (a *Addr) String() string  { return a.text }

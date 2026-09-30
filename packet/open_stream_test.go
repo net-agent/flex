@@ -8,8 +8,8 @@ import (
 
 func TestOpenStreamRequest_Encode_Decode(t *testing.T) {
 	tests := []struct {
-		name   string
-		req    OpenStreamRequest
+		name string
+		req  OpenStreamRequest
 	}{
 		{"basic", OpenStreamRequest{Domain: "example.com", WindowSize: 8192}},
 		{"empty domain", OpenStreamRequest{Domain: "", WindowSize: 1024}},

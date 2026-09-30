@@ -128,12 +128,30 @@ ln, err := sess.Listen(80)
 Node 和 Switcher 都以编程方式暴露运行时状态：
 
 ```go
-info := n.GetInfo()         // 节点域名、IP、网络类型、收发字节数
+info := n.GetInfo()         // 节点域名、IP、网络类型、运行时长、收发字节数
 listeners := n.GetListeners()
 
-stats := srv.GetStats()     // Switcher 活跃连接数
+running := n.IsRunning()    // 节点 dispatcher 是否正在服务
+snap := n.Inspect()         // 一致性快照：info、监听器、活跃流、端口池占用、
+                            // 待应答请求、心跳状态（含最近 RTT）、失败累计计数
+
+rates := snap2.RatesSince(snap1) // 两个快照之间的速率（节点级 + 单流级）
+
+closed, pos := n.GetClosedStates(pos) // 增量拉取已关闭流记录
+                                      // （环形缓冲，最多保留最近 1024 条）
+
+n.SetTrace(&node.Trace{     // 生命周期事件钩子（字段为 nil 即关闭）；
+    StreamOpen:    func(st *stream.State) { /* ... */ }, // 仅应在 Serve 之前调用
+    StreamClosed:  func(st *stream.State) { /* ... */ },
+    HeartbeatFail: func(err error) { /* ... */ },
+    PortExhausted: func(pool string, err error) { /* ... */ },
+})
+
+stats := srv.GetStats()     // Switcher 活跃连接数、累计接入数、运行时长
 clients := srv.GetClients() // 在线节点：域名、IP、流数量、流量、RTT
 ```
+
+Session 通过 `GetState()`、`GetLastErr()`、`GetReconnectCount()` 和 `OnStateChange()` 暴露连接生命周期，并提供 `SetLogger`/`SetTrace`，会在每次重连重建 Node 时自动注入，配置跨重连存活。详见[开发者手册](docs/manual_zh.md#可观测性)。
 
 ## 许可证
 

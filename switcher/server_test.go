@@ -148,7 +148,16 @@ func TestServerInfo(t *testing.T) {
 
 	stats := server.GetStats()
 	if stats == nil {
-		t.Error("expected stats to be not nil")
+		t.Fatal("expected stats to be not nil")
+	}
+	if stats.UptimeSeconds < 0 {
+		t.Errorf("expected non-negative uptime, got %d", stats.UptimeSeconds)
+	}
+
+	// 模拟已运行一段时间，uptime 应随之增长
+	server.startedAt = time.Now().Add(-2 * time.Second)
+	if stats := server.GetStats(); stats.UptimeSeconds < 2 {
+		t.Errorf("expected uptime >= 2, got %d", stats.UptimeSeconds)
 	}
 
 	clients := server.GetClients()

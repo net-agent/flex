@@ -78,7 +78,7 @@ func TestRemoveIdempotent(t *testing.T) {
 	assert.Nil(t, err)
 
 	r.Remove(1)
-	r.Remove(1) // second call should not panic
+	r.Remove(1)  // second call should not panic
 	r.Remove(99) // non-existent key should not panic
 }
 

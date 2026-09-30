@@ -546,10 +546,10 @@ type fairnessReportData struct {
 	ThresholdRunOK  bool
 	OverallOK       bool
 
-	SIDRows      []fairnessSIDRow
-	WindowRows   []fairnessWindowRow
-	SequenceRows []fairnessSequenceRow
-	TimelineRows []fairnessTimelineRow
+	SIDRows       []fairnessSIDRow
+	WindowRows    []fairnessWindowRow
+	SequenceRows  []fairnessSequenceRow
+	TimelineRows  []fairnessTimelineRow
 	TotalDuration string
 }
 

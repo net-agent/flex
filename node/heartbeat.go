@@ -1,27 +1,27 @@
 package node
 
 import (
-	"log/slog"
 	"sync/atomic"
 	"time"
 )
 
 type Heartbeat struct {
-	lastWriteTime int64 // atomic unix nano
+	host          *Node
+	lastWriteTime atomic.Int64 // unix nano
+	lastRTTNano   atomic.Int64 // 最近一次探活 RTT（nano）
 	interval      time.Duration
 	checker       func() error
-	logger        *slog.Logger
 }
 
 func (h *Heartbeat) init(host *Node, interval time.Duration) {
-	h.lastWriteTime = time.Now().UnixNano()
+	h.host = host
+	h.lastWriteTime.Store(time.Now().UnixNano())
 	h.interval = interval
-	h.logger = host.logger
 }
 
 // Touch 更新最后写入时间
 func (h *Heartbeat) Touch() {
-	atomic.StoreInt64(&h.lastWriteTime, time.Now().UnixNano())
+	h.lastWriteTime.Store(time.Now().UnixNano())
 }
 
 // SetChecker 设置探活回调
@@ -40,19 +40,21 @@ func (h *Heartbeat) run(ticker *time.Ticker, done <-chan struct{}, closeFunc fun
 			}
 		}
 
-		last := atomic.LoadInt64(&h.lastWriteTime)
+		last := h.lastWriteTime.Load()
 		if time.Since(time.Unix(0, last)) < h.interval {
 			continue
 		}
 
 		if h.checker == nil {
-			h.logger.Warn("aliveChecker is nil")
+			h.host.logger.Warn("aliveChecker is nil")
 			return
 		}
 
 		err := h.checker()
 		if err != nil {
-			h.logger.Warn("check alive failed", "error", err)
+			atomic.AddInt64(&h.host.failures.HeartbeatFailed, 1)
+			h.host.trace.heartbeatFail(err)
+			h.host.logger.Warn("check alive failed", "error", err)
 			closeFunc()
 			return
 		}

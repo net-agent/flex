@@ -2,6 +2,7 @@ package node
 
 import (
 	"errors"
+	"sync/atomic"
 	"time"
 
 	"github.com/net-agent/flex/v3/internal/idpool"
@@ -32,6 +33,7 @@ func (p *Pinger) SetIgnorePing(val bool) { p.ignorePing = val }
 func (p *Pinger) PingDomain(domain string, timeout time.Duration) (time.Duration, error) {
 	port, err := p.portm.Allocate()
 	if err != nil {
+		p.host.tracePortExhausted("pinger", err) // pinger 使用独立的端口池
 		return 0, err
 	}
 	defer p.portm.Release(port)
@@ -50,19 +52,23 @@ func (p *Pinger) PingDomain(domain string, timeout time.Duration) (time.Duration
 	pbuf.SetDist(packet.SwitcherIP, 0) // 忽略
 	_ = pbuf.SetPayload([]byte(domain))
 	if err = p.host.WriteBuffer(pbuf); err != nil {
+		atomic.AddInt64(&p.host.failures.PingFailed, 1)
 		return 0, err
 	}
 
 	select {
 	case res, ok := <-ch:
 		if !ok {
+			atomic.AddInt64(&p.host.failures.PingFailed, 1)
 			return 0, ErrPingDomainTimeout
 		}
 		if res.Err != nil {
+			atomic.AddInt64(&p.host.failures.PingFailed, 1)
 			return 0, res.Err
 		}
 		return time.Since(pingStart), nil
 	case <-time.After(timeout):
+		atomic.AddInt64(&p.host.failures.PingFailed, 1)
 		return 0, ErrPingDomainTimeout
 	}
 }

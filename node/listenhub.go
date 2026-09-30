@@ -170,7 +170,7 @@ func (hub *ListenHub) handleCmdOpenStream(pbuf *packet.Buffer) {
 	}
 }
 
-// 实现net.Listener的协议
+// Listener 实现 net.Listener 协议
 type Listener struct {
 	port    uint16
 	hub     *ListenHub

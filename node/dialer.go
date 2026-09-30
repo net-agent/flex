@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/net-agent/flex/v3/internal/idpool"
@@ -94,6 +95,7 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 	// 如果此函数退出时srcPort非0，需要回收端口
 	srcPort, err := d.portm.Allocate()
 	if err != nil {
+		d.host.tracePortExhausted("shared", err) // dialer/listenHub/streamHub 共用一个端口池
 		return nil, err
 	}
 	defer func() {
@@ -114,6 +116,7 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 	pbuf.SetSrcPort(srcPort)
 	err = d.host.WriteBuffer(pbuf)
 	if err != nil {
+		atomic.AddInt64(&d.host.failures.DialWriteFailed, 1)
 		return nil, ErrWriteDialPbufFailed
 	}
 
@@ -121,9 +124,11 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 	select {
 	case res, ok := <-ch:
 		if !ok {
+			atomic.AddInt64(&d.host.failures.DialTimeout, 1)
 			return nil, ErrWaitResponseTimeout
 		}
 		if res.Err != nil {
+			atomic.AddInt64(&d.host.failures.DialRejected, 1)
 			return nil, res.Err
 		}
 		s := res.Val
@@ -131,6 +136,7 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 		srcPort = 0 // 端口所有权转移给stream，阻止defer释放
 		return s, nil
 	case <-time.After(d.timeout):
+		atomic.AddInt64(&d.host.failures.DialTimeout, 1)
 		return nil, ErrWaitResponseTimeout
 	}
 }
@@ -200,14 +206,14 @@ func parseAddress(addr string) (isDomain bool, domain string, ip uint16, port ui
 	}
 	port = uint16(intPort)
 
-	intIp, err := strconv.Atoi(h)
+	intIP, err := strconv.Atoi(h)
 	if err != nil {
 		// treat as domain
 		return true, h, 0, port, nil
 	}
-	if intIp < 0 || intIp > int(packet.MaxIP) {
+	if intIP < 0 || intIP > int(packet.MaxIP) {
 		err = errInvalidIPNumber
 		return
 	}
-	return false, "", uint16(intIp), port, nil
+	return false, "", uint16(intIP), port, nil
 }

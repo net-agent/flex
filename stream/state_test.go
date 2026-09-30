@@ -14,6 +14,24 @@ func TestStateMarshal(t *testing.T) {
 	assert.NotEmpty(t, buf)
 }
 
+func TestStateMarshalFieldNames(t *testing.T) {
+	st := State{
+		Index:        7,
+		Direction:    DirectionOutbound,
+		BytesRead:    100,
+		BytesWritten: 200,
+	}
+	st.LocalAddr.SetIPPort(10, 20)
+
+	buf, err := json.Marshal(&st)
+	assert.Nil(t, err)
+	s := string(buf)
+	assert.Contains(t, s, `"index":7`)
+	assert.Contains(t, s, `"bytes_read":100`)
+	assert.Contains(t, s, `"bytes_written":200`)
+	assert.Contains(t, s, `"local_addr":{"ip":10,"port":20}`)
+}
+
 func TestStateMethods(t *testing.T) {
 	s := New(nil, 0)
 	s.setLocal(10, 20)

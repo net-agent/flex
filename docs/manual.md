@@ -7,7 +7,7 @@ This manual provides detailed instructions on how to use the `flex` library to b
 2.  [Node (The Agent)](#node-the-agent)
 3.  [Switcher (The Relay)](#switcher-the-relay)
 4.  [Fairness & Scheduling](#fairness--scheduling)
-5.  [Observability & Control](#observability--control)
+5.  [Observability](#observability)
 
 ---
 
@@ -92,10 +92,14 @@ The Switcher doesn't listen on a TCP port itself; it handles `packet.Conn` objec
 ```go
 import "github.com/net-agent/flex/v3/switcher"
 
-s := switcher.NewServer("secret-password")
+s := switcher.NewServer("secret-password", nil, nil)
+
+// Optional lifecycle hooks:
+// s.OnContextStart = func(ctx *switcher.Context) { ... }
+// s.OnContextStop  = func(ctx *switcher.Context, d time.Duration) { ... }
 
 // In your TCP/WS accept loop:
-go s.ServeConn(pconn, onStart, onStop)
+go s.ServeConn(pconn)
 ```
 
 ### Context & Routing
@@ -108,41 +112,144 @@ When a Node connects to a Switcher, it becomes a `Context`. The Switcher maintai
 Flex v2 introduces **Fair Queuing**.
 -   **Problem**: In v1, a large file transfer could block ACKs or Pings, causing timeouts.
 -   **Solution**: `FairWriter` queues packets from different streams separately and services them in a round-robin fashion.
--   **Usage**: Enabled automatically. `node.New` and `switcher.NewServer` wrap connections in `FairConn` by default.
+-   **Usage**: Enabled by default where connections are managed for you: `switcher.Server` wraps every accepted connection, and `node.Session` wraps its connection. Disable with `SetEnableFairConn(false)` on either. A bare `node.New` uses the connection as-is.
 
 ---
 
-## Observability & Control
+## Observability
 
-Flex provides a built-in HTTP Admin API for deep visibility.
+Flex exposes runtime state programmatically. There is no built-in HTTP server;
+you decide how to expose the data (JSON over HTTP, metrics, logs). All
+snapshot types carry JSON tags, so `encoding/json` works out of the box.
 
-### Node Admin
-Start the admin server for a Node:
-
-```go
-admin := node.NewAdminServer(n, ":9091")
-go admin.Start()
-```
-
-**Endpoints**:
--   `GET /api/v1/info`: Basic stats (traffic, uptime).
--   `GET /api/v1/streams`: List active streams with RTT and buffer state.
--   `GET /api/v1/listeners`: List active virtual listeners.
-
-### Switcher Admin
-Start the admin server for a Switcher:
+### Node: Pull-style Snapshots
 
 ```go
-admin := switcher.NewAdminServer(s, ":9090")
-go admin.Start()
+info := n.GetInfo()         // domain, IP, network, uptime, bytes read/written
+listeners := n.GetListeners()
+running := n.IsRunning()    // whether the dispatcher is serving
+
+snap := n.Inspect()         // consistent point-in-time snapshot
 ```
 
-**Endpoints**:
--   `GET /api/v1/clients`: List all connected agents with real-time metrics (Stream count, Bandwidth, RTT).
--   `DELETE /api/v1/clients/{domain}`: Kick an agent.
+`Inspect()` returns a `Snapshot`:
 
-### Dependencies
-The Admin API uses `github.com/gorilla/mux`. Ensure you have it installed:
-```bash
-go get -u github.com/gorilla/mux
+| Field | Content |
+| --- | --- |
+| `at` | sample time (used for rate calculation) |
+| `info` | node identity and cumulative traffic counters |
+| `running` | dispatcher state |
+| `listeners` | active virtual listeners (port, addr) |
+| `streams` | states of all active streams |
+| `port_pools` | virtual port usage (`shared` and `pinger` pools: in_use/capacity) |
+| `pending` | requests waiting for a peer answer (dial, ping) |
+| `heartbeat` | probe interval, last write time, last measured RTT (`last_rtt`) |
+| `failures` | cumulative failure counters (see below) |
+
+`failures` complements the one-shot `Trace` hooks — a hook you miss is gone, a
+counter is always there:
+
+| Counter | Meaning |
+| --- | --- |
+| `dial_timeout` | Dial timed out waiting for the ack |
+| `dial_rejected` | Dial rejected by the peer |
+| `dial_write_failed` | Dial request could not be written |
+| `ping_failed` | Ping timed out, was rejected or failed to write |
+| `heartbeat_failed` | Liveness probe failed |
+| `port_exhausted` | Virtual port pool exhausted (shared + pinger) |
+
+Per-stream state (`stream.State`) includes direction, both ends'
+domain/IP/port, created/closed timestamps, bytes read/written, ack totals and
+in-flight buffer counts.
+
+```go
+states := n.GetStreamStates() // active streams
+
+// Closed streams are kept in a ring buffer (latest 1024). Pull incrementally:
+var pos int64
+closed, pos := n.GetClosedStates(pos) // returns only records newer than pos
 ```
+
+### Node: Rates
+
+Counters are cumulative; compute rates between two snapshots:
+
+```go
+snap1 := n.Inspect()
+time.Sleep(time.Second)
+snap2 := n.Inspect()
+
+rates := snap2.RatesSince(snap1) // nil if the interval is not positive
+fmt.Println(rates.BytesReadPerSec, rates.BytesWrittenPerSec)
+for _, sr := range rates.Streams { // streams present in both snapshots
+    fmt.Printf("stream %d: %.0f B/s up\n", sr.Index, sr.BytesWrittenPerSec)
+}
+```
+
+### Node: Push-style Events
+
+```go
+n.SetTrace(&node.Trace{ // call before Serve
+    StreamOpen:    func(st *stream.State) { /* ... */ },
+    StreamClosed:  func(st *stream.State) { /* ... */ },
+    HeartbeatFail: func(err error) { /* ... */ },
+    PortExhausted: func(pool string, err error) { /* ... */ },
+})
+```
+
+### Node: Active Probing
+
+```go
+rtt, err := n.PingDomain("target-agent", time.Second) // RTT to a peer
+rtt, err = n.PingDomain("", time.Second)              // RTT to the switcher
+```
+
+### Session Observability
+
+`Session` (the auto-reconnecting Node proxy) exposes its connection lifecycle:
+
+```go
+state := sess.GetState()         // ready / idle / connecting / online / closed
+errText := sess.GetLastErr()     // last error, e.g. why it is reconnecting
+n := sess.GetReconnectCount()    // cumulative disconnect count
+
+sess.OnStateChange(func(old, new node.SessionState) { // call before Serve
+    log.Printf("session %v -> %v", old, new)
+})
+
+err := sess.WaitReady(5 * time.Second) // block until online
+node := sess.GetNode()                 // current *Node (may be nil); all Node
+                                       // observability APIs apply to it
+```
+
+`sess.SetLogger` / `sess.SetTrace` are re-injected into the rebuilt `Node`
+after every reconnect, so configuration survives reconnects.
+
+### Switcher Observability
+
+```go
+stats := srv.GetStats()   // active_connections, total_contexts, uptime_seconds
+clients := srv.GetClients() // online agents: domain, IP, mac, connected_at,
+                            // per-client stream count, bytes in/out, last RTT
+
+srv.OnContextStart = func(ctx *switcher.Context) { /* agent attached */ }
+srv.OnContextStop  = func(ctx *switcher.Context, d time.Duration) { /* detached */ }
+```
+
+Log verbosity is configurable per module with `switcher.LogConfig`
+(server/registry/router/context levels), passed to `NewServer`.
+
+### Example: Exposing State over HTTP
+
+Using only the standard library:
+
+```go
+http.HandleFunc("/inspect", func(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+    _ = json.NewEncoder(w).Encode(n.Inspect())
+})
+go http.ListenAndServe(":9091", nil)
+```
+
+See `examples/ws-gate` for a working example exposing `GetStats()` and
+`GetClients()` of a Switcher as `/api/stats` and `/api/clients`.

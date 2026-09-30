@@ -19,10 +19,10 @@ const (
 
 const MaxPayloadSize = 0xFFFF
 
-// 当数据包结构出现不兼容改动时，此处需要更新
+// VERSION 标识协议版本。当数据包结构出现不兼容改动时，此处需要更新
 const VERSION = int(20260225)
 
-// 第一个包用于发送认证信息，DistIP/DistPort/SrcIP/SrcPort 字段不使用，Cmd字段固定为 CmdAdmit，Payload为加密后的认证信息
+// CmdAdmit 表示认证包：第一个包用于发送认证信息，DistIP/DistPort/SrcIP/SrcPort 字段不使用，Cmd字段固定为 CmdAdmit，Payload为加密后的认证信息
 const CmdAdmit = byte(0)
 
 const (
@@ -42,7 +42,7 @@ const (
 	AckPingDomain     = CmdPingDomain | CmdACKFlag
 )
 
-// Header
+// HeaderSz 是包头长度，布局如下：
 // +-------+------+--------+----------+--------+---------+---------------------+
 // | Field | Cmd  | DistIP | DistPort | SrcIP  | SrcPort | PayloadSize/ACKSize |
 // +-------+------+--------+----------+--------+---------+---------------------+

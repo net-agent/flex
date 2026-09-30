@@ -173,7 +173,7 @@ func Test_parseAddress(t *testing.T) {
 		args         args
 		wantIsDomain bool
 		wantDomain   string
-		wantIp       uint16
+		wantIP       uint16
 		wantPort     uint16
 		wantErr      bool
 	}{
@@ -189,7 +189,7 @@ func Test_parseAddress(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotIsDomain, gotDomain, gotIp, gotPort, err := parseAddress(tt.args.addr)
+			gotIsDomain, gotDomain, gotIP, gotPort, err := parseAddress(tt.args.addr)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("parseAddress() error = %v, wantErr %v", err, tt.wantErr)
 				return
@@ -200,8 +200,8 @@ func Test_parseAddress(t *testing.T) {
 			if gotDomain != tt.wantDomain {
 				t.Errorf("parseAddress() gotDomain = %v, want %v", gotDomain, tt.wantDomain)
 			}
-			if gotIp != tt.wantIp {
-				t.Errorf("parseAddress() gotIp = %v, want %v", gotIp, tt.wantIp)
+			if gotIP != tt.wantIP {
+				t.Errorf("parseAddress() gotIP = %v, want %v", gotIP, tt.wantIP)
 			}
 			if gotPort != tt.wantPort {
 				t.Errorf("parseAddress() gotPort = %v, want %v", gotPort, tt.wantPort)

@@ -25,7 +25,8 @@ type Server struct {
 	listenerMu sync.Mutex
 	listener   net.Listener
 	password   string
-	nextCtxID  int32
+	nextCtxID  atomic.Int32
+	startedAt  time.Time
 
 	enableFairConn atomic.Bool
 
@@ -43,7 +44,7 @@ type ServerError struct {
 	RawError string // 产生的原始错误
 }
 
-// Responses
+// StatsResponse 汇总 Switcher 的运行时统计
 type StatsResponse struct {
 	ActiveConnections int   `json:"active_connections"`
 	TotalContexts     int64 `json:"total_contexts"`
@@ -82,6 +83,7 @@ func NewServer(password string, logger *slog.Logger, logCfg *LogConfig) *Server 
 
 	s := &Server{
 		password:  password,
+		startedAt: time.Now(),
 		registry:  reg,
 		logger:    newModuleLogger(logger, cfg.Server, "server"),
 		ctxLogger: newModuleLogger(logger, cfg.Context, "context"),
@@ -101,7 +103,8 @@ func (s *Server) GetStats() *StatsResponse {
 	ctxs := s.registry.activeContexts()
 	return &StatsResponse{
 		ActiveConnections: len(ctxs),
-		TotalContexts:     int64(atomic.LoadInt32(&s.nextCtxID)),
+		TotalContexts:     int64(s.nextCtxID.Load()),
+		UptimeSeconds:     int64(time.Since(s.startedAt).Seconds()),
 	}
 }
 
@@ -188,7 +191,7 @@ func (s *Server) ServeConn(pc packet.Conn) error {
 	}
 
 	// 第二步：将ctx映射到map中
-	ctx := NewContext(int(atomic.AddInt32(&s.nextCtxID, 1)), pc, req.Domain, req.Mac, s.ctxLogger)
+	ctx := NewContext(int(s.nextCtxID.Add(1)), pc, req.Domain, req.Mac, s.ctxLogger)
 	err = s.registry.attach(ctx)
 	if err != nil {
 		resp := admit.NewErrResponse(-2, "handshake rejected")

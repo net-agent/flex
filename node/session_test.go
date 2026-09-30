@@ -287,6 +287,7 @@ func TestSessionReconnect(t *testing.T) {
 
 	// 等待首次连接
 	assert.Nil(t, s.WaitReady(time.Second))
+	assert.Equal(t, int64(0), s.GetReconnectCount(), "no reconnect before first disconnect")
 
 	servers := getServers()
 	server1 := servers[0]
@@ -310,6 +311,7 @@ func TestSessionReconnect(t *testing.T) {
 	// 验证重连发生
 	servers = getServers()
 	assert.GreaterOrEqual(t, len(servers), 2)
+	assert.Equal(t, int64(1), s.GetReconnectCount(), "disconnect should be counted")
 	server2 := servers[1]
 
 	// 通过 server2 dial，验证 Listener 被重新注册
@@ -319,6 +321,73 @@ func TestSessionReconnect(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, conn2)
 	conn2.Close()
+	st2.Close()
+}
+
+// wireNode：Session 级 logger/trace 应注入每个新建的 Node，重连后依然生效
+func TestSessionWiresLoggerAndTrace(t *testing.T) {
+	connector, getServers := newTestConnector()
+	s := NewSession(connector, testSessionConfig())
+
+	h := &captureHandler{}
+	s.SetLogger(slog.New(h))
+
+	opens := make(chan *stream.State, 8)
+	s.SetTrace(&Trace{
+		StreamOpen: func(st *stream.State) { opens <- st },
+	})
+	waitOpen := func(msg string) {
+		t.Helper()
+		select {
+		case <-opens:
+		case <-time.After(5 * time.Second):
+			t.Fatal(msg)
+		}
+	}
+
+	sl, err := s.Listen(80)
+	assert.Nil(t, err)
+	defer sl.Close()
+
+	go s.Serve()
+	defer s.Close()
+
+	assert.Nil(t, s.WaitReady(time.Second))
+
+	// 首个 Node：logger/trace 已接线
+	n1 := s.GetNode()
+	assert.NotNil(t, n1)
+	assert.Same(t, s.logger, n1.logger, "session logger should be injected into node")
+	assert.NotNil(t, n1.trace, "session trace should be injected into node")
+
+	servers := getServers()
+	st1, err := servers[0].DialIP(1, 80)
+	assert.Nil(t, err)
+	c1, err := sl.Accept()
+	assert.Nil(t, err)
+	waitOpen("StreamOpen should fire on session-wired node")
+	c1.Close()
+	st1.Close()
+
+	// 断线重连后：重建的 Node 同样完成接线
+	servers[0].Close()
+	time.Sleep(100 * time.Millisecond)
+	assert.Nil(t, s.WaitReady(5*time.Second))
+
+	n2 := s.GetNode()
+	assert.NotNil(t, n2)
+	assert.NotSame(t, n1, n2, "reconnect should rebuild node")
+	assert.Same(t, s.logger, n2.logger, "session logger should be re-injected after reconnect")
+	assert.NotNil(t, n2.trace, "session trace should be re-injected after reconnect")
+
+	servers = getServers()
+	assert.GreaterOrEqual(t, len(servers), 2)
+	st2, err := servers[1].DialIP(1, 80)
+	assert.Nil(t, err)
+	c2, err := sl.Accept()
+	assert.Nil(t, err)
+	waitOpen("StreamOpen should still fire after reconnect")
+	c2.Close()
 	st2.Close()
 }
 
@@ -683,9 +752,9 @@ func TestSessionStateOnlineToConnectingOnDisconnect(t *testing.T) {
 	mu.Lock()
 	// 应至少有 5 次状态转换: ready→idle, idle→connecting, connecting→online, online→connecting, connecting→online
 	assert.GreaterOrEqual(t, len(transitions), 5)
-	assert.Equal(t, SessionOnline, transitions[2].new_)      // 首次上线
-	assert.Equal(t, SessionConnecting, transitions[3].new_)  // 断线
-	assert.Equal(t, SessionOnline, transitions[4].new_)      // 重连上线
+	assert.Equal(t, SessionOnline, transitions[2].new_)     // 首次上线
+	assert.Equal(t, SessionConnecting, transitions[3].new_) // 断线
+	assert.Equal(t, SessionOnline, transitions[4].new_)     // 重连上线
 	mu.Unlock()
 }
 

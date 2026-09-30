@@ -1,7 +1,6 @@
 package node
 
 import (
-	"log/slog"
 	"sync"
 
 	"github.com/net-agent/flex/v3/packet"
@@ -15,13 +14,11 @@ type Dispatcher struct {
 
 	cmdHandlers  map[byte]func(*packet.Buffer)
 	dataHandlers map[byte]func(*packet.Buffer)
-	logger       *slog.Logger
-	domain       string // for tracing
+	host         *Node
 }
 
 func (d *Dispatcher) init(host *Node) {
-	d.logger = host.logger
-	d.domain = host.domain
+	d.host = host
 	d.cmdHandlers = map[byte]func(*packet.Buffer){
 		packet.AckPushStreamData: host.streamHub.handleAckPushStreamData,
 		packet.CmdOpenStream:     host.listenHub.handleCmdOpenStream,
@@ -84,7 +81,7 @@ func (d *Dispatcher) dispatch(pbuf *packet.Buffer) error {
 	defer d.chanMut.RUnlock()
 
 	if !d.running {
-		d.logger.Warn("dispatch buffer on stopped node", "cmd", pbuf.Cmd(), "header", pbuf.HeaderString())
+		d.host.logger.Warn("dispatch buffer on stopped node", "cmd", pbuf.Cmd(), "header", pbuf.HeaderString(), "domain", d.host.domain)
 		return ErrNodeIsStopped
 	}
 
@@ -108,7 +105,7 @@ func (d *Dispatcher) processCmdChan() {
 		if handler, ok := d.cmdHandlers[pbuf.Cmd()]; ok {
 			handler(pbuf)
 		} else {
-			d.logger.Warn("unknown cmd", "cmd", pbuf.Cmd(), "header", pbuf.HeaderString())
+			d.host.logger.Warn("unknown cmd", "cmd", pbuf.Cmd(), "header", pbuf.HeaderString(), "domain", d.host.domain)
 		}
 	}
 }
@@ -118,7 +115,7 @@ func (d *Dispatcher) processDataChan() {
 		if handler, ok := d.dataHandlers[pbuf.Cmd()]; ok {
 			handler(pbuf)
 		} else {
-			d.logger.Warn("unknown cmd", "cmd", pbuf.Cmd(), "header", pbuf.HeaderString())
+			d.host.logger.Warn("unknown cmd", "cmd", pbuf.Cmd(), "header", pbuf.HeaderString(), "domain", d.host.domain)
 		}
 	}
 }

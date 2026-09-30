@@ -25,7 +25,7 @@ type StreamHub struct {
 	portm        *idpool.Pool
 	streams      sync.Map        // map[sid]*stream.Stream
 	closedStates []*stream.State // 保存已经关闭的连接状态（环形缓冲区，最多保留 maxClosedStates 条）
-	closedPos    int             // 环形缓冲区写入位置
+	closedSeq    int64           // 累计写入 closedStates 的记录数（单调递增，作为增量拉取的游标）
 	closedMut    sync.RWMutex
 }
 
@@ -45,6 +45,8 @@ func (hub *StreamHub) attachStream(s *stream.Stream, sid uint64) error {
 	s.SetOnDetach(func() {
 		hub.scheduleStreamCleanup(sid, s)
 	})
+
+	hub.host.traceStreamOpen(s.GetState())
 
 	return nil
 }
@@ -117,24 +119,34 @@ func (hub *StreamHub) GetStreamStates() []*stream.State {
 	})
 	return list
 }
-func (hub *StreamHub) GetClosedStates(pos int) []*stream.State {
+
+// GetClosedStates 增量拉取已关闭流的状态。
+// pos 为上次返回的 nextPos（首次传 0）；返回 (新增状态列表, 新的 nextPos)。
+// 缓冲区写满后旧记录被覆盖：若 pos 落后于最早可用记录，从最早可用处开始返回，
+// 调用方比较 pos 与实际起点可感知缺口。
+func (hub *StreamHub) GetClosedStates(pos int64) ([]*stream.State, int64) {
 	hub.closedMut.RLock()
 	defer hub.closedMut.RUnlock()
 
-	total := len(hub.closedStates)
-	if total == 0 || pos >= total {
-		return nil
+	seq := hub.closedSeq
+	n := int64(len(hub.closedStates))
+	if n == 0 || pos >= seq {
+		return nil, seq
 	}
 
-	// 环形缓冲区：按写入顺序从旧到新排列
-	result := make([]*stream.State, 0, total-pos)
-	for i := pos; i < total; i++ {
-		idx := (hub.closedPos + i) % total
-		if hub.closedStates[idx] != nil {
-			result = append(result, hub.closedStates[idx])
+	start := pos
+	if start < seq-n {
+		start = seq - n // pos 指向的记录已被覆盖，从最早可用记录开始
+	}
+
+	// 环形缓冲区：第 i 条记录（按写入序号）位于 closedStates[i%n]
+	result := make([]*stream.State, 0, seq-start)
+	for i := start; i < seq; i++ {
+		if st := hub.closedStates[i%n]; st != nil {
+			result = append(result, st)
 		}
 	}
-	return result
+	return result, seq
 }
 
 // 处理数据包
@@ -186,13 +198,15 @@ func (hub *StreamHub) handleAckCloseStream(pbuf *packet.Buffer) {
 }
 
 func (hub *StreamHub) recordClosedState(state *stream.State) {
+	hub.host.traceStreamClosed(state)
+
 	hub.closedMut.Lock()
 	defer hub.closedMut.Unlock()
 
 	if len(hub.closedStates) < maxClosedStates {
 		hub.closedStates = append(hub.closedStates, state)
 	} else {
-		hub.closedStates[hub.closedPos] = state
+		hub.closedStates[hub.closedSeq%int64(maxClosedStates)] = state
 	}
-	hub.closedPos = (hub.closedPos + 1) % maxClosedStates
+	hub.closedSeq++
 }

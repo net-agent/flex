@@ -61,3 +61,10 @@ func (r *Requests[T]) Remove(key uint16) {
 	}
 	r.mu.Unlock()
 }
+
+// Len returns the number of currently registered (in-flight) requests.
+func (r *Requests[T]) Len() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.waiters)
+}

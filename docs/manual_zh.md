@@ -7,7 +7,7 @@
 2.  [Node (代理节点)](#node-代理节点)
 3.  [Switcher (中继服务)](#switcher-中继服务)
 4.  [公平性与调度](#公平性与调度)
-5.  [可观测性与控制](#可观测性与控制)
+5.  [可观测性](#可观测性)
 
 ---
 
@@ -92,10 +92,14 @@ Switcher 本身不监听 TCP 端口；它处理你传递给它的 `packet.Conn` 
 ```go
 import "github.com/net-agent/flex/v3/switcher"
 
-s := switcher.NewServer("secret-password")
+s := switcher.NewServer("secret-password", nil, nil)
+
+// 可选的生命周期钩子:
+// s.OnContextStart = func(ctx *switcher.Context) { ... }
+// s.OnContextStop  = func(ctx *switcher.Context, d time.Duration) { ... }
 
 // 在你的 TCP/WS accept 循环中:
-go s.ServeConn(pconn, onStart, onStop)
+go s.ServeConn(pconn)
 ```
 
 ### 上下文与路由
@@ -108,41 +112,142 @@ go s.ServeConn(pconn, onStart, onStop)
 Flex v2 引入了 **公平队列 (Fair Queuing)**。
 -   **问题**: 在 v1 版本中，大文件传输可能会阻塞 ACK 或 Ping 包，导致超时。
 -   **解决方案**: `FairWriter` 分别对来自不同流的数据包进行排队，并以轮询方式进行服务。
--   **使用**: 自动启用。`node.New` 和 `switcher.NewServer` 默认会将连接包装在 `FairConn` 中。
+-   **使用**: 在托管连接的场景默认启用：`switcher.Server` 会包装每个接入的连接，`node.Session` 会包装其连接。两者都可用 `SetEnableFairConn(false)` 关闭。直接使用 `node.New` 时连接保持原样，不做包装。
 
 ---
 
-## 可观测性与控制
+## 可观测性
 
-Flex 提供了内置的 HTTP Admin API 以实现深度可视化。
+Flex 以编程方式暴露运行时状态，不内置 HTTP 服务——由你决定如何暴露
+（JSON over HTTP、metrics、日志）。所有快照类型都带 JSON tag，
+可直接用 `encoding/json` 序列化。
 
-### Node Admin
-为 Node 启动管理服务:
-
-```go
-admin := node.NewAdminServer(n, ":9091")
-go admin.Start()
-```
-
-**端点**:
--   `GET /api/v1/info`: 基础统计 (流量, 运行时间)。
--   `GET /api/v1/streams`: 列出活跃流，包含 RTT 和缓冲区状态。
--   `GET /api/v1/listeners`: 列出活跃的虚拟监听器。
-
-### Switcher Admin
-为 Switcher 启动管理服务:
+### Node：拉取式状态快照
 
 ```go
-admin := switcher.NewAdminServer(s, ":9090")
-go admin.Start()
+info := n.GetInfo()         // 域名、IP、网络类型、运行时长、累计收发字节
+listeners := n.GetListeners()
+running := n.IsRunning()    // dispatcher 是否正在服务
+
+snap := n.Inspect()         // 某一时刻的一致性快照
 ```
 
-**端点**:
--   `GET /api/v1/clients`: 列出所有连接的代理，包含实时指标 (流数量, 带宽, RTT)。
--   `DELETE /api/v1/clients/{domain}`: 踢掉某个代理。
+`Inspect()` 返回 `Snapshot`：
 
-### 依赖
-Admin API 使用了 `github.com/gorilla/mux`。确保你已安装：
-```bash
-go get -u github.com/gorilla/mux
+| 字段 | 内容 |
+| --- | --- |
+| `at` | 采样时间（用于计算速率） |
+| `info` | 节点身份与累计流量计数 |
+| `running` | dispatcher 状态 |
+| `listeners` | 活跃虚拟监听器（port、addr） |
+| `streams` | 全部活跃流的状态 |
+| `port_pools` | 虚拟端口池占用（`shared` 与 `pinger` 两个池：in_use/capacity） |
+| `pending` | 等待对端应答的请求数（dial、ping） |
+| `heartbeat` | 探活间隔、最近写入时间、最近测得的 RTT（`last_rtt`） |
+| `failures` | 失败事件累计计数（见下表） |
+
+`failures` 与一次性的 `Trace` 事件钩子互补——钩子漏接就丢了，计数器始终可查：
+
+| 计数器 | 含义 |
+| --- | --- |
+| `dial_timeout` | Dial 等待应答超时 |
+| `dial_rejected` | Dial 被对端拒绝 |
+| `dial_write_failed` | Dial 请求写入底层连接失败 |
+| `ping_failed` | Ping 超时、被拒或写失败 |
+| `heartbeat_failed` | 心跳探活失败 |
+| `port_exhausted` | 虚拟端口池耗尽（shared 与 pinger 合计） |
+
+单条流的状态（`stream.State`）包含方向、双端 domain/IP/port、创建/关闭时间、
+收发字节数、ACK 累计和在途 buffer 数。
+
+```go
+states := n.GetStreamStates() // 活跃流
+
+// 已关闭流保留在环形缓冲区（最近 1024 条），支持增量拉取：
+var pos int64
+closed, pos := n.GetClosedStates(pos) // 只返回比 pos 新的记录
 ```
+
+### Node：速率
+
+计数器是累计值，用两个快照计算速率：
+
+```go
+snap1 := n.Inspect()
+time.Sleep(time.Second)
+snap2 := n.Inspect()
+
+rates := snap2.RatesSince(snap1) // 采样间隔非正时返回 nil
+fmt.Println(rates.BytesReadPerSec, rates.BytesWrittenPerSec)
+for _, sr := range rates.Streams { // 两个快照中都存在的流
+    fmt.Printf("stream %d: %.0f B/s up\n", sr.Index, sr.BytesWrittenPerSec)
+}
+```
+
+### Node：推送式事件钩子
+
+```go
+n.SetTrace(&node.Trace{ // 仅应在 Serve 之前调用
+    StreamOpen:    func(st *stream.State) { /* ... */ },
+    StreamClosed:  func(st *stream.State) { /* ... */ },
+    HeartbeatFail: func(err error) { /* ... */ },
+    PortExhausted: func(pool string, err error) { /* ... */ },
+})
+```
+
+### Node：主动探测
+
+```go
+rtt, err := n.PingDomain("target-agent", time.Second) // 到对端节点的 RTT
+rtt, err = n.PingDomain("", time.Second)              // 到中转节点的 RTT
+```
+
+### Session 观测
+
+`Session`（带自动重连的 Node 代理）暴露连接生命周期：
+
+```go
+state := sess.GetState()         // ready / idle / connecting / online / closed
+errText := sess.GetLastErr()     // 最近一次错误，例如重连原因
+n := sess.GetReconnectCount()    // 累计断线次数
+
+sess.OnStateChange(func(old, new node.SessionState) { // 仅应在 Serve 之前调用
+    log.Printf("session %v -> %v", old, new)
+})
+
+err := sess.WaitReady(5 * time.Second) // 阻塞直到 online
+node := sess.GetNode()                 // 当前 *Node（可能为 nil），
+                                       // Node 的全部观测 API 对它适用
+```
+
+`sess.SetLogger` / `sess.SetTrace` 会在每次重连重建 Node 时自动注入，
+配置跨重连存活。
+
+### Switcher 观测
+
+```go
+stats := srv.GetStats()     // active_connections、total_contexts、uptime_seconds
+clients := srv.GetClients() // 在线节点：域名、IP、mac、接入时间，
+                            // 每节点的流数量、收发字节、最近 RTT
+
+srv.OnContextStart = func(ctx *switcher.Context) { /* 节点接入 */ }
+srv.OnContextStop  = func(ctx *switcher.Context, d time.Duration) { /* 节点断开 */ }
+```
+
+日志粒度可通过 `switcher.LogConfig` 按模块（server/registry/router/context）
+分别配置，作为参数传给 `NewServer`。
+
+### 示例：通过 HTTP 暴露状态
+
+仅用标准库：
+
+```go
+http.HandleFunc("/inspect", func(w http.ResponseWriter, r *http.Request) {
+    w.Header().Set("Content-Type", "application/json")
+    _ = json.NewEncoder(w).Encode(n.Inspect())
+})
+go http.ListenAndServe(":9091", nil)
+```
+
+`examples/ws-gate` 中有完整示例，将 Switcher 的 `GetStats()` 与
+`GetClients()` 暴露为 `/api/stats` 和 `/api/clients`。

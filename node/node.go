@@ -48,8 +48,12 @@ type Node struct {
 	done      chan struct{}
 	onceClose sync.Once
 
-	writtenDataSize int64
-	readDataSize    int64
+	startedAt time.Time
+	trace     *Trace
+	failures  FailureStats
+
+	writtenDataSize atomic.Int64
+	readDataSize    atomic.Int64
 
 	flowConfig FlowConfig
 }
@@ -82,9 +86,10 @@ func NewWithOptions(conn packet.Conn, portMin, portMax uint16, heartbeatInterval
 		return nil, err
 	}
 	node := &Node{
-		pconn:  conn,
-		done:   make(chan struct{}),
-		logger: slog.Default(),
+		pconn:     conn,
+		done:      make(chan struct{}),
+		logger:    slog.Default(),
+		startedAt: time.Now(),
 	}
 
 	node.listenHub.init(node, portm)
@@ -95,7 +100,10 @@ func NewWithOptions(conn packet.Conn, portMin, portMax uint16, heartbeatInterval
 	node.dispatcher.init(node)
 
 	node.heartbeat.SetChecker(func() error {
-		_, err := node.PingDomain("", time.Second*2)
+		rtt, err := node.PingDomain("", time.Second*2)
+		if err == nil {
+			node.heartbeat.setLastRTT(rtt)
+		}
 		return err
 	})
 
@@ -111,15 +119,18 @@ func (node *Node) SetDomain(domain string) { node.domain = domain }
 func (node *Node) GetDomain() string       { return node.domain }
 
 // SetIP 设置节点虚拟 IP。仅应在 Serve 之前调用，运行期间修改会破坏路由身份。
-func (node *Node) SetIP(ip uint16)     { node.ip = ip }
-func (node *Node) GetIP() uint16       { return node.ip }
+func (node *Node) SetIP(ip uint16) { node.ip = ip }
+func (node *Node) GetIP() uint16   { return node.ip }
+
+// SetLogger 设置节点日志器。各组件经 host 指针惰性读取，调用后即对全组件生效。
+// 仅应在 Serve 之前调用。
 func (node *Node) SetLogger(l *slog.Logger) {
 	if l != nil {
 		node.logger = l
 	}
 }
 func (node *Node) GetReadWriteSize() (read, written int64) {
-	return node.readDataSize, node.writtenDataSize
+	return node.readDataSize.Load(), node.writtenDataSize.Load()
 }
 
 func (node *Node) GetInfo() *NodeInfo {
@@ -128,6 +139,7 @@ func (node *Node) GetInfo() *NodeInfo {
 		Domain:       node.GetDomain(),
 		IP:           node.GetIP(),
 		Network:      node.GetNetwork(),
+		Uptime:       int64(time.Since(node.startedAt).Seconds()),
 		BytesRead:    read,
 		BytesWritten: written,
 	}
@@ -201,8 +213,11 @@ func (node *Node) GetStreamStates() []*stream.State {
 	return node.streamHub.GetStreamStates()
 }
 
-// GetClosedStates 返回已关闭流的状态快照（环形缓冲区），pos 为起始偏移。
-func (node *Node) GetClosedStates(pos int) []*stream.State {
+// GetClosedStates 增量拉取已关闭流的状态快照（环形缓冲区，最多保留最近 1024 条）。
+// pos 为上次拉取返回的 nextPos（首次传 0），返回新增的状态与新的 nextPos。
+// 写入速度过快导致旧记录被覆盖时，会从最早可用的记录开始返回，调用方可通过
+// nextPos 的跳变感知中间存在缺口。
+func (node *Node) GetClosedStates(pos int64) ([]*stream.State, int64) {
 	return node.streamHub.GetClosedStates(pos)
 }
 
@@ -259,7 +274,7 @@ func (node *Node) WriteBuffer(pbuf *packet.Buffer) error {
 	}
 
 	node.heartbeat.Touch()
-	atomic.AddInt64(&node.writtenDataSize, int64(pbuf.PayloadSize()))
+	node.writtenDataSize.Add(int64(pbuf.PayloadSize()))
 
 	return node.pconn.WriteBuffer(pbuf)
 }
@@ -272,7 +287,7 @@ func (node *Node) readLoop() error {
 			return err
 		}
 
-		atomic.AddInt64(&node.readDataSize, int64(pbuf.PayloadSize()))
+		node.readDataSize.Add(int64(pbuf.PayloadSize()))
 
 		err = node.dispatcher.dispatch(pbuf)
 		if err != nil {

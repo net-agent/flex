@@ -24,11 +24,11 @@ var (
 type SessionState int32
 
 const (
-	SessionReady     SessionState = iota // 已创建，Serve 尚未启动
-	SessionIdle                          // 已进入 Serve loop，等待首次 Listen/Dial 触发
-	SessionConnecting                    // 连接中 / 重连中
-	SessionOnline                        // 已连接
-	SessionClosed                        // 已关闭
+	SessionReady      SessionState = iota // 已创建，Serve 尚未启动
+	SessionIdle                           // 已进入 Serve loop，等待首次 Listen/Dial 触发
+	SessionConnecting                     // 连接中 / 重连中
+	SessionOnline                         // 已连接
+	SessionClosed                         // 已关闭
 )
 
 func (s SessionState) String() string {
@@ -75,10 +75,12 @@ type Session struct {
 	done      chan struct{}
 	onceClose sync.Once
 	logger    *slog.Logger
+	trace     *Trace
 
 	// 状态管理
 	state         atomic.Int32 // SessionState，lock-free 读取
 	lastErr       atomic.Value // string，最近一次错误
+	reconnects    atomic.Int64 // 累计断线重连次数（Online→Connecting）
 	onStateChange func(oldState, newState SessionState)
 }
 
@@ -103,10 +105,25 @@ func (s *Session) SetEnableFairConn(enable bool) {
 	s.enableFairConn.Store(enable)
 }
 
+// SetLogger 设置 Session 日志器，每次重连新建 Node 时会自动注入。仅应在 Serve 之前调用。
 func (s *Session) SetLogger(l *slog.Logger) {
 	if l != nil {
 		s.logger = l
 	}
+}
+
+// SetTrace 设置节点级事件钩子，每次重连新建 Node 时会自动注入。仅应在 Serve 之前调用。
+func (s *Session) SetTrace(t *Trace) {
+	s.trace = t
+}
+
+// wireNode 将 Session 级配置集中注入新建的 Node。
+// 每次重连都会重建 Node，所有注入配置必须在此统一接线，新增配置项时同步补充。
+func (s *Session) wireNode(n *Node, ip uint16) {
+	n.SetIP(ip)
+	n.SetDomain(s.config.Domain)
+	n.SetLogger(s.logger)
+	n.SetTrace(s.trace)
 }
 
 // GetState 返回当前 Session 状态（lock-free）
@@ -121,6 +138,12 @@ func (s *Session) GetLastErr() string {
 		return ""
 	}
 	return v.(string)
+}
+
+// GetReconnectCount 返回累计断线次数（Online 后因断线回到 Connecting 的次数）。
+// 首次建连失败不计入。
+func (s *Session) GetReconnectCount() int64 {
+	return s.reconnects.Load()
 }
 
 // OnStateChange 注册状态变更回调。必须在 Serve 之前调用。
@@ -227,22 +250,22 @@ func (s *Session) ensureServing() {
 //
 // 状态流转：
 //
-//	                 ┌─────────────────────────────────────────┐
-//	                 │                  Close()                │
-//	                 ▼                                         │
-//	  NewSession → Ready → [Serve()] → Idle → Connecting → Online
-//	                                              ▲   │
-//	                                              └───┘  (断线自动重连)
-//	                                              │
-//	                                            Closed  (Close() 可在任意状态触发)
+//	               ┌─────────────────────────────────────────┐
+//	               │                  Close()                │
+//	               ▼                                         │
+//	NewSession → Ready → [Serve()] → Idle → Connecting → Online
+//	                                            ▲   │
+//	                                            └───┘  (断线自动重连)
+//	                                            │
+//	                                          Closed  (Close() 可在任意状态触发)
 //
 // 各状态说明：
 //
-//	  Ready      — Session 已创建，Serve 尚未启动
-//	  Idle       — 已进入 Serve loop，等待首次 Listen/Dial 触发（懒连接）
-//	  Connecting — 连接中或断线重连中
-//	  Online     — 与服务器成功建立连接，Node 可用
-//	  Closed     — Session 已永久关闭，不可复用
+//	Ready      — Session 已创建，Serve 尚未启动
+//	Idle       — 已进入 Serve loop，等待首次 Listen/Dial 触发（懒连接）
+//	Connecting — 连接中或断线重连中
+//	Online     — 与服务器成功建立连接，Node 可用
+//	Closed     — Session 已永久关闭，不可复用
 func (s *Session) Serve() error {
 	s.setState(SessionIdle, nil) // ★ 已进入 Serve loop，等待首次触发
 
@@ -297,8 +320,7 @@ func (s *Session) Serve() error {
 		}
 
 		node := New(conn)
-		node.SetIP(ip)
-		node.SetDomain(s.config.Domain)
+		s.wireNode(node, ip)
 
 		backoff = time.Second // 连接成功，重置退避
 
@@ -324,6 +346,7 @@ func (s *Session) Serve() error {
 		s.ready = make(chan struct{}) // 为下一轮重连准备新的 ready channel
 		s.mu.Unlock()
 
+		s.reconnects.Add(1)
 		s.setState(SessionConnecting, serveErr) // ★ 触发回调：Online → Connecting
 
 		s.logger.Info("node disconnected, reconnecting...")

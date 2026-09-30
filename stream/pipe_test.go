@@ -2,8 +2,8 @@ package stream
 
 import (
 	"bytes"
+	"crypto/rand"
 	"io"
-	"math/rand"
 	"sync"
 	"testing"
 	"time"

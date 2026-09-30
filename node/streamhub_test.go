@@ -130,7 +130,7 @@ func TestStreamList(t *testing.T) {
 	assert.NotEqual(t, len(list1), 0)
 	log.Println("len(list1)=", len(list1))
 
-	closed1 := n1.GetClosedStates(0)
+	closed1, _ := n1.GetClosedStates(0)
 	assert.Equal(t, 0, len(closed1))
 
 	close(testStep1Done) // 关闭后，所有等待的地方都会收到消息，进入下一阶段
@@ -148,9 +148,10 @@ func TestStreamList(t *testing.T) {
 	log.Println("len(list1)=", len(list1))
 
 	waitForCondition(t, 5*time.Second, func() bool {
-		return len(n1.GetClosedStates(0)) == times
+		closed, _ := n1.GetClosedStates(0)
+		return len(closed) == times
 	}, "closed states should be eventually recorded")
-	closed1 = n1.GetClosedStates(0)
+	closed1, _ = n1.GetClosedStates(0)
 	assert.Equal(t, times, len(closed1))
 
 }
@@ -191,9 +192,10 @@ func TestAttachStream_OnDetachReleasesPortAndRecordsState(t *testing.T) {
 	assert.Equal(t, 0, pool.InUse(), "bound port should be released on detach")
 
 	waitForCondition(t, 5*time.Second, func() bool {
-		return len(hub.GetClosedStates(0)) == 1
+		states, _ := hub.GetClosedStates(0)
+		return len(states) == 1
 	}, "closed state should be eventually recorded")
-	closed := hub.GetClosedStates(0)
+	closed, _ := hub.GetClosedStates(0)
 	assert.Equal(t, 1, len(closed), "closed state should be recorded once")
 }
 
@@ -227,4 +229,53 @@ func TestAttachStream_OnDetachDoesNotDeleteReusedSID(t *testing.T) {
 	got, err := hub.getStream(sid)
 	assert.Nil(t, err)
 	assert.Equal(t, s2, got, "old stream detach callback must not remove the new stream under same SID")
+}
+
+func TestGetClosedStatesIncremental(t *testing.T) {
+	hub := &StreamHub{}
+	hub.init(nil, nil)
+
+	// 空缓冲区：无数据，pos 保持 0
+	states, pos := hub.GetClosedStates(0)
+	assert.Empty(t, states)
+	assert.Equal(t, int64(0), pos)
+
+	hub.recordClosedState(&stream.State{Index: 1})
+	hub.recordClosedState(&stream.State{Index: 2})
+
+	states, pos = hub.GetClosedStates(pos)
+	assert.Len(t, states, 2)
+	assert.Equal(t, int32(1), states[0].Index)
+	assert.Equal(t, int64(2), pos)
+
+	// 用最新 pos 重复拉取：无新数据
+	states, pos2 := hub.GetClosedStates(pos)
+	assert.Empty(t, states)
+	assert.Equal(t, pos, pos2)
+
+	// 新增一条后增量拉取
+	hub.recordClosedState(&stream.State{Index: 3})
+	states, pos = hub.GetClosedStates(pos)
+	assert.Len(t, states, 1)
+	assert.Equal(t, int32(3), states[0].Index)
+	assert.Equal(t, int64(3), pos)
+}
+
+func TestGetClosedStatesRingWrap(t *testing.T) {
+	hub := &StreamHub{}
+	hub.init(nil, nil)
+
+	for i := 0; i < maxClosedStates+10; i++ {
+		hub.recordClosedState(&stream.State{Index: int32(i)})
+	}
+
+	// pos 指向的记录已被覆盖：从最早可用记录开始返回
+	states, pos := hub.GetClosedStates(0)
+	assert.Len(t, states, maxClosedStates)
+	assert.Equal(t, int64(maxClosedStates+10), pos)
+	assert.Equal(t, int32(10), states[0].Index, "oldest available record should be Index=10")
+
+	// pos 落在可用范围内：按序返回
+	states, _ = hub.GetClosedStates(pos - 5)
+	assert.Len(t, states, 5)
 }

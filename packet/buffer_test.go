@@ -12,11 +12,11 @@ import (
 
 func TestBuffer_SetGetHeader(t *testing.T) {
 	tests := []struct {
-		name                 string
-		cmd                  byte
-		distIP, distPort     uint16
-		srcIP, srcPort       uint16
-		payload              []byte
+		name             string
+		cmd              byte
+		distIP, distPort uint16
+		srcIP, srcPort   uint16
+		payload          []byte
 	}{
 		{"basic", 1, 2, 3, 4, 5, []byte("hello")},
 		{"zero values", 0, 0, 0, 0, 0, nil},

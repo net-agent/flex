@@ -35,7 +35,7 @@ type Context struct {
 	AttachTime time.Time
 	DetachTime time.Time
 
-	pingIndex int32
+	pingIndex atomic.Int32
 	pingBack  sync.Map
 	Stats     ContextStats
 }
@@ -118,9 +118,10 @@ func (ctx *Context) writeBuffer(buf *packet.Buffer) error {
 func (ctx *Context) recordIncoming(pbuf *packet.Buffer) {
 	atomic.AddInt64(&ctx.Stats.BytesReceived, int64(pbuf.PayloadSize()+packet.HeaderSz))
 	cmd := pbuf.Cmd()
-	if cmd == packet.CmdOpenStream {
+	switch cmd {
+	case packet.CmdOpenStream:
 		atomic.AddInt32(&ctx.Stats.StreamCount, 1)
-	} else if cmd == packet.CmdCloseStream {
+	case packet.CmdCloseStream:
 		atomic.AddInt32(&ctx.Stats.StreamCount, -1)
 	}
 }
@@ -199,7 +200,7 @@ func (ctx *Context) deliverPingResponse(port uint16, pbuf *packet.Buffer) bool {
 }
 
 func (ctx *Context) ping(timeout time.Duration) (dur time.Duration, retErr error) {
-	port := uint16(0xffff & atomic.AddInt32(&ctx.pingIndex, 1))
+	port := uint16(0xffff & ctx.pingIndex.Add(1))
 
 	pbuf := packet.NewBuffer()
 	pbuf.SetCmd(packet.CmdPingDomain)

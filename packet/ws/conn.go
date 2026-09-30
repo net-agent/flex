@@ -8,7 +8,7 @@ import (
 )
 
 type connImpl struct {
-	raw net.Conn
+	raw    net.Conn
 	closer interface{ Close() error }
 	packet.Reader
 	packet.Writer
@@ -25,4 +25,4 @@ func NewConn(wsconn *websocket.Conn) packet.Conn {
 }
 
 func (c *connImpl) Close() error         { return c.closer.Close() }
-func (c *connImpl) GetRawConn() net.Conn  { return c.raw }
+func (c *connImpl) GetRawConn() net.Conn { return c.raw }

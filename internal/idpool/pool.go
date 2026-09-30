@@ -79,6 +79,12 @@ func (p *Pool) Release(id uint16) error {
 	return nil
 }
 
+// Capacity returns the total number of IDs in the pool range [min, max].
+// The range is fixed at creation, so no lock is needed.
+func (p *Pool) Capacity() int {
+	return int(p.max) - int(p.min) + 1
+}
+
 // InUse returns the number of currently allocated IDs.
 func (p *Pool) InUse() int {
 	p.mu.Lock()
