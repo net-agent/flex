@@ -37,11 +37,16 @@ var ErrWriterClosed = errors.New("fair writer closed")
 
 // cloneBuffer creates a deep copy of a packet.Buffer so that the original
 // can be safely reused by the caller (e.g. Sender's pre-allocated buffers).
+// 克隆体取自 packet 池，写完由 FairWriter 统一 PutBuffer 归还。
 func cloneBuffer(buf *packet.Buffer) *packet.Buffer {
-	clone := &packet.Buffer{}
+	clone := packet.GetBuffer()
 	clone.Head = buf.Head // array copy (value type)
 	if len(buf.Payload) > 0 {
-		clone.Payload = make([]byte, len(buf.Payload))
+		if cap(clone.Payload) < len(buf.Payload) {
+			clone.Payload = make([]byte, len(buf.Payload))
+		} else {
+			clone.Payload = clone.Payload[:len(buf.Payload)]
+		}
 		copy(clone.Payload, buf.Payload)
 	}
 	return clone
@@ -120,11 +125,35 @@ func NewFairWriter(w packet.Writer, quantum ...int) *FairWriter {
 	return fw
 }
 
+// WriteBuffer 入队一个 buffer 的深拷贝，调用方保留原 buffer 的所有权。
+// 深拷贝是必须的：调用方可能复用预分配的 Buffer（如 stream Sender 的
+// dataBuf/closeBuf），异步写出时原 buffer 可能已被覆写。
 func (fw *FairWriter) WriteBuffer(buf *packet.Buffer) error {
 	if fw.closed.Load() {
 		return ErrWriterClosed
 	}
+	clone := cloneBuffer(buf)
+	if err := fw.enqueue(clone); err != nil {
+		packet.PutBuffer(clone)
+		return err
+	}
+	return nil
+}
 
+// WriteBufferOwned 与 WriteBuffer 行为一致，但不复制 buffer：
+// 调用方将所有权转移给 FairWriter，写完后由 FairWriter 归还 packet 池。
+// 返回后调用方不得再访问 buf 及其 Payload；返回错误表示所有权未转移，
+// 回收责任仍在调用方。
+func (fw *FairWriter) WriteBufferOwned(buf *packet.Buffer) error {
+	if fw.closed.Load() {
+		return ErrWriterClosed
+	}
+	return fw.enqueue(buf)
+}
+
+// enqueue 把 buffer 放入调度队列。入队成功的 buffer 由写出路径（loop /
+// drainControl / processStream）在写完后统一 PutBuffer 归还。
+func (fw *FairWriter) enqueue(buf *packet.Buffer) error {
 	// Per-stream ordered commands: CmdPushStreamData, CmdCloseStream, AckCloseStream
 	// These must go through the per-stream queue to preserve ordering with data packets.
 	// All other commands (CmdOpenStream, AckPushStreamData, CmdPingDomain, etc.) are
@@ -133,23 +162,15 @@ func (fw *FairWriter) WriteBuffer(buf *packet.Buffer) error {
 	if cmd != packet.CmdPushStreamData &&
 		cmd != packet.CmdCloseStream &&
 		cmd != packet.AckCloseStream {
-		// Control packets: deep copy because the caller may reuse the Buffer
-		// (e.g. Sender.dataAckPbuf is pre-allocated and reused).
-		clone := cloneBuffer(buf)
 		select {
-		case fw.controlCh <- clone:
+		case fw.controlCh <- buf:
 			return nil
 		case <-fw.done:
 			return ErrWriterClosed
 		}
 	}
 
-	// Per-stream ordered packets: deep copy because Sender reuses pre-allocated
-	// Buffer objects (dataPbuf, closePbuf, closeAckPbuf). Without copying, the
-	// loop() goroutine may read stale/overwritten Head and Payload when it
-	// asynchronously drains the StreamQueue.
-	clone := cloneBuffer(buf)
-	sid := clone.SID()
+	sid := buf.SID()
 	fw.mu.Lock()
 	sq, exists := fw.streams[sid]
 	if !exists {
@@ -158,7 +179,7 @@ func (fw *FairWriter) WriteBuffer(buf *packet.Buffer) error {
 	}
 	// Push 与条目回收（processStream 的 delete）同在 fw.mu 下串行，
 	// 避免"回收入队检查"与"生产入队"之间的孤儿队列竞态
-	sq.Push(clone)
+	sq.Push(buf)
 	if cmd == packet.CmdCloseStream || cmd == packet.AckCloseStream {
 		sq.closed = true
 	}
@@ -195,6 +216,7 @@ func (fw *FairWriter) loop() {
 			return
 		case buf := <-fw.controlCh:
 			fw.writer.WriteBuffer(buf)
+			packet.PutBuffer(buf)
 			continue
 		case sid := <-fw.readyQueue:
 			// Preemption: drain control channel first
@@ -209,6 +231,7 @@ func (fw *FairWriter) drainControl() {
 		select {
 		case buf := <-fw.controlCh:
 			fw.writer.WriteBuffer(buf)
+			packet.PutBuffer(buf)
 		default:
 			return
 		}
@@ -231,6 +254,10 @@ func (fw *FairWriter) processStream(sid uint64) {
 			for _, buf := range bufs {
 				fw.writer.WriteBuffer(buf)
 			}
+		}
+		// 内置 Writer 均为同步写、返回后不持有 buffer，此处统一归还
+		for _, buf := range bufs {
+			packet.PutBuffer(buf)
 		}
 	}
 

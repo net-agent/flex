@@ -864,3 +864,77 @@ func BenchmarkFairWriterWriteBuffer(b *testing.B) {
 		})
 	}
 }
+
+// TestWriteBufferOwned 验证所有权转移语义：
+//   - owned buffer 不克隆，内容原样写出；
+//   - writer 已关闭时返回 ErrWriterClosed，所有权不转移（buffer 保持原样，调用方负责回收）。
+//
+// 注：写出后的 PutBuffer 发生在 FairWriter 内部 goroutine，无跨 goroutine 同步观测点，
+// 此处不断言回收时机，pool 健康由 packet 包测试与 race 检测覆盖。
+func TestWriteBufferOwned(t *testing.T) {
+	rec := &RecordWriter{}
+	fw := NewFairWriter(rec)
+	defer fw.Close()
+
+	owned := makeBuf(packet.CmdPushStreamData, 7)
+	wantSid := owned.SID()
+	_ = owned.SetPayload([]byte("owned-data"))
+
+	if err := fw.WriteBufferOwned(owned); err != nil {
+		t.Fatalf("WriteBufferOwned failed: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for len(rec.Snapshot()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("owned buffer not written")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	entries := rec.Snapshot()
+	if len(entries) != 1 || entries[0].SID != wantSid {
+		t.Fatalf("written entries mismatch: %+v, want sid=%x", entries, wantSid)
+	}
+
+	// writer 关闭后：所有权不转移，buffer 保持原样，由调用方负责回收
+	fw2 := NewFairWriter(&RecordWriter{})
+	fw2.Close()
+	rejected := makeBuf(packet.CmdPushStreamData, 9)
+	if err := fw2.WriteBufferOwned(rejected); err != ErrWriterClosed {
+		t.Fatalf("expected ErrWriterClosed, got %v", err)
+	}
+	if rejected.Head == (packet.Header{}) {
+		t.Fatal("rejected buffer should not be returned to pool by FairWriter")
+	}
+	packet.PutBuffer(rejected)
+}
+
+// TestWriteBufferKeepsCallerOwnership 对照验证：WriteBuffer（克隆语义）不动调用方的 buffer。
+func TestWriteBufferKeepsCallerOwnership(t *testing.T) {
+	rec := &RecordWriter{}
+	fw := NewFairWriter(rec)
+	defer fw.Close()
+
+	buf := makeBuf(packet.CmdPushStreamData, 3)
+	_ = buf.SetPayload([]byte("caller-owned"))
+	wantHead := buf.Head
+
+	if err := fw.WriteBuffer(buf); err != nil {
+		t.Fatalf("WriteBuffer failed: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for len(rec.Snapshot()) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("clone not written")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	if buf.Head != wantHead {
+		t.Fatal("WriteBuffer must not touch caller's buffer header")
+	}
+	if string(buf.Payload) != "caller-owned" {
+		t.Fatal("WriteBuffer must not touch caller's payload")
+	}
+}

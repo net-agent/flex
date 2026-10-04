@@ -237,6 +237,7 @@ func (pc *presenceCenter) fanout(msg presenceMsg, version uint64, online bool) {
 		if err := sub.ctx.enqueueForward(pbuf); err != nil {
 			pc.logger.Warn("presence notify enqueue failed, drop subscriber",
 				"domain", msg.domain, "subscriber_ip", subIP, "error", err)
+			packet.PutBuffer(pbuf) // 未入队，所有权未转移
 			dead = append(dead, subIP)
 		}
 	}
@@ -298,9 +299,11 @@ func (pc *presenceCenter) replySubscribeACK(ctx *Context, ackPort uint16, ack pa
 	pbuf.SetDist(ctx.IP, ackPort)
 	if err := pbuf.SetPayload(ack.Encode()); err != nil {
 		pc.logger.Warn("presence subscribe ack encode failed", "ctx_id", ctx.id, "error", err)
+		packet.PutBuffer(pbuf)
 		return
 	}
 	if err := ctx.enqueueForward(pbuf); err != nil {
 		pc.logger.Warn("presence subscribe ack enqueue failed", "ctx_id", ctx.id, "error", err)
+		packet.PutBuffer(pbuf)
 	}
 }

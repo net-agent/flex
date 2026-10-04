@@ -252,11 +252,11 @@ func TestBuffer_Pool(t *testing.T) {
 
 	PutBuffer(buf)
 
-	// 归还后 buf 应被重置
+	// 归还后 Head 应被重置
 	assert.Equal(t, Header{}, buf.Head)
-	assert.Nil(t, buf.Payload)
 
-	// 再次获取应正常
+	// 再次获取：长度归一为零（容量复用与否取决于池内竞争，并行测试下不作断言）
 	buf2 := GetBuffer()
 	assert.NotNil(t, buf2)
+	assert.Zero(t, len(buf2.Payload))
 }

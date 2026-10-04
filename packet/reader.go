@@ -45,7 +45,11 @@ func (reader *connReader) ReadBuffer() (retBuf *Buffer, retErr error) {
 
 	sz := pb.PayloadSize()
 	if sz > 0 {
-		pb.Payload = make([]byte, sz)
+		if cap(pb.Payload) < int(sz) {
+			pb.Payload = make([]byte, sz)
+		} else {
+			pb.Payload = pb.Payload[:sz]
+		}
 		_, err := io.ReadFull(reader.conn, pb.Payload)
 		if err != nil {
 			PutBuffer(pb)

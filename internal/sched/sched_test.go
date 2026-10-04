@@ -8,8 +8,10 @@ import (
 	"github.com/net-agent/flex/v3/packet"
 )
 
+// MockWriter 在写入时同步拷贝 header（Writer 约定：同步读、不持有），
+// 不能留存 buffer 指针——FairWriter 写完后会将 buffer 归还 packet 池。
 type MockWriter struct {
-	Captured []*packet.Buffer
+	Captured []packet.Header
 	mu       sync.Mutex
 	delay    time.Duration
 }
@@ -20,7 +22,7 @@ func (m *MockWriter) WriteBuffer(buf *packet.Buffer) error {
 	if m.delay > 0 {
 		time.Sleep(m.delay)
 	}
-	m.Captured = append(m.Captured, buf)
+	m.Captured = append(m.Captured, buf.Head)
 	return nil
 }
 
@@ -104,8 +106,8 @@ func TestFairness(t *testing.T) {
 	currentRun := 0
 	lastSid := uint64(0)
 
-	for _, buf := range mock.Captured {
-		sid := uint64(buf.Head[1])
+	for _, head := range mock.Captured {
+		sid := uint64(head[1])
 		if sid == lastSid {
 			currentRun++
 		} else {

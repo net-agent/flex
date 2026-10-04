@@ -23,6 +23,12 @@ func (fc *FairConn) WriteBuffer(buf *packet.Buffer) error {
 	return fc.writer.WriteBuffer(buf)
 }
 
+// WriteBufferOwned 语义见 FairWriter.WriteBufferOwned：不复制 buffer，
+// 调用方转移所有权，写完由 FairWriter 归还 packet 池。
+func (fc *FairConn) WriteBufferOwned(buf *packet.Buffer) error {
+	return fc.writer.WriteBufferOwned(buf)
+}
+
 func (fc *FairConn) SetWriteTimeout(dur time.Duration) {
 	fc.writer.SetWriteTimeout(dur)
 }

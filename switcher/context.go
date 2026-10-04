@@ -104,18 +104,38 @@ func (ctx *Context) readBuffer() (*packet.Buffer, error) {
 	return c.ReadBuffer()
 }
 
+// ownedBufferWriter 由 sched.FairConn 实现：调用方把 buffer 所有权转移给写方，
+// 写方在异步写完后归还 packet 池。返回错误表示所有权未转移（回收责任仍在调用方）。
+type ownedBufferWriter interface {
+	WriteBufferOwned(buf *packet.Buffer) error
+}
+
 // writeBuffer 直接写底层连接。它是受限出口：只允许 runForwardLoop 调用，
 // 其他所有写路径必须走 enqueueForward，保证 per-context 的包序与背压策略收口在一处。
+//
+// 同时它是 buffer 生命周期的统一终点：fair 连接转移所有权（FairWriter 写后归还），
+// 裸连接同步写完后就地归还；失败时 buffer 未转移，也在此归还。
 func (ctx *Context) writeBuffer(buf *packet.Buffer) error {
 	c := ctx.getConn()
 	if c == nil {
+		packet.PutBuffer(buf)
 		return errNilContextConn
 	}
 
 	// Update stats
 	atomic.AddInt64(&ctx.Stats.BytesSent, int64(buf.PayloadSize()+packet.HeaderSz))
 
-	return c.WriteBuffer(buf)
+	if ow, ok := c.(ownedBufferWriter); ok {
+		if err := ow.WriteBufferOwned(buf); err != nil {
+			packet.PutBuffer(buf)
+			return err
+		}
+		return nil
+	}
+
+	err := c.WriteBuffer(buf)
+	packet.PutBuffer(buf)
+	return err
 }
 
 // recordIncoming updates receive stats for an incoming packet.
@@ -190,7 +210,8 @@ func (ctx *Context) enqueueForward(pbuf *packet.Buffer) error {
 }
 
 // deliverPingResponse delivers a ping ACK to the waiting ping call.
-// Returns false if no pending ping matches the given port.
+// 返回 true 仅当 pbuf 真正送入等待通道（所有权转移给 ping 调用方）；
+// 返回 false 时 pbuf 的回收责任仍在调用方。
 func (ctx *Context) deliverPingResponse(port uint16, pbuf *packet.Buffer) bool {
 	it, found := ctx.pingBack.Load(port)
 	if !found {
@@ -203,9 +224,10 @@ func (ctx *Context) deliverPingResponse(port uint16, pbuf *packet.Buffer) bool {
 	// Defensive send: channel may be closed or full if ping timed out
 	select {
 	case ch <- pbuf:
+		return true
 	default:
+		return false
 	}
-	return true
 }
 
 func (ctx *Context) ping(timeout time.Duration) (dur time.Duration, retErr error) {
@@ -227,12 +249,14 @@ func (ctx *Context) ping(timeout time.Duration) (dur time.Duration, retErr error
 	pingStart := time.Now()
 	err := ctx.enqueueForward(pbuf)
 	if err != nil {
+		packet.PutBuffer(pbuf) // 未入队，所有权未转移
 		return 0, errPingWriteFailed
 	}
 
 	select {
 	case pbuf := <-ch:
 		info := string(pbuf.Payload)
+		packet.PutBuffer(pbuf) // 消费完毕，归还（该 buffer 已被 transfer 给本 goroutine）
 		if info != "" {
 			return 0, fmt.Errorf("ping response: %v", info)
 		}

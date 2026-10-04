@@ -97,12 +97,11 @@ func TestRouterOpenStream(t *testing.T) {
 func TestRouterAckPingDomain(t *testing.T) {
 	s := NewServer("", nil, nil)
 	caller := NewContext(1, nil, "test", "", nil)
-	pbuf := packet.NewBuffer()
 
 	// 分支覆盖：找不到port
-	s.router.handleAckPingDomain(caller, pbuf)
+	s.router.handleAckPingDomain(caller, packet.NewBuffer())
 
 	// 分支覆盖：deliverPingResponse returns false for non-channel value
 	caller.pingBack.Store(uint16(0), 100)
-	s.router.handleAckPingDomain(caller, pbuf)
+	s.router.handleAckPingDomain(caller, packet.NewBuffer())
 }

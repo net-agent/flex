@@ -65,19 +65,30 @@ type Buffer struct {
 	Payload []byte
 }
 
+// Buffer 所有权约定：
+//   - ReadBuffer 返回的 Buffer 归调用方所有，用毕应调用 PutBuffer 归还；
+//     所有权可沿调用链单播转移，但每个 Buffer 全程只能有一个终点执行 Put。
+//   - Writer.WriteBuffer 为同步写：函数返回后写方不再持有 buf，
+//     调用方可在返回后立即安全回收（全部内置 Writer 实现均满足）。
+//   - PutBuffer 之后不得再访问 buf 及其 Payload（底层数组可能被复用覆写）。
+//     重复 Put 会让同一数组被多方共享，属于严重错误；漏 Put 仅损失复用收益。
 var bufferPool = sync.Pool{
 	New: func() any { return &Buffer{} },
 }
 
 // GetBuffer returns a Buffer from the pool. Caller must call PutBuffer when done.
+// 返回的 Buffer 其 Payload 长度恒为 0，但底层数组可能复用自池（容量保留）。
 func GetBuffer() *Buffer {
-	return bufferPool.Get().(*Buffer)
+	buf := bufferPool.Get().(*Buffer)
+	buf.Payload = buf.Payload[:0]
+	return buf
 }
 
-// PutBuffer returns a Buffer to the pool after resetting it.
+// PutBuffer returns a Buffer to the pool：Head 清零；Payload 底层数组保留在池中，
+// 供后续同尺寸读取直接复用（单包 payload 上限 MaxPayloadSize=64KB，
+// 且 sync.Pool 条目受 GC 回收约束，内存不会无界增长）。
 func PutBuffer(buf *Buffer) {
 	buf.Head = Header{}
-	buf.Payload = nil
 	bufferPool.Put(buf)
 }
 
