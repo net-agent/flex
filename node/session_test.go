@@ -824,3 +824,241 @@ func TestSessionNoCallbackWithoutRegistration(t *testing.T) {
 	s.Close()
 	assert.Equal(t, SessionClosed, s.GetState())
 }
+
+// --- presence ---
+
+// newPresenceConnector 创建一个 connector，server 侧完成握手后把连接交给测试驱动（fake switcher）
+func newPresenceConnector(swCh chan packet.Conn) func() (packet.Conn, error) {
+	return func() (packet.Conn, error) {
+		c1, c2 := packet.Pipe()
+		go func() {
+			_, err := admit.Accept(c2, testPassword)
+			if err != nil {
+				c2.Close()
+				return
+			}
+			resp := admit.NewOKResponse(1)
+			if err := resp.WriteTo(c2, testPassword); err != nil {
+				c2.Close()
+				return
+			}
+			swCh <- c2
+		}()
+		return c1, nil
+	}
+}
+
+// recvSwitcher 等待一条完成握手的新连接
+func recvSwitcher(t *testing.T, swCh chan packet.Conn) packet.Conn {
+	t.Helper()
+	select {
+	case sw := <-swCh:
+		return sw
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting switcher conn")
+		return nil
+	}
+}
+
+// fakePresenceSwitcher 模拟 switcher 的 presence 行为：
+//   - serve 循环应答订阅请求（Add 回当前状态快照，Remove 回空 ACK），
+//     容忍建连时刻 resubscribe 与显式 Watch 并发产生的重复订阅（真实 switcher 侧订阅幂等）
+//   - 快照始终取当前状态，保证与已推送事件的 version 单调性一致
+type fakePresenceSwitcher struct {
+	t  *testing.T
+	sw packet.Conn
+
+	mu sync.Mutex
+	st packet.PresenceState
+}
+
+func newFakePresenceSwitcher(t *testing.T, sw packet.Conn, initial packet.PresenceState) *fakePresenceSwitcher {
+	f := &fakePresenceSwitcher{t: t, sw: sw, st: initial}
+	go f.serve()
+	return f
+}
+
+func (f *fakePresenceSwitcher) serve() {
+	for {
+		pbuf, err := f.sw.ReadBuffer()
+		if err != nil {
+			return
+		}
+		if pbuf.Cmd() != packet.CmdSubscribePresence {
+			packet.PutBuffer(pbuf)
+			continue
+		}
+		req := packet.DecodeSubscribeRequest(pbuf.Payload)
+		if req.Op == packet.SubscribeAdd {
+			f.mu.Lock()
+			states := []packet.PresenceState{f.st}
+			f.mu.Unlock()
+			writeSubscribeACK(f.t, f.sw, pbuf, packet.SubscribeACK{OK: true, States: states})
+		} else {
+			writeSubscribeACK(f.t, f.sw, pbuf, packet.SubscribeACK{OK: true})
+		}
+	}
+}
+
+// notify 更新 fake 当前状态并向对端推送事件（之后的订阅快照与事件保持一致）
+func (f *fakePresenceSwitcher) notify(distIP uint16, ev packet.PresenceEvent) {
+	f.mu.Lock()
+	f.st = packet.PresenceState{Domain: ev.Domain, Online: ev.Online, IP: ev.IP, Mac: ev.Mac, Version: ev.Version}
+	f.mu.Unlock()
+	writePresenceNotify(f.t, f.sw, distIP, ev)
+}
+
+func waitSessionView(t *testing.T, s *Session, domain string, version uint64) packet.PresenceState {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if st, ok := s.GetPresence(domain); ok && st.Version == version {
+			return st
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	st, _ := s.GetPresence(domain)
+	t.Fatalf("timeout waiting session view %v version=%v, last=%+v", domain, version, st)
+	return packet.PresenceState{}
+}
+
+func TestSessionWatchWhileDisconnected(t *testing.T) {
+	s := NewSession(nil, SessionConfig{})
+
+	// 空域名直接报错，不记录意图
+	_, err := s.Watch(time.Second)
+	assert.Equal(t, ErrEmptyWatchDomains, err)
+
+	// 离线 Watch：返回错误但意图已记录
+	_, err = s.Watch(time.Second, "target")
+	assert.Equal(t, ErrSessionDisconnected, err)
+	s.presenceMu.RLock()
+	_, ok := s.watched["target"]
+	s.presenceMu.RUnlock()
+	assert.True(t, ok, "watch intent should be recorded while disconnected")
+
+	// 离线 Unwatch：返回错误且意图被移除
+	err = s.Unwatch(time.Second, "target")
+	assert.Equal(t, ErrSessionDisconnected, err)
+	s.presenceMu.RLock()
+	_, ok = s.watched["target"]
+	s.presenceMu.RUnlock()
+	assert.False(t, ok, "watch intent should be removed")
+}
+
+func TestSessionWatchAndNotify(t *testing.T) {
+	swCh := make(chan packet.Conn, 1)
+	s := NewSession(newPresenceConnector(swCh), testSessionConfig())
+
+	s.ensureServing()
+	go s.Serve()
+	defer s.Close()
+	assert.Nil(t, s.WaitReady(time.Second))
+
+	sw := recvSwitcher(t, swCh)
+	defer sw.Close()
+	fsw := newFakePresenceSwitcher(t, sw, packet.PresenceState{Domain: "target", Online: true, IP: 7, Mac: "m1", Version: 1})
+
+	// Watch：快照进入 Session 级视图
+	states, err := s.Watch(time.Second*3, "target")
+	assert.Nil(t, err)
+	assert.Len(t, states, 1)
+	st, ok := s.GetPresence("target")
+	assert.True(t, ok)
+	assert.True(t, st.Online)
+	assert.Equal(t, uint64(1), st.Version)
+	assert.Len(t, s.ListPresence(), 1)
+
+	// 事件经 node dispatcher 投递到 Session handler，并增量更新视图
+	ch := make(chan packet.PresenceEvent, 2)
+	s.SetPresenceHandler(func(ev packet.PresenceEvent) { ch <- ev })
+	fsw.notify(1, packet.PresenceEvent{Version: 2, Domain: "target", Online: false, IP: 7, Mac: "m1"})
+
+	select {
+	case ev := <-ch:
+		assert.Equal(t, "target", ev.Domain)
+		assert.False(t, ev.Online)
+		assert.Equal(t, uint64(2), ev.Version)
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting session presence event")
+	}
+	st = waitSessionView(t, s, "target", 2)
+	assert.False(t, st.Online)
+
+	// stale 事件（node 级视图丢弃）：Session handler 不应收到（不更新 fake 状态，直接注入）
+	writePresenceNotify(t, sw, 1, packet.PresenceEvent{Version: 2, Domain: "target", Online: true, IP: 9})
+	select {
+	case ev := <-ch:
+		t.Fatalf("stale event should not be delivered: %+v", ev)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	// Unwatch：视图与意图同步移除
+	assert.Nil(t, s.Unwatch(time.Second*3, "target"))
+	_, ok = s.GetPresence("target")
+	assert.False(t, ok)
+	s.presenceMu.RLock()
+	assert.Empty(t, s.watched)
+	s.presenceMu.RUnlock()
+}
+
+// 断线重连后 Session 应自动重订阅，并用新快照 reconcile 视图
+func TestSessionPresenceAutoResubscribe(t *testing.T) {
+	swCh := make(chan packet.Conn, 4)
+	s := NewSession(newPresenceConnector(swCh), testSessionConfig())
+
+	s.ensureServing()
+	go s.Serve()
+	defer s.Close()
+	assert.Nil(t, s.WaitReady(time.Second))
+
+	// 首个连接：Watch 快照 v1 online
+	sw1 := recvSwitcher(t, swCh)
+	newFakePresenceSwitcher(t, sw1, packet.PresenceState{Domain: "target", Online: true, IP: 7, Mac: "m1", Version: 1})
+	_, err := s.Watch(time.Second*3, "target")
+	assert.Nil(t, err)
+	assert.Equal(t, uint64(1), waitSessionView(t, s, "target", 1).Version)
+
+	// 断开底层连接触发重连
+	sw1.Close()
+
+	// 重连后自动重订阅：fake switcher 回快照 v2 offline，视图被 reconcile
+	sw2 := recvSwitcher(t, swCh)
+	defer sw2.Close()
+	newFakePresenceSwitcher(t, sw2, packet.PresenceState{Domain: "target", Online: false, IP: 7, Mac: "m1", Version: 2})
+
+	st := waitSessionView(t, s, "target", 2)
+	assert.False(t, st.Online, "view should be reconciled by resubscribe snapshot")
+	assert.Equal(t, int64(1), s.GetReconnectCount())
+}
+
+// 直接驱动 dispatchPresence：未见过的事件投递，stale 丢弃，gap 不投递且触发重同步（node 为 nil 时静默返回）
+func TestSessionDispatchPresence(t *testing.T) {
+	s := NewSession(nil, SessionConfig{})
+	ch := make(chan packet.PresenceEvent, 4)
+	s.SetPresenceHandler(func(ev packet.PresenceEvent) { ch <- ev })
+
+	// 未见过的域名直接应用并投递
+	s.dispatchPresence(packet.PresenceEvent{Domain: "a", Version: 3, Online: true, IP: 7})
+	select {
+	case ev := <-ch:
+		assert.Equal(t, uint64(3), ev.Version)
+	case <-time.After(time.Second):
+		t.Fatal("event not delivered")
+	}
+
+	// stale：不投递、不污染视图
+	s.dispatchPresence(packet.PresenceEvent{Domain: "a", Version: 2, Online: false})
+	// gap：不投递，触发重同步（node 为 nil，静默返回）
+	s.dispatchPresence(packet.PresenceEvent{Domain: "a", Version: 5, Online: false})
+
+	select {
+	case ev := <-ch:
+		t.Fatalf("stale/gap event should not be delivered: %+v", ev)
+	case <-time.After(200 * time.Millisecond):
+	}
+	st, ok := s.GetPresence("a")
+	assert.True(t, ok)
+	assert.Equal(t, uint64(3), st.Version)
+	assert.True(t, st.Online)
+}

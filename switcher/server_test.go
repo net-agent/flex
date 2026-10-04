@@ -191,3 +191,27 @@ func TestGetClientsWithData(t *testing.T) {
 		}
 	}
 }
+
+// Server.Close 应释放所有活跃连接，registry 随各 ServeConn 退出而清空
+func TestServerCloseReleasesClients(t *testing.T) {
+	s, node1, node2 := initTestEnv("test1", "test2")
+	defer node1.Close()
+	defer node2.Close()
+
+	if got := len(s.registry.activeContexts()); got != 2 {
+		t.Fatalf("expected 2 active contexts, got %v", got)
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("close failed: %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(s.registry.activeContexts()) == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Errorf("expected registry emptied after Close, got %v", len(s.registry.activeContexts()))
+}

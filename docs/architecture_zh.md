@@ -1,8 +1,8 @@
 # flex 架构文档
 
-flex 是一个基于单条 TCP/WebSocket 连接的虚拟网络多路复用库。它在一条物理连接上承载多个双向 Stream，提供类似 `net.Conn` 的编程接口，并内置域名路由、流控、连接混淆和公平调度。
+flex 是一个基于单条 TCP/WebSocket 连接的虚拟网络多路复用库。它在一条物理连接上承载多个双向 Stream，提供类似 `net.Conn` 的编程接口，并内置域名路由、流控、节点状态订阅（Presence）和公平调度。
 
-整体分层自底向上为：**Transport → Packet → Middleware → Switcher → Node → Stream → Session**。
+整体分层自底向上为：**Transport → Packet → Fair 调度 → Switcher → Node → Stream → Session**。
 
 ## 分层架构总览
 
@@ -14,14 +14,15 @@ flex 是一个基于单条 TCP/WebSocket 连接的虚拟网络多路复用库。
 ├─────────────────────────────────────┤
 │  Node 层        多路复用管理            │
 │  ┌─Dispatcher─┬─StreamHub─┬─Dialer─┐ │
-│  │ ListenHub  │ Pinger    │Heartbeat│ │
-│  └────────────┴───────────┴─────────┘ │
+│  │ ListenHub  │ Pinger    │Watcher │ │
+│  │ Heartbeat  │           │        │ │
+│  └────────────┴───────────┴────────┘ │
 ├─────────────────────────────────────┤
 │  Stream 层      虚拟连接、流控          │
 ├─────────────────────────────────────┤
-│  Switcher 层    路由转发、握手认证       │
+│  Switcher 层    路由转发、握手认证、Presence │
 ├─────────────────────────────────────┤
-│  Middleware 层  Obfuscate + Fair       │
+│  Fair 调度层    DRR 公平队列（可选包装）   │
 ├─────────────────────────────────────┤
 │  Packet 层      11 字节二进制协议       │
 ├─────────────────────────────────────┤
@@ -69,36 +70,31 @@ TCP 写入支持 `WriteBufferBatch`，利用 `net.Buffers`（writev）减少系�
 
 | 命令 | 值 | ACK | 说明 |
 |------|-----|-----|------|
+| CmdAdmit | 0x00 | — | 认证握手（每条物理连接的第一个包） |
 | CmdOpenStream | 0x02 | 0x03 | 打开 Stream |
 | CmdCloseStream | 0x04 | 0x05 | 关闭 Stream |
 | CmdPushStreamData | 0x06 | 0x07 | 推送数据 / DataACK |
-| CmdPushMessage | 0x08 | 0x09 | 推送消息 |
+| CmdPushMessage | 0x08 | 0x09 | 推送消息（预留，未实现） |
 | CmdPingDomain | 0x0A | 0x0B | 域名 Ping |
+| CmdSubscribePresence | 0x0C | 0x0D | 订阅/退订节点上下线事件，ACK 携带状态快照 |
+| CmdNotifyPresence | 0x0E | — | Switcher 主动推送的上下线事件（无 ACK） |
 
 特殊 IP：`LocalIP = 0`，`SwitcherIP = DNSIP = 0xFFFF`。
 
 ---
 
-## 第二层：Middleware 封装
+## 第二层：Fair 调度封装
 
-物理连接建立后，按以下顺序逐层包装：
+物理连接建立后，可选择用 `sched.NewFairConn` 包装 `packet.Conn`（`switcher.Server` 与 `node.Session` 默认启用）：
 
 ```
-net.Conn → packet.Conn → ObfuscatedConn → FairConn
+net.Conn → packet.Conn → FairConn
 ```
 
-### ObfuscatedConn
+FairConn 替换写路径为 `FairWriter`：
 
-对 Header 的前 9 字节（Cmd + DistIP + DistPort + SrcIP + SrcPort）进行 ChaCha20 流密码 XOR 混淆。**不加密** 字节 [9:11]（PayloadSize），以便内层 Reader 正确读取载荷长度。
-
-密钥派生：`SHA-256(password ‖ clientNonce ‖ serverNonce)` → 32 字节 ChaCha20 密钥，nonce 固定为零（每连接独立 cipher 实例，计数器单调递增）。读写各持有独立 cipher，写端加 mutex 保证计数器与线序一致。
-
-### FairConn
-
-包装 `ObfuscatedConn`，替换写路径为 `FairWriter`：
-
-- **控制包**（非 `CmdPushStreamData`）→ 高优先级 `controlCh`，立即发送
-- **数据包** → 按 SID 分流到 `StreamQueue`，round-robin 调度，每轮每 Stream 发送 quantum（默认 4）个包
+- **per-stream 有序包**（`CmdPushStreamData`、`CmdCloseStream`、`AckCloseStream`）→ 按 SID 分流到 `StreamQueue`，DRR 调度，每轮每 Stream 最多发送 quantum（默认 2）个包
+- **其余所有命令**（OpenStream、ACK、Ping、SubscribePresence、NotifyPresence 等跨流控制包）→ 高优先级 `controlCh`，立即发送
 
 调度循环：优先排空 `controlCh` → 取一个就绪 Stream → 发送 quantum 个包 → 若队列仍有数据则重新入队。
 
@@ -115,16 +111,17 @@ Client                          Server
   │── TCP/WS connect ──────────→│
   │── admit.Request ───────────→│  验证 version/password/domain/timestamp
   │←── admit.Response (IP) ─────│  分配虚拟 IP
-  │                              │  双方派生 obfKey，启用 ObfuscatedConn + FairConn
+  │                              │  启用 FairConn 公平调度
   │←═══ 数据包路由 ═══════════→│
 ```
 
 ### 核心组件
 
-- **Server**：监听端口，对每个连接执行 `ServeConn`（握手 → 注册 → 路由循环）
-- **Context**：表示一个已连接节点，持有 `packet.Conn`、Domain、IP、统计信息。内部有独立的 `forwardCh` + 转发 goroutine 保证包序
+- **Server**：监听端口，对每个连接执行 `ServeConn`（握手 → 注册 → 路由循环）；`Close` 会 detach 所有活跃连接并停止事件中心
+- **Context**：表示一个已连接节点，持有 `packet.Conn`、Domain、IP、统计信息。所有写路径（数据转发、控制应答、Presence 扇出、替换探测）统一经 `forwardCh` 排队，由单一 forward goroutine 写出以保证包序；入队超时（5s）判定对端消费停滞，fail-loud 释放连接而不静默丢包
 - **contextRegistry**：按 Domain 和 IP 双索引管理 Context，支持域名抢占（先 ping 旧持有者，超时则替换）
-- **packetRouter**：读包循环 — `DistIP ≠ SwitcherIP` 时按 IP 转发；`DistIP == SwitcherIP` 时由 Switcher 自身处理（域名解析、Ping 等）
+- **packetRouter**：读包循环 — `DistIP ≠ SwitcherIP` 时按 IP 转发；`DistIP == SwitcherIP` 时由 Switcher 自身处理（域名解析、Ping、Presence 订阅等）
+- **presenceCenter**：单 goroutine 事件中心。Registry 在状态突变点入队上下线事件，presenceCenter 维护含 per-domain version 的状态视图（订阅应答的快照数据源；version 每次迁移 +1），经 domain→订阅者倒排索引向对应节点逐一推送 `CmdNotifyPresence`，同一域名的状态迁移严格按因果序投递；订阅关系随订阅者断连自动清理；"offline 且无订阅者超过 1 小时"的条目由定时清扫回收，version 重新计数（客户端经重连后的权威重置快照对齐）
 
 ---
 
@@ -140,6 +137,7 @@ type Node struct {
     ListenHub                  // 监听管理
     Dialer                     // 拨号
     Pinger                     // Ping
+    Watcher                    // Presence 订阅与通知
     Heartbeat                  // 心跳保活
 }
 ```
@@ -150,7 +148,7 @@ type Node struct {
 
 | Channel | 容量 | 路由的命令 | 特点 |
 |---------|------|-----------|------|
-| cmdChan | 4096 | OpenStream, AckPushStreamData, PingDomain, AckPingDomain | 无序处理 |
+| cmdChan | 4096 | OpenStream, AckPushStreamData, PingDomain±ACK, AckSubscribePresence, NotifyPresence | 无序处理 |
 | dataChan | 1024 | PushStreamData, AckOpenStream, CloseStream, AckCloseStream | 有序处理 |
 
 `PushStreamData` 走最短比较路径（switch 第一个 case），因为它是最高频命令。
@@ -208,9 +206,8 @@ Session.Serve()
   │
   └─ loop {
        connector() → packet.Conn
-       admit.Handshake() → IP, obfKey
-       NewObfuscatedConn(conn, obfKey)
-       node = New(wrappedConn)
+       admit.Handshake() → IP
+       node = New(sched.NewFairConn(conn))  // 可选的公平调度包装
        重新注册所有持久 Listener
        node.Serve()          // 阻塞直到断线
        退避重连 (1s → 30s)

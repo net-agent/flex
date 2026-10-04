@@ -32,14 +32,17 @@ const (
 	CmdPushStreamData
 	CmdPushMessage
 	CmdPingDomain
+	CmdSubscribePresence
+	CmdNotifyPresence
 )
 
 const (
-	AckOpenStream     = CmdOpenStream | CmdACKFlag
-	AckCloseStream    = CmdCloseStream | CmdACKFlag
-	AckPushStreamData = CmdPushStreamData | CmdACKFlag
-	AckPushMessage    = CmdPushMessage | CmdACKFlag
-	AckPingDomain     = CmdPingDomain | CmdACKFlag
+	AckOpenStream        = CmdOpenStream | CmdACKFlag
+	AckCloseStream       = CmdCloseStream | CmdACKFlag
+	AckPushStreamData    = CmdPushStreamData | CmdACKFlag
+	AckPushMessage       = CmdPushMessage | CmdACKFlag
+	AckPingDomain        = CmdPingDomain | CmdACKFlag
+	AckSubscribePresence = CmdSubscribePresence | CmdACKFlag
 )
 
 // HeaderSz 是包头长度，布局如下：
@@ -135,6 +138,10 @@ func (buf *Buffer) CmdName() string {
 		name = "push"
 	case CmdPingDomain:
 		name = "ping"
+	case CmdSubscribePresence:
+		name = "subscribe"
+	case CmdNotifyPresence:
+		name = "notify"
 	default:
 		name = fmt.Sprintf("<%v>", t)
 	}

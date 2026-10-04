@@ -11,6 +11,7 @@
     -   **Node**: Acts as a client or agent. Can Dial or Listen on virtual ports.
     -   **Switcher**: Acts as a relay server. Routes traffic between Nodes using virtual domains and IPs.
 -   **Session with Auto-Reconnect**: `node.Session` wraps a Node with lazy connect, automatic reconnection with backoff, and listeners that survive reconnects.
+-   **Presence Subscription**: `Node.Watch()` subscribes to named nodes' online/offline states; the Switcher pushes change events in real time (the subscribe ACK carries a state snapshot, seamlessly stitched with later events), replacing `PingDomain` polling.
 -   **Fair Scheduling**: Built-in **Fair Queuing** (DRR-based, see `internal/sched`) ensures that a single high-bandwidth stream cannot starve control signals (ACKs, Pings) or other small streams. Enabled by default on both `switcher.Server` and `node.Session`.
 -   **Inspection APIs**: `Node.GetInfo()` / `Node.GetListeners()`, `Switcher.GetStats()` / `Switcher.GetClients()`, and `Stream.GetState()` expose traffic counters, active streams, and RTT in real time.
 -   **Reliability**: Robust connection management with heartbeat keep-alive and active/passive close handling.
@@ -115,6 +116,7 @@ ln, err := sess.Listen(80)
 | --- | --- |
 | [examples/echo](examples/echo/main.go) | Basic Switcher + two Nodes, echo over a virtual stream |
 | [examples/ping](examples/ping/main.go) | RTT between nodes via `PingDomain` |
+| [examples/presence](examples/presence/main.go) | Subscribe to node online/offline events via `Watch` |
 | [examples/tcp-proxy](examples/tcp-proxy/main.go) | TCP port forwarding through the flex network |
 | [examples/ws-gate](examples/ws-gate/main.go) | Switcher gateway over WebSocket |
 | [examples/web-client](examples/web-client) | Browser demo (Vue) talking flex over WebSocket |

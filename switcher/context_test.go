@@ -207,11 +207,18 @@ func TestEnqueueForward_Timeout(t *testing.T) {
 	err := ctx.enqueueForward(packet.NewBuffer())
 	dur := time.Since(start)
 
-	if err == nil {
-		t.Error("expected timeout error")
+	if err != errForwardEnqueueTimeout {
+		t.Errorf("expected errForwardEnqueueTimeout, got %v", err)
 	}
 	if dur < 4*time.Second {
 		t.Errorf("expected ~5s timeout, got %v", dur)
+	}
+
+	// fail-loud：超时后 ctx 应被释放（forwardDone 关闭），而不是静默丢包
+	select {
+	case <-ctx.forwardDone:
+	default:
+		t.Error("expected context released after enqueue timeout")
 	}
 }
 

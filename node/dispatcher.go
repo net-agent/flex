@@ -20,10 +20,12 @@ type Dispatcher struct {
 func (d *Dispatcher) init(host *Node) {
 	d.host = host
 	d.cmdHandlers = map[byte]func(*packet.Buffer){
-		packet.AckPushStreamData: host.streamHub.handleAckPushStreamData,
-		packet.CmdOpenStream:     host.listenHub.handleCmdOpenStream,
-		packet.CmdPingDomain:     host.pinger.handleCmdPingDomain,
-		packet.AckPingDomain:     host.pinger.handleAckPingDomain,
+		packet.AckPushStreamData:    host.streamHub.handleAckPushStreamData,
+		packet.CmdOpenStream:        host.listenHub.handleCmdOpenStream,
+		packet.CmdPingDomain:        host.pinger.handleCmdPingDomain,
+		packet.AckPingDomain:        host.pinger.handleAckPingDomain,
+		packet.AckSubscribePresence: host.watcher.handleAckSubscribePresence,
+		packet.CmdNotifyPresence:    host.watcher.handleCmdNotifyPresence,
 	}
 	d.dataHandlers = map[byte]func(*packet.Buffer){
 		packet.CmdPushStreamData: host.streamHub.handleCmdPushStreamData,
@@ -91,7 +93,9 @@ func (d *Dispatcher) dispatch(pbuf *packet.Buffer) error {
 	case packet.CmdOpenStream,
 		packet.AckPushStreamData,
 		packet.CmdPingDomain,
-		packet.AckPingDomain:
+		packet.AckPingDomain,
+		packet.AckSubscribePresence,
+		packet.CmdNotifyPresence:
 		d.cmdChan <- pbuf
 	default:
 		d.dataChan <- pbuf

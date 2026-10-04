@@ -35,6 +35,7 @@ type Server struct {
 
 	registry  *contextRegistry
 	router    *packetRouter
+	presence  *presenceCenter
 	logger    *slog.Logger
 	ctxLogger *slog.Logger
 }
@@ -79,12 +80,14 @@ func NewServer(password string, logger *slog.Logger, logCfg *LogConfig) *Server 
 
 	ipm, _ := idpool.New(1, packet.MaxIP-1)
 	regLogger := newModuleLogger(logger, cfg.Registry, "registry")
-	reg := newContextRegistry(ipm, regLogger)
+	presence := newPresenceCenter(newModuleLogger(logger, cfg.Presence, "presence"))
+	reg := newContextRegistry(ipm, regLogger, presence)
 
 	s := &Server{
 		password:  password,
 		startedAt: time.Now(),
 		registry:  reg,
+		presence:  presence,
 		logger:    newModuleLogger(logger, cfg.Server, "server"),
 		ctxLogger: newModuleLogger(logger, cfg.Context, "context"),
 	}
@@ -170,6 +173,14 @@ func (s *Server) Close() error {
 	l := s.listener
 	s.listener = nil
 	s.listenerMu.Unlock()
+
+	// 断开所有活跃连接：detach 完成索引清理、presence purge 与 conn 释放
+	// （不能只调 ctx.release——它会先置 attached=false，使后续 detach 空转）
+	for _, ctx := range s.registry.activeContexts() {
+		s.registry.detach(ctx)
+	}
+	s.presence.stop()
+
 	if l != nil {
 		return l.Close()
 	}

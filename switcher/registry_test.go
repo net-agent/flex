@@ -47,6 +47,11 @@ func TestAttachCtx(t *testing.T) {
 		return
 	}
 
+	// 冲突失败同样回滚域名认领
+	if _, err := s.registry.lookupByDomain("test3"); err != errDomainNotFound {
+		t.Errorf("expected domain claim rolled back, got %v", err)
+	}
+
 	// print
 	table := s.registry.formatRecords()
 	for index, row := range table {
@@ -67,10 +72,19 @@ func TestAttachErr_GetIP(t *testing.T) {
 		t.Error(err)
 		return
 	}
-	err = s.registry.attach(NewContext(2, nil, "test2", "", nil))
+	ctx2 := NewContext(2, nil, "test2", "", nil)
+	err = s.registry.attach(ctx2)
 	if err != errGetFreeContextIPFailed {
 		t.Errorf("unexpected err=%v\n", err)
 		return
+	}
+
+	// 失败回滚：域名认领被撤销，不留下僵尸占位
+	if _, err := s.registry.lookupByDomain("test2"); err != errDomainNotFound {
+		t.Errorf("expected domain claim rolled back, got %v", err)
+	}
+	if ctx2.isAttached() {
+		t.Error("failed ctx should not stay attached")
 	}
 }
 

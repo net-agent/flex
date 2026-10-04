@@ -11,6 +11,7 @@
     -   **Node (节点)**: 作为客户端或代理。支持在虚拟端口上进行 Dial（拨号）或 Listen（监听）。
     -   **Switcher (交换机)**: 作为中继服务器。根据虚拟域名 (Domain) 和 IP 在节点间路由流量。
 -   **Session 自动重连**: `node.Session` 在 Node 之上提供懒连接、指数退避自动重连，监听器在重连后自动恢复。
+-   **Presence 状态订阅**: `Node.Watch()` 订阅一组 named node 的上下线状态，由 Switcher 实时推送变更事件（订阅应答携带状态快照，与后续事件无缝衔接），替代 `PingDomain` 轮询。
 -   **公平调度**: 内置基于 DRR 的**公平队列**（见 `internal/sched`），确保单个高带宽流不会阻塞控制信号（ACK、Ping）或其他小流量流。`switcher.Server` 与 `node.Session` 默认启用。
 -   **状态查询 API**: `Node.GetInfo()` / `Node.GetListeners()`、`Switcher.GetStats()` / `Switcher.GetClients()`、`Stream.GetState()` 可实时获取流量统计、活跃流与 RTT。
 -   **可靠性**: 健壮的连接管理，拥有心跳保活及完善的主动/被动关闭处理机制。
@@ -115,6 +116,7 @@ ln, err := sess.Listen(80)
 | --- | --- |
 | [examples/echo](examples/echo/main.go) | 最基本的 Switcher + 双 Node，虚拟流 echo |
 | [examples/ping](examples/ping/main.go) | 通过 `PingDomain` 测量节点间 RTT |
+| [examples/presence](examples/presence/main.go) | 通过 `Watch` 订阅节点上下线事件 |
 | [examples/tcp-proxy](examples/tcp-proxy/main.go) | 经过 flex 网络做 TCP 端口转发 |
 | [examples/ws-gate](examples/ws-gate/main.go) | WebSocket 上的 Switcher 网关 |
 | [examples/web-client](examples/web-client) | 浏览器（Vue）通过 WebSocket 使用 flex 的演示 |

@@ -12,9 +12,11 @@ import (
 )
 
 var (
-	errPingWriteFailed = errors.New("ping write buffer failed")
-	errPingTimeout     = errors.New("ping timeout")
-	errNilContextConn  = errors.New("context conn is nil")
+	errPingWriteFailed       = errors.New("ping write buffer failed")
+	errPingTimeout           = errors.New("ping timeout")
+	errNilContextConn        = errors.New("context conn is nil")
+	errContextClosed         = errors.New("context closed")
+	errForwardEnqueueTimeout = errors.New("forward enqueue timeout")
 )
 
 type Context struct {
@@ -102,6 +104,8 @@ func (ctx *Context) readBuffer() (*packet.Buffer, error) {
 	return c.ReadBuffer()
 }
 
+// writeBuffer 直接写底层连接。它是受限出口：只允许 runForwardLoop 调用，
+// 其他所有写路径必须走 enqueueForward，保证 per-context 的包序与背压策略收口在一处。
 func (ctx *Context) writeBuffer(buf *packet.Buffer) error {
 	c := ctx.getConn()
 	if c == nil {
@@ -127,16 +131,18 @@ func (ctx *Context) recordIncoming(pbuf *packet.Buffer) {
 }
 
 func (ctx *Context) release() {
+	// 整个释放过程只允许执行一次（replace 与连接断开可能并发触发）。
+	// sync.Once 保证函数体的效果对所有 Do 调用方可见。
 	ctx.closeOnce.Do(func() {
 		close(ctx.forwardDone)
+		c := ctx.getConn()
+		if c != nil {
+			c.Close()
+		}
+		ctx.setConn(nil)
+		ctx.setAttached(false)
+		ctx.DetachTime = time.Now()
 	})
-	c := ctx.getConn()
-	if c != nil {
-		c.Close()
-	}
-	ctx.setConn(nil)
-	ctx.setAttached(false)
-	ctx.DetachTime = time.Now()
 }
 
 // runForwardLoop is the single consumer for forwardCh, preserving per-destination packet order.
@@ -157,13 +163,15 @@ func (ctx *Context) runForwardLoop() {
 }
 
 // enqueueForward puts a packet into the forward channel without blocking the caller's read loop.
+// 慢路径最多等待 5 秒；超时说明对端消费停滞，此时丢包会让上层流静默损坏，
+// 因此采取 fail-loud：释放该 ctx（断开连接、触发 registry 清理），并返回错误。
 func (ctx *Context) enqueueForward(pbuf *packet.Buffer) error {
 	// Fast path: non-blocking try.
 	select {
 	case ctx.forwardCh <- pbuf:
 		return nil
 	case <-ctx.forwardDone:
-		return errors.New("context closed")
+		return errContextClosed
 	default:
 	}
 
@@ -174,9 +182,10 @@ func (ctx *Context) enqueueForward(pbuf *packet.Buffer) error {
 	case ctx.forwardCh <- pbuf:
 		return nil
 	case <-ctx.forwardDone:
-		return errors.New("context closed")
+		return errContextClosed
 	case <-timer.C:
-		return errors.New("forward enqueue timeout")
+		ctx.release()
+		return errForwardEnqueueTimeout
 	}
 }
 
@@ -216,7 +225,7 @@ func (ctx *Context) ping(timeout time.Duration) (dur time.Duration, retErr error
 	}()
 
 	pingStart := time.Now()
-	err := ctx.writeBuffer(pbuf)
+	err := ctx.enqueueForward(pbuf)
 	if err != nil {
 		return 0, errPingWriteFailed
 	}

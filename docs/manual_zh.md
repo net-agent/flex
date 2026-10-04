@@ -202,6 +202,49 @@ rtt, err := n.PingDomain("target-agent", time.Second) // 到对端节点的 RTT
 rtt, err = n.PingDomain("", time.Second)              // 到中转节点的 RTT
 ```
 
+### Node：状态订阅（Presence）
+
+相比轮询 `PingDomain`，Watch 让 switcher 在目标节点上下线时主动推送通知：
+
+```go
+// 订阅一组 named node 的上下线状态，返回当前状态快照
+states, err := n.Watch(3*time.Second, "agent-1", "agent-2")
+
+// 之后的状态迁移通过回调实时推送
+n.SetPresenceHandler(func(ev packet.PresenceEvent) {
+    log.Printf("%s -> online=%v ip=%v mac=%v version=%v",
+        ev.Domain, ev.Online, ev.IP, ev.Mac, ev.Version)
+})
+
+// 本地状态视图：由订阅快照与后续事件增量维护
+st, ok := n.GetPresence("agent-1") // 单个域名
+all := n.ListPresence()            // 全部已订阅域名
+
+// 取消订阅（同时从本地视图移除）
+err = n.Unwatch(3*time.Second, "agent-1")
+```
+
+- 订阅应答携带当前状态快照，快照与后续事件在 switcher 侧原子衔接，不存在变更空洞。
+- 事件按状态迁移发送，同一域名的多次变更严格保序；域名替换时按序收到 offline（旧 IP）+ online（新 IP）。
+- 一致性由 per-domain version 承载：每个域名的 version 随每次状态迁移（含 offline）单调 +1，offline 后条目存续（保留最后已知 IP/MAC）。本地视图据此丢弃 stale 事件（`version <= 当前`），在发现 version 跳变（事件缺口）时自动重同步该域名，且更旧的快照不会回退本地视图。
+- 通知仅为信息告知，协议栈不做自动动作；如需 fail-fast（如主动关闭指向 offline 节点的 stream、取消进行中的 Dial），在回调中自行组合。
+- 回调在 dispatcher 的 goroutine 中同步执行，不得阻塞。
+
+### Session：状态订阅（跨重连）
+
+`Session` 暴露与 Node 一致的 presence API（`Watch` / `Unwatch` / `SetPresenceHandler` / `GetPresence` / `ListPresence`），并消除了重连带来的订阅中断：
+
+- 订阅意图跨重连存活：每次重连成功后自动重订阅全部域名，并用新快照 reconcile 本地视图（快照以权威重置语义应用——version 回退只可能来自 switcher 重启或离线条目淘汰，此时新快照即当前真相）。
+- 离线时调用 `Watch` 会记录意图并返回 `ErrSessionDisconnected`，重连后自动生效；`Unwatch` 对称。
+- 首次调用 `Watch` 与 `Listen`/`Dial` 一样会触发 Serve 开始连接。
+
+```go
+sess.SetPresenceHandler(func(ev packet.PresenceEvent) {
+    log.Printf("%s -> online=%v version=%v", ev.Domain, ev.Online, ev.Version)
+})
+_, err := sess.Watch(3*time.Second, "agent-1") // 重连后无需再次调用
+```
+
 ### Session 观测
 
 `Session`（带自动重连的 Node 代理）暴露连接生命周期：

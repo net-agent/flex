@@ -783,3 +783,84 @@ func BenchmarkTCP_BatchVsNoBatch(b *testing.B) {
 		rconn.Close()
 	})
 }
+
+// 流结束后（close 类包排空）SID 条目应被回收，未结束的流保留
+func TestFairWriterReapsClosedStreams(t *testing.T) {
+	rw := &RecordWriter{}
+	fw := NewFairWriter(rw)
+	defer fw.Close()
+
+	sid1 := makeBuf(packet.CmdPushStreamData, 1).SID()
+	sid2 := makeBuf(packet.CmdPushStreamData, 2).SID()
+
+	_ = fw.WriteBuffer(makeBuf(packet.CmdPushStreamData, 1))
+	_ = fw.WriteBuffer(makeBuf(packet.CmdCloseStream, 1))
+	_ = fw.WriteBuffer(makeBuf(packet.CmdPushStreamData, 2))
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		fw.mu.Lock()
+		_, has1 := fw.streams[sid1]
+		fw.mu.Unlock()
+		if !has1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("closed stream entry not reaped")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	fw.mu.Lock()
+	_, has2 := fw.streams[sid2]
+	fw.mu.Unlock()
+	if !has2 {
+		t.Error("open stream entry should survive")
+	}
+
+	// SID 复用：条目按需重建且 closed 复位
+	_ = fw.WriteBuffer(makeBuf(packet.CmdPushStreamData, 1))
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		fw.mu.Lock()
+		sq, has1 := fw.streams[sid1]
+		fw.mu.Unlock()
+		if has1 {
+			if sq.closed {
+				t.Error("recreated entry should not inherit closed flag")
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("reused sid entry not recreated")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+type discardWriter struct{}
+
+func (discardWriter) WriteBuffer(*packet.Buffer) error { return nil }
+func (discardWriter) SetWriteTimeout(time.Duration)    {}
+
+// BenchmarkFairWriterWriteBuffer 隔离测量 WriteBuffer 入队路径（含 cloneBuffer）的分配成本。
+// buffer 复用模式与 stream.Sender 一致（同一 buffer 反复传入）。
+func BenchmarkFairWriterWriteBuffer(b *testing.B) {
+	for _, size := range []int{0, 1024, 32 * 1024} {
+		b.Run(fmt.Sprintf("payload=%d", size), func(b *testing.B) {
+			fw := NewFairWriter(discardWriter{})
+			defer fw.Close()
+			buf := makeBuf(packet.CmdPushStreamData, 1)
+			if size > 0 {
+				_ = buf.SetPayload(make([]byte, size))
+			}
+			b.SetBytes(int64(size))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := fw.WriteBuffer(buf); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}

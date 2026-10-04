@@ -204,6 +204,49 @@ rtt, err := n.PingDomain("target-agent", time.Second) // RTT to a peer
 rtt, err = n.PingDomain("", time.Second)              // RTT to the switcher
 ```
 
+### Node: Presence Subscription
+
+Instead of polling with `PingDomain`, `Watch` lets the switcher push notifications when target nodes come online or go offline:
+
+```go
+// Subscribe to presence of named nodes; returns a snapshot of current states
+states, err := n.Watch(3*time.Second, "agent-1", "agent-2")
+
+// Subsequent state transitions are pushed to the callback in real time
+n.SetPresenceHandler(func(ev packet.PresenceEvent) {
+    log.Printf("%s -> online=%v ip=%v mac=%v version=%v",
+        ev.Domain, ev.Online, ev.IP, ev.Mac, ev.Version)
+})
+
+// Local state view, maintained incrementally from snapshots and events
+st, ok := n.GetPresence("agent-1") // single domain
+all := n.ListPresence()            // all subscribed domains
+
+// Unsubscribe (also removes the domain from the local view)
+err = n.Unwatch(3*time.Second, "agent-1")
+```
+
+- The subscribe ACK carries a snapshot of current states; the snapshot and later events are atomically stitched on the switcher side, so no transition is missed in between.
+- Events fire on state transitions and are strictly ordered per domain; a domain replacement yields an ordered offline (old IP) + online (new IP) pair.
+- Consistency is carried by a per-domain version: it increments monotonically on every transition (including offline), and offline entries survive with the last known IP/MAC. The local view drops stale events (`version <= current`), automatically resyncs a domain when a version jump (event gap) is detected, and never lets an older snapshot regress newer local state.
+- Notifications are informational only — the protocol stack takes no automatic action. For fail-fast semantics (e.g. closing streams to an offline node or aborting in-flight dials), compose them yourself in the callback.
+- The callback runs synchronously on the dispatcher goroutine and must not block.
+
+### Session: Presence Across Reconnects
+
+`Session` exposes the same presence API as `Node` (`Watch` / `Unwatch` / `SetPresenceHandler` / `GetPresence` / `ListPresence`) and removes the subscription gap caused by reconnects:
+
+- Subscription intents survive reconnects: after every reconnect the session resubscribes all domains automatically and reconciles its local view with the new snapshot. The snapshot is applied with authoritative-reset semantics — a version regression can only mean a switcher restart or eviction of a long-dead offline entry, in which case the new snapshot is the current truth.
+- Calling `Watch` while disconnected records the intent and returns `ErrSessionDisconnected`; it takes effect once the session is back online. `Unwatch` is symmetric.
+- Like `Listen`/`Dial`, the first `Watch` call triggers `Serve` to start connecting.
+
+```go
+sess.SetPresenceHandler(func(ev packet.PresenceEvent) {
+    log.Printf("%s -> online=%v version=%v", ev.Domain, ev.Online, ev.Version)
+})
+_, err := sess.Watch(3*time.Second, "agent-1") // no need to call again after reconnects
+```
+
 ### Session Observability
 
 `Session` (the auto-reconnecting Node proxy) exposes its connection lifecycle:

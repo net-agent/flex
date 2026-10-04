@@ -22,8 +22,8 @@ const (
 	//     然后让出发送机会给下一个就绪的 SID。
 	//   - 值越小，流间切换越频繁，公平性越好，但调度开销增大；
 	//     值越大，单流连续发送越多，吞吐效率越高，但公平性下降。
-	//   - 默认值 4 在公平性和吞吐之间取得平衡：4 个包约 4KB（假设 1024B payload），
-	//     大约对应 2-3 个 TCP MSS，适合批量写入。
+	//   - 默认值 2 偏向公平性：2 个包约 2KB（假设 1024B payload），
+	//     大约对应 1-2 个 TCP MSS。
 	DefaultQuantum = 2
 
 	// ReadyQueueSize 就绪队列（readyQueue channel）的缓冲区大小。
@@ -65,6 +65,10 @@ type StreamQueue struct {
 	mu     sync.Mutex
 	queue  []*packet.Buffer
 	active atomic.Bool // whether this stream's SID is in readyQueue
+
+	// closed 标记该队列已见到 close 类包（该方向流的最后一个包），
+	// 仅由 FairWriter.mu 保护读写，供 processStream 在排空后回收条目
+	closed bool
 }
 
 func (sq *StreamQueue) Push(buf *packet.Buffer) {
@@ -152,9 +156,13 @@ func (fw *FairWriter) WriteBuffer(buf *packet.Buffer) error {
 		sq = &StreamQueue{}
 		fw.streams[sid] = sq
 	}
-	fw.mu.Unlock()
-
+	// Push 与条目回收（processStream 的 delete）同在 fw.mu 下串行，
+	// 避免"回收入队检查"与"生产入队"之间的孤儿队列竞态
 	sq.Push(clone)
+	if cmd == packet.CmdCloseStream || cmd == packet.AckCloseStream {
+		sq.closed = true
+	}
+	fw.mu.Unlock()
 
 	// Activate stream if not already in readyQueue (atomic CAS, no mutex needed)
 	if sq.active.CompareAndSwap(false, true) {
@@ -226,22 +234,39 @@ func (fw *FairWriter) processStream(sid uint64) {
 		}
 	}
 
-	// Re-queue if more data, otherwise deactivate
+	// Re-queue if more data, otherwise reap or deactivate
 	if sq.Len() > 0 {
-		select {
-		case fw.readyQueue <- sid:
-		default:
-			go func() { fw.readyQueue <- sid }()
-		}
-	} else {
-		sq.active.Store(false)
-		// Double-check: producer may have pushed between Drain and Store
-		if sq.Len() > 0 && sq.active.CompareAndSwap(false, true) {
+		fw.requeue(sid)
+		return
+	}
+
+	fw.mu.Lock()
+	if sq.closed && sq.Len() == 0 {
+		// 该方向的流已结束（close 类包是其最后一个包）且队列排空，回收条目。
+		// SID 被复用时条目按需重建，因此及时删除不会丢包
+		delete(fw.streams, sid)
+		fw.mu.Unlock()
+		return
+	}
+	fw.mu.Unlock()
+
+	sq.active.Store(false)
+	// Double-check: producer may have pushed between Drain and Store
+	if sq.Len() > 0 && sq.active.CompareAndSwap(false, true) {
+		fw.requeue(sid)
+	}
+}
+
+// requeue 把 SID 放回就绪队列；队列满时退化为异步投递（done 后放弃，避免 goroutine 泄漏）
+func (fw *FairWriter) requeue(sid uint64) {
+	select {
+	case fw.readyQueue <- sid:
+	default:
+		go func() {
 			select {
 			case fw.readyQueue <- sid:
-			default:
-				go func() { fw.readyQueue <- sid }()
+			case <-fw.done:
 			}
-		}
+		}()
 	}
 }

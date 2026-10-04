@@ -38,6 +38,7 @@ type Node struct {
 	listenHub  ListenHub
 	dialer     Dialer
 	pinger     Pinger
+	watcher    Watcher
 	streamHub  StreamHub
 	logger     *slog.Logger
 
@@ -95,6 +96,7 @@ func NewWithOptions(conn packet.Conn, portMin, portMax uint16, heartbeatInterval
 	node.listenHub.init(node, portm)
 	node.dialer.init(node, portm)
 	node.pinger.init(node)
+	node.watcher.init(node)
 	node.streamHub.init(node, portm)
 	node.heartbeat.init(node, heartbeatInterval)
 	node.dispatcher.init(node)
@@ -206,6 +208,37 @@ func (node *Node) SetDialTimeout(timeout time.Duration) {
 // PingDomain 对指定节点进行连通性测试并返回 RTT。domain 为空时返回到中转节点的 RTT。
 func (node *Node) PingDomain(domain string, timeout time.Duration) (time.Duration, error) {
 	return node.pinger.PingDomain(domain, timeout)
+}
+
+// Watch 订阅一组 named node 的上下线状态，返回这些节点的当前状态快照。
+// 订阅生效后，后续状态迁移通过 SetPresenceHandler 注册的回调实时推送；
+// 快照与推送在 switcher 侧原子衔接，不存在中间空洞。
+// 通知仅为信息告知，协议栈不会对 offline 节点做任何自动动作（如关闭 stream、
+// 取消 Dial），需要 fail-fast 语义的应用可在回调中自行组合。
+func (node *Node) Watch(timeout time.Duration, domains ...string) ([]packet.PresenceState, error) {
+	return node.watcher.Watch(timeout, domains...)
+}
+
+// Unwatch 取消对一组 named node 的状态订阅。
+func (node *Node) Unwatch(timeout time.Duration, domains ...string) error {
+	return node.watcher.Unwatch(timeout, domains...)
+}
+
+// SetPresenceHandler 设置 presence 事件回调，可在运行期间替换。
+// 回调在 dispatcher 的 cmd goroutine 中同步执行，不得阻塞。
+func (node *Node) SetPresenceHandler(fn func(packet.PresenceEvent)) {
+	node.watcher.SetHandler(fn)
+}
+
+// GetPresence 返回指定域名的本地 presence 状态副本。
+// 副本由 Watch 快照与后续事件增量维护；未订阅或已 Unwatch 的域名返回 ok=false。
+func (node *Node) GetPresence(domain string) (packet.PresenceState, bool) {
+	return node.watcher.view.get(domain)
+}
+
+// ListPresence 返回本地 presence 状态副本的全集。
+func (node *Node) ListPresence() []packet.PresenceState {
+	return node.watcher.view.list()
 }
 
 // GetStreamStates 返回当前所有活跃流的状态快照。

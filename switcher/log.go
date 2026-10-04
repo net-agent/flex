@@ -12,6 +12,7 @@ type LogConfig struct {
 	Registry slog.Level // default: Warn
 	Router   slog.Level // default: Warn
 	Context  slog.Level // default: Warn
+	Presence slog.Level // default: Warn
 }
 
 // DefaultLogConfig returns a LogConfig where Server logs at Info
@@ -22,6 +23,7 @@ func DefaultLogConfig() LogConfig {
 		Registry: slog.LevelWarn,
 		Router:   slog.LevelWarn,
 		Context:  slog.LevelWarn,
+		Presence: slog.LevelWarn,
 	}
 }
 

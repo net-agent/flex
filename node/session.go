@@ -69,6 +69,13 @@ type Session struct {
 	listeners map[uint16]*SessionListener
 	ready     chan struct{} // closed when node is ready
 
+	// presence 订阅意图跨重连存活；view 由快照与事件增量维护，
+	// 重连后通过 resubscribePresence 用新快照 reconcile
+	presenceMu sync.RWMutex
+	watched    map[string]struct{}
+	handler    func(packet.PresenceEvent)
+	view       PresenceView
+
 	trigger   chan struct{} // closed on first Listen/Dial to start connecting
 	onceStart sync.Once
 
@@ -89,6 +96,7 @@ func NewSession(connector ConnectFunc, cfg SessionConfig) *Session {
 		connector: connector,
 		config:    cfg,
 		listeners: make(map[uint16]*SessionListener),
+		watched:   make(map[string]struct{}),
 		ready:     make(chan struct{}),
 		trigger:   make(chan struct{}),
 		done:      make(chan struct{}),
@@ -124,6 +132,7 @@ func (s *Session) wireNode(n *Node, ip uint16) {
 	n.SetDomain(s.config.Domain)
 	n.SetLogger(s.logger)
 	n.SetTrace(s.trace)
+	n.SetPresenceHandler(s.dispatchPresence)
 }
 
 // GetState 返回当前 Session 状态（lock-free）
@@ -241,6 +250,137 @@ func (s *Session) GetNode() *Node {
 	return s.node
 }
 
+// --- presence ---
+
+// Watch 订阅一组域名的上下线事件，返回当前状态快照。
+// 订阅意图跨重连存活：断线重连后 Session 自动重订阅并用新快照 reconcile 本地视图。
+// 首次调用会触发 Serve 开始连接。
+// 离线时调用返回 ErrSessionDisconnected，但意图已记录，重连后仍会生效。
+func (s *Session) Watch(timeout time.Duration, domains ...string) ([]packet.PresenceState, error) {
+	s.ensureServing()
+
+	if len(domains) == 0 {
+		return nil, ErrEmptyWatchDomains
+	}
+	s.presenceMu.Lock()
+	for _, d := range domains {
+		s.watched[d] = struct{}{}
+	}
+	s.presenceMu.Unlock()
+
+	s.mu.RLock()
+	n := s.node
+	s.mu.RUnlock()
+	if n == nil {
+		return nil, ErrSessionDisconnected
+	}
+	states, err := n.Watch(timeout, domains...)
+	if err != nil {
+		return nil, err
+	}
+	s.view.applySnapshot(states)
+	return states, nil
+}
+
+// Unwatch 取消对一组域名的订阅，并将其从本地视图中移除。
+// 离线时调用仅删除订阅意图，返回 ErrSessionDisconnected。
+func (s *Session) Unwatch(timeout time.Duration, domains ...string) error {
+	s.presenceMu.Lock()
+	for _, d := range domains {
+		delete(s.watched, d)
+	}
+	s.presenceMu.Unlock()
+
+	s.mu.RLock()
+	n := s.node
+	s.mu.RUnlock()
+	if n == nil {
+		return ErrSessionDisconnected
+	}
+	if err := n.Unwatch(timeout, domains...); err != nil {
+		return err
+	}
+	s.view.remove(domains...)
+	return nil
+}
+
+// SetPresenceHandler 设置 presence 事件回调，可在运行期间替换。
+// 回调在 dispatcher 的 cmd goroutine 中同步执行，不得阻塞。
+func (s *Session) SetPresenceHandler(fn func(packet.PresenceEvent)) {
+	s.presenceMu.Lock()
+	s.handler = fn
+	s.presenceMu.Unlock()
+}
+
+// GetPresence 返回指定域名的本地 presence 状态副本。
+// 副本由 Watch 快照与后续事件增量维护，跨重连存活（重连后用新快照 reconcile）。
+func (s *Session) GetPresence(domain string) (packet.PresenceState, bool) {
+	return s.view.get(domain)
+}
+
+// ListPresence 返回本地 presence 状态副本的全集。
+func (s *Session) ListPresence() []packet.PresenceState {
+	return s.view.list()
+}
+
+// dispatchPresence 接收当前 Node 推送的 presence 事件：
+// 先维护 Session 级视图（stale 丢弃、缺口触发重同步），再投递给用户 handler。
+func (s *Session) dispatchPresence(ev packet.PresenceEvent) {
+	applied, gap := s.view.applyEvent(ev)
+	if gap {
+		s.logger.Warn("presence event gap detected, resync", "domain", ev.Domain, "version", ev.Version)
+		go s.resyncPresence(ev.Domain)
+		return
+	}
+	if !applied {
+		return
+	}
+	s.presenceMu.RLock()
+	fn := s.handler
+	s.presenceMu.RUnlock()
+	if fn != nil {
+		fn(ev)
+	}
+}
+
+// resyncPresence 通过当前 Node 对指定域名做一次 Watch 重同步（自愈兜底）。
+func (s *Session) resyncPresence(domain string) {
+	s.mu.RLock()
+	n := s.node
+	s.mu.RUnlock()
+	if n == nil {
+		return
+	}
+	states, err := n.Watch(time.Second*5, domain)
+	if err != nil {
+		s.logger.Warn("presence resync failed", "domain", domain, "error", err)
+		return
+	}
+	s.view.applySnapshot(states)
+}
+
+// resubscribePresence 在重连成功后恢复全部订阅意图，
+// 并用返回的快照 reconcile Session 级视图。失败仅记日志，不影响重连流程。
+// 快照以权威重置语义应用：version 回退只可能来自 switcher 重启或离线条目淘汰，
+// 此时新快照就是当前真相，必须覆盖旧视图而不是按版本丢弃。
+func (s *Session) resubscribePresence(n *Node) {
+	s.presenceMu.RLock()
+	domains := make([]string, 0, len(s.watched))
+	for d := range s.watched {
+		domains = append(domains, d)
+	}
+	s.presenceMu.RUnlock()
+	if len(domains) == 0 {
+		return
+	}
+	states, err := n.Watch(time.Second*5, domains...)
+	if err != nil {
+		s.logger.Warn("presence resubscribe failed", "domains", domains, "error", err)
+		return
+	}
+	s.view.resetSnapshot(states)
+}
+
 func (s *Session) ensureServing() {
 	s.onceStart.Do(func() { close(s.trigger) })
 }
@@ -334,10 +474,13 @@ func (s *Session) Serve() error {
 			}
 			go s.bridge(sl, nl)
 		}
-		close(s.ready) // 唤醒所有等待者
+		ready := s.ready
 		s.mu.Unlock()
 
 		s.setState(SessionOnline, nil) // ★ 触发回调：Connecting → Online
+		close(ready)                   // 状态就绪后再唤醒等待者，保证 WaitReady 返回时已 Online
+
+		go s.resubscribePresence(node)
 
 		serveErr := node.Serve() // 阻塞直到断线
 

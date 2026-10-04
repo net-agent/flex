@@ -71,7 +71,19 @@ func (rt *packetRouter) dispatch(ctx *Context, pbuf *packet.Buffer) {
 		} else {
 			rt.handlePingDomain(ctx, pbuf)
 		}
+
+	case packet.CmdSubscribePresence:
+		if !pbuf.IsACK() {
+			rt.handleSubscribePresence(ctx, pbuf)
+		}
 	}
+}
+
+// handleSubscribePresence 处理节点的 presence 订阅/退订请求。
+// SrcPort 原样回传给调用方，用于请求-应答关联。
+func (rt *packetRouter) handleSubscribePresence(caller *Context, pbuf *packet.Buffer) {
+	req := packet.DecodeSubscribeRequest(pbuf.Payload)
+	rt.registry.presence.handleSubscribe(caller, req, pbuf.SrcPort())
 }
 
 // handlePingDomain resolves a domain and forwards the ping, or responds directly for empty domain.
@@ -81,8 +93,8 @@ func (rt *packetRouter) handlePingDomain(caller *Context, pbuf *packet.Buffer) {
 		pbuf.SwapSrcDist()
 		pbuf.SetCmd(pbuf.Cmd() | packet.CmdACKFlag)
 		_ = pbuf.SetPayload(nil)
-		if err := caller.writeBuffer(pbuf); err != nil {
-			rt.logger.Warn("ping reply write failed", "ctx_id", caller.id, "domain", caller.Domain, "error", err)
+		if err := caller.enqueueForward(pbuf); err != nil {
+			rt.logger.Warn("ping reply enqueue failed", "ctx_id", caller.id, "domain", caller.Domain, "error", err)
 		}
 		return
 	}
@@ -92,15 +104,15 @@ func (rt *packetRouter) handlePingDomain(caller *Context, pbuf *packet.Buffer) {
 		pbuf.SwapSrcDist()
 		pbuf.SetCmd(pbuf.Cmd() | packet.CmdACKFlag)
 		_ = pbuf.SetPayload([]byte(err.Error()))
-		if err := caller.writeBuffer(pbuf); err != nil {
-			rt.logger.Warn("ping error reply write failed", "ctx_id", caller.id, "domain", caller.Domain, "error", err)
+		if err := caller.enqueueForward(pbuf); err != nil {
+			rt.logger.Warn("ping error reply enqueue failed", "ctx_id", caller.id, "domain", caller.Domain, "error", err)
 		}
 		return
 	}
 
 	pbuf.SetDistIP(dist.IP)
-	if err := dist.writeBuffer(pbuf); err != nil {
-		rt.logger.Warn("ping forward write failed", "ctx_id", dist.id, "domain", dist.Domain, "error", err)
+	if err := dist.enqueueForward(pbuf); err != nil {
+		rt.logger.Warn("ping forward enqueue failed", "ctx_id", dist.id, "domain", dist.Domain, "error", err)
 	}
 }
 
@@ -123,8 +135,8 @@ func (rt *packetRouter) handleOpenStream(caller *Context, pbuf *packet.Buffer) {
 		pbuf.SwapSrcDist()
 		_ = pbuf.SetPayload(ack.Encode())
 		pbuf.SetSrcIP(0)
-		if err := caller.writeBuffer(pbuf); err != nil {
-			rt.logger.Warn("open-stream error reply write failed", "ctx_id", caller.id, "domain", caller.Domain, "error", err)
+		if err := caller.enqueueForward(pbuf); err != nil {
+			rt.logger.Warn("open-stream error reply enqueue failed", "ctx_id", caller.id, "domain", caller.Domain, "error", err)
 		}
 		return
 	}
@@ -132,7 +144,7 @@ func (rt *packetRouter) handleOpenStream(caller *Context, pbuf *packet.Buffer) {
 	fwd := packet.OpenStreamRequest{Domain: caller.Domain, WindowSize: req.WindowSize}
 	pbuf.SetDistIP(distCtx.IP)
 	_ = pbuf.SetPayload(fwd.Encode())
-	if err := distCtx.writeBuffer(pbuf); err != nil {
-		rt.logger.Warn("open-stream forward write failed", "ctx_id", distCtx.id, "domain", distCtx.Domain, "error", err)
+	if err := distCtx.enqueueForward(pbuf); err != nil {
+		rt.logger.Warn("open-stream forward enqueue failed", "ctx_id", distCtx.id, "domain", distCtx.Domain, "error", err)
 	}
 }

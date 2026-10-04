@@ -47,6 +47,7 @@ type FailureStats struct {
 	DialRejected    int64 `json:"dial_rejected"`     // Dial 被对端拒绝
 	DialWriteFailed int64 `json:"dial_write_failed"` // Dial 请求写入底层连接失败
 	PingFailed      int64 `json:"ping_failed"`       // Ping 超时、被拒或写失败
+	WatchFailed     int64 `json:"watch_failed"`      // Watch/Unwatch 超时、被拒或写失败
 	HeartbeatFailed int64 `json:"heartbeat_failed"`  // 心跳探活失败
 	PortExhausted   int64 `json:"port_exhausted"`    // 端口池耗尽（shared 与 pinger 合计）
 }
@@ -135,6 +136,7 @@ func (node *Node) Inspect() Snapshot {
 			DialRejected:    atomic.LoadInt64(&node.failures.DialRejected),
 			DialWriteFailed: atomic.LoadInt64(&node.failures.DialWriteFailed),
 			PingFailed:      atomic.LoadInt64(&node.failures.PingFailed),
+			WatchFailed:     atomic.LoadInt64(&node.failures.WatchFailed),
 			HeartbeatFailed: atomic.LoadInt64(&node.failures.HeartbeatFailed),
 			PortExhausted:   atomic.LoadInt64(&node.failures.PortExhausted),
 		},
