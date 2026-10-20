@@ -161,9 +161,12 @@ snap := n.Inspect()         // 某一时刻的一致性快照
 收发字节数、ACK 累计和在途 buffer 数。
 
 ```go
-states := n.GetStreamStates() // 活跃流
+states := n.GetStreamStates() // hub 中可寻址的流；含已完全关闭但仍在滞留期
+                              // （默认 2s，SetDetachRetention 可调）内的流，
+                              // 其 IsClosed=true——只看活跃流请按 IsClosed 过滤
 
-// 已关闭流保留在环形缓冲区（最近 1024 条），支持增量拉取：
+// 已关闭流保留在环形缓冲区（最近 1024 条），支持增量拉取；
+// 记录在滞留期届满后写入，计数含晚到的 ack 终值：
 var pos int64
 closed, pos := n.GetClosedStates(pos) // 只返回比 pos 新的记录
 ```
@@ -194,6 +197,10 @@ n.SetTrace(&node.Trace{ // 仅应在 Serve 之前调用
     PortExhausted: func(pool string, err error) { /* ... */ },
 })
 ```
+
+`StreamClosed` 在流双向关闭齐备（detach）时触发，不等待滞留期届满；载荷为该
+时刻的状态快照，`IsClosed`/`Closed`/`CloseReason`/字节计数均已是终值，仅
+`RecvBufferCount`/`RecvAckTotal` 可能因滞留期内晚到的包/ack 与历史终值微差。
 
 ### Node：主动探测
 

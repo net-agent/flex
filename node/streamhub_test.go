@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -364,4 +365,67 @@ func TestNodeCloseStreamsReasonNode(t *testing.T) {
 		closed, _ := n1.GetClosedStates(0)
 		return len(closed) == 1 && closed[0].CloseReason == "node"
 	}, "node close should record reason=node")
+}
+
+// StreamClosed 事件应在 detach 时刻（双向关闭齐备）同步触发，而非滞留期届满时；
+// 事件触发时流仍可寻址，滞留期继续承担 SID 寻址与晚到包消化职责。
+func TestAttachStream_StreamClosedFiresAtDetach(t *testing.T) {
+	n := New(nil)
+	sid := uint64(777)
+
+	var closes int32
+	var addressableAtEvent int32
+	var lastState atomic.Value // *stream.State
+	n.SetTrace(&Trace{
+		StreamClosed: func(st *stream.State) {
+			atomic.AddInt32(&closes, 1)
+			lastState.Store(st)
+			if _, err := n.streamHub.getStream(sid); err == nil {
+				atomic.StoreInt32(&addressableAtEvent, 1)
+			}
+		},
+	})
+	// 滞留期足够长：若事件等清理时才发，下面的即时断言会失败
+	n.streamHub.detachRetention = time.Hour
+
+	s := stream.New(nil, 0)
+	assert.Nil(t, n.streamHub.attachStream(s, sid))
+
+	assert.Nil(t, s.CloseRead())
+	assert.Nil(t, s.CloseWrite()) // detach 在此发生，回调同步执行
+
+	// CloseWrite 返回时事件已触发，无需等待滞留期
+	assert.Equal(t, int32(1), atomic.LoadInt32(&closes), "StreamClosed should fire at detach, not after retention")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&addressableAtEvent), "stream should still be addressable when the event fires")
+
+	st := lastState.Load().(*stream.State)
+	assert.True(t, st.IsClosed)
+	assert.False(t, st.Closed.IsZero())
+	assert.Equal(t, "local", st.CloseReason)
+
+	// 滞留期内流仍可寻址
+	_, err := n.streamHub.getStream(sid)
+	assert.Nil(t, err, "stream should remain addressable during retention")
+}
+
+// 同一流的事件只触发一次：滞留期届满后的清理只写 closedStates 历史，不再重复发事件。
+func TestAttachStream_StreamClosedNotRepeatedAtCleanup(t *testing.T) {
+	n := New(nil)
+	var closes int32
+	n.SetTrace(&Trace{
+		StreamClosed: func(st *stream.State) { atomic.AddInt32(&closes, 1) },
+	})
+	n.streamHub.detachRetention = 20 * time.Millisecond
+
+	s := stream.New(nil, 0)
+	assert.Nil(t, n.streamHub.attachStream(s, uint64(778)))
+	assert.Nil(t, s.CloseRead())
+	assert.Nil(t, s.CloseWrite())
+	assert.Equal(t, int32(1), atomic.LoadInt32(&closes), "event should fire at detach")
+
+	waitForCondition(t, 5*time.Second, func() bool {
+		states, _ := n.streamHub.GetClosedStates(0)
+		return len(states) == 1
+	}, "closed state should be recorded once after retention")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&closes), "event must not fire again at cleanup")
 }

@@ -12,7 +12,9 @@ import (
 
 const (
 	// DefaultDetachRetention 是流完全关闭后的默认滞留时长：滞留期内流仍可按 SID
-	// 寻址，晚到的包由 stream 层逻辑消化。可用 Node.SetDetachRetention 按节点覆盖。
+	// 寻址，晚到的包由 stream 层逻辑消化。滞留期仅影响清理与 closedStates 历史
+	// 写入时机；Trace.StreamClosed 事件在双向关闭齐备（detach）时即触发。
+	// 可用 Node.SetDetachRetention 按节点覆盖。
 	DefaultDetachRetention = 2 * time.Second
 )
 
@@ -50,6 +52,10 @@ func (hub *StreamHub) attachStream(s *stream.Stream, sid uint64) error {
 
 	// 当 stream 双向都关闭时自动从 hub 中移除，并回收资源。
 	s.SetOnDetach(func() {
+		// 关闭事件在 detach 时刻立即触发：此时状态快照已完整（IsClosed/Closed/
+		// CloseReason/字节计数均为终值），无需等待滞留期；滞留期仅继续承担
+		// SID 寻址与晚到包消化职责，含晚到 ack 的终值由 recordClosedState 入历史。
+		hub.host.traceStreamClosed(s.GetState())
 		hub.scheduleStreamCleanup(sid, s)
 	})
 
@@ -143,6 +149,9 @@ func (hub *StreamHub) closeStreamByIndex(index int32) bool {
 	return true
 }
 
+// GetStreamStates 返回 hub 中可寻址的流状态。已完全关闭但仍处于滞留期内的流
+// 也包含在内（其 State.IsClosed=true、Closed 已设置）；只关心未关闭流的调用方
+// 应按 State.IsClosed 自行过滤。
 func (hub *StreamHub) GetStreamStates() []*stream.State {
 	list := []*stream.State{}
 	hub.streams.Range(func(key, value interface{}) bool {
@@ -232,9 +241,10 @@ func (hub *StreamHub) handleAckCloseStream(pbuf *packet.Buffer) {
 	c.HandleAckCloseStream(pbuf)
 }
 
+// recordClosedState 在滞留期届满时将流状态写入 closedStates 环形历史。
+// Trace.StreamClosed 事件已在 detach 时刻触发（见 attachStream），此处只落
+// 含晚到 ack 的终值记录，不再重复发事件。
 func (hub *StreamHub) recordClosedState(state *stream.State) {
-	hub.host.traceStreamClosed(state)
-
 	hub.closedMut.Lock()
 	defer hub.closedMut.Unlock()
 

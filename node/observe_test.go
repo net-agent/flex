@@ -132,6 +132,114 @@ func TestTraceStreamOpenClosed(t *testing.T) {
 	}, "StreamClosed should fire once on each side")
 }
 
+// StreamClosed 在 detach 时刻触发（远早于滞留期届满）：本地主动 Close 一侧记
+// "local"，收到对端关闭请求的一侧记 "remote"；事件触发时流仍处滞留期、可寻址。
+func TestTraceStreamClosedAtDetach(t *testing.T) {
+	pc1, pc2 := packet.Pipe()
+	n1 := New(pc1)
+	n2 := New(pc2)
+	retention := 1500 * time.Millisecond
+	n1.SetDetachRetention(retention)
+	n2.SetDetachRetention(retention)
+	n1.SetDomain("trace1")
+	n1.SetIP(1)
+	n2.SetDomain("trace2")
+	n2.SetIP(2)
+
+	type closedEvt struct {
+		reason      string
+		addressable bool // 事件触发时流是否仍在活跃列表（滞留期内）
+	}
+	ch1, ch2 := make(chan closedEvt, 1), make(chan closedEvt, 1)
+	hook := func(n *Node, ch chan closedEvt) func(*stream.State) {
+		return func(st *stream.State) {
+			ch <- closedEvt{reason: st.CloseReason, addressable: len(n.GetStreamStates()) > 0}
+		}
+	}
+	n1.SetTrace(&Trace{StreamClosed: hook(n1, ch1)})
+	n2.SetTrace(&Trace{StreamClosed: hook(n2, ch2)})
+	go n1.Serve()
+	go n2.Serve()
+	defer n1.Close()
+	defer n2.Close()
+
+	l, err := n2.Listen(80)
+	assert.Nil(t, err)
+	go func() {
+		c, err := l.Accept()
+		if err == nil {
+			io.Copy(io.Discard, c) // 等对端关闭后退出，再关闭本端，避免 close 握手竞态
+			c.Close()
+		}
+	}()
+
+	s, err := n1.Dial("trace2:80")
+	assert.Nil(t, err)
+	s.Close()
+
+	// 接收窗口远小于滞留期：若事件等滞留期届满才发，此处超时失败
+	recv := func(ch chan closedEvt, msg string) closedEvt {
+		t.Helper()
+		select {
+		case e := <-ch:
+			return e
+		case <-time.After(retention / 2):
+			t.Fatal(msg)
+			return closedEvt{}
+		}
+	}
+
+	e1 := recv(ch1, "local side: StreamClosed should fire at detach, not after retention")
+	assert.Equal(t, "local", e1.reason)
+	assert.True(t, e1.addressable, "stream should still be addressable when the event fires")
+
+	e2 := recv(ch2, "remote side: StreamClosed should fire at detach, not after retention")
+	assert.Equal(t, "remote", e2.reason)
+	assert.True(t, e2.addressable, "stream should still be addressable when the event fires")
+}
+
+// 节点关闭路径：closeAllStreams 预设 "node" 原因，事件同样在 detach 时刻触发。
+func TestTraceStreamClosedOnNodeClose(t *testing.T) {
+	pc1, pc2 := packet.Pipe()
+	n1 := New(pc1)
+	n2 := New(pc2)
+	retention := 1500 * time.Millisecond
+	n2.SetDetachRetention(retention)
+	n1.SetDomain("trace1")
+	n1.SetIP(1)
+	n2.SetDomain("trace2")
+	n2.SetIP(2)
+
+	closedCh := make(chan *stream.State, 1)
+	n2.SetTrace(&Trace{StreamClosed: func(st *stream.State) { closedCh <- st }})
+	go n1.Serve()
+	go n2.Serve()
+	defer n1.Close()
+
+	l, err := n2.Listen(80)
+	assert.Nil(t, err)
+	go func() {
+		c, err := l.Accept()
+		if err == nil {
+			io.Copy(io.Discard, c)
+		}
+	}()
+
+	s, err := n1.Dial("trace2:80")
+	assert.Nil(t, err)
+	defer s.Close()
+
+	n2.Close() // closeAllStreams：流在 Close 调用内同步 detach
+
+	select {
+	case st := <-closedCh:
+		assert.True(t, st.IsClosed)
+		assert.Equal(t, "node", st.CloseReason)
+	case <-time.After(retention / 2):
+		t.Fatal("StreamClosed should fire at detach on node close, not after retention")
+	}
+}
+
 func TestTraceHeartbeatFail(t *testing.T) {
 	failErr := errors.New("boom")
 

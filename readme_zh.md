@@ -141,11 +141,12 @@ snap := n.Inspect()         // 一致性快照：info、监听器、活跃流、
 rates := snap2.RatesSince(snap1) // 两个快照之间的速率（节点级 + 单流级）
 
 closed, pos := n.GetClosedStates(pos) // 增量拉取已关闭流记录
-                                      // （环形缓冲，最多保留最近 1024 条）
+                                      // （环形缓冲，最多保留最近 1024 条；
+                                      // 记录在滞留期届满后写入）
 
 n.SetTrace(&node.Trace{     // 生命周期事件钩子（字段为 nil 即关闭）；
     StreamOpen:    func(st *stream.State) { /* ... */ }, // 仅应在 Serve 之前调用
-    StreamClosed:  func(st *stream.State) { /* ... */ },
+    StreamClosed:  func(st *stream.State) { /* ... */ }, // 流双向关闭齐备（detach）时触发
     HeartbeatFail: func(err error) { /* ... */ },
     PortExhausted: func(pool string, err error) { /* ... */ },
 })

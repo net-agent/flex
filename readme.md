@@ -144,11 +144,12 @@ rates := snap2.RatesSince(snap1) // per-second rates between two snapshots
                                  // (node-level and per-stream)
 
 closed, pos := n.GetClosedStates(pos) // incremental pull of closed-stream
-                                      // records (ring buffer, latest 1024)
+                                      // records (ring buffer, latest 1024;
+                                      // written when retention expires)
 
 n.SetTrace(&node.Trace{     // lifecycle hooks (nil fields are disabled);
     StreamOpen:    func(st *stream.State) { /* ... */ }, // call before Serve
-    StreamClosed:  func(st *stream.State) { /* ... */ },
+    StreamClosed:  func(st *stream.State) { /* ... */ }, // fires at detach (both directions closed)
     HeartbeatFail: func(err error) { /* ... */ },
     PortExhausted: func(pool string, err error) { /* ... */ },
 })

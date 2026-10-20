@@ -207,6 +207,8 @@ func (node *Node) SetDialTimeout(timeout time.Duration) {
 
 // SetDetachRetention 设置流完全关闭后的滞留时长：滞留期内流仍可按 SID 寻址，
 // 用于消化晚到的包；设为 0 表示立即清理。仅应在 Serve 之前调用。
+// 滞留期只影响资源清理与 closedStates 历史写入时机，
+// 不影响 Trace.StreamClosed 的触发时机（detach 时即触发）。
 func (node *Node) SetDetachRetention(d time.Duration) {
 	node.streamHub.detachRetention = d
 }

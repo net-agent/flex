@@ -145,6 +145,12 @@ func (node *Node) Inspect() Snapshot {
 
 // Trace 定义节点级生命周期事件钩子，借鉴 net/http/httptrace 的设计：
 // 字段为 nil 即关闭，新增字段向后兼容。通过 SetTrace 注入，仅应在 Serve 之前调用。
+// 钩子在事件发起方 goroutine 中同步执行，必须非阻塞。
+//
+// StreamClosed 在流双向关闭齐备（detach）时触发，载荷为该时刻的状态快照：
+// IsClosed/Closed/CloseReason/字节计数在此时已是终值；RecvBufferCount 与
+// RecvAckTotal 在滞留期内仍可能因晚到的包/ack 微增，含终值的记录于滞留期
+// 届满后写入 closedStates 历史（见 GetClosedStates）。
 type Trace struct {
 	StreamOpen    func(*stream.State)
 	StreamClosed  func(*stream.State)

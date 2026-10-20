@@ -426,13 +426,23 @@ func TestSessionWiresLoggerAndTrace(t *testing.T) {
 	s.SetLogger(slog.New(h))
 
 	opens := make(chan *stream.State, 8)
+	closes := make(chan *stream.State, 8)
 	s.SetTrace(&Trace{
-		StreamOpen: func(st *stream.State) { opens <- st },
+		StreamOpen:   func(st *stream.State) { opens <- st },
+		StreamClosed: func(st *stream.State) { closes <- st },
 	})
 	waitOpen := func(msg string) {
 		t.Helper()
 		select {
 		case <-opens:
+		case <-time.After(5 * time.Second):
+			t.Fatal(msg)
+		}
+	}
+	waitClose := func(msg string) {
+		t.Helper()
+		select {
+		case <-closes:
 		case <-time.After(5 * time.Second):
 			t.Fatal(msg)
 		}
@@ -461,6 +471,7 @@ func TestSessionWiresLoggerAndTrace(t *testing.T) {
 	waitOpen("StreamOpen should fire on session-wired node")
 	c1.Close()
 	st1.Close()
+	waitClose("StreamClosed should fire at detach on session-wired node")
 
 	// 断线重连后：重建的 Node 同样完成接线
 	servers[0].Close()
@@ -482,6 +493,7 @@ func TestSessionWiresLoggerAndTrace(t *testing.T) {
 	waitOpen("StreamOpen should still fire after reconnect")
 	c2.Close()
 	st2.Close()
+	waitClose("StreamClosed should still fire at detach after reconnect")
 }
 
 // --- Close ---

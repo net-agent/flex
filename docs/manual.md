@@ -163,9 +163,14 @@ domain/IP/port, created/closed timestamps, bytes read/written, ack totals and
 in-flight buffer counts.
 
 ```go
-states := n.GetStreamStates() // active streams
+states := n.GetStreamStates() // streams addressable in the hub; includes fully
+                              // closed streams still in their retention period
+                              // (default 2s, see SetDetachRetention) with
+                              // IsClosed=true — filter by IsClosed for active only
 
-// Closed streams are kept in a ring buffer (latest 1024). Pull incrementally:
+// Closed streams are kept in a ring buffer (latest 1024). Records are written
+// when the retention period expires, with counters final (late acks included).
+// Pull incrementally:
 var pos int64
 closed, pos := n.GetClosedStates(pos) // returns only records newer than pos
 ```
@@ -196,6 +201,12 @@ n.SetTrace(&node.Trace{ // call before Serve
     PortExhausted: func(pool string, err error) { /* ... */ },
 })
 ```
+
+`StreamClosed` fires when both directions of the stream are closed (detach); it
+does not wait for the retention period to expire. The payload is the state
+snapshot at that moment: `IsClosed`/`Closed`/`CloseReason`/byte counters are
+already final; only `RecvBufferCount`/`RecvAckTotal` may still drift slightly
+from late packets/acks during retention.
 
 ### Node: Active Probing
 
