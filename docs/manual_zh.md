@@ -230,13 +230,19 @@ err = n.Unwatch(3*time.Second, "agent-1")
 - 通知仅为信息告知，协议栈不做自动动作；如需 fail-fast（如主动关闭指向 offline 节点的 stream、取消进行中的 Dial），在回调中自行组合。
 - 回调在 dispatcher 的 goroutine 中同步执行，不得阻塞。
 
+### Session：冷启动与连接超时
+
+`Session` 采用懒连接：首次调用 `Listen`/`Dial`/`Watch`/`PingDomain` 才触发 `Serve` 开始连接。冷启动阶段（首次连接尚未建立），`Dial`/`Watch`/`PingDomain` 会阻塞等待首次连接完成再执行，而不是立即报错；等待的最长时间由 `SetConnectTimeout` 控制（默认 15s，设为 0 表示不等待），超时返回 `ErrSessionConnectTimeout`。
+
+一旦成功连接过，语义转为 fail-fast：重连期间调用 `Dial`/`Watch`/`PingDomain` 会立即返回 `ErrSessionDisconnected`，需要等待重连完成时可配合 `WaitReady` 或状态回调自行组合。
+
 ### Session：状态订阅（跨重连）
 
 `Session` 暴露与 Node 一致的 presence API（`Watch` / `Unwatch` / `SetPresenceHandler` / `GetPresence` / `ListPresence`），并消除了重连带来的订阅中断：
 
 - 订阅意图跨重连存活：每次重连成功后自动重订阅全部域名，并用新快照 reconcile 本地视图（快照以权威重置语义应用——version 回退只可能来自 switcher 重启或离线条目淘汰，此时新快照即当前真相）。
-- 离线时调用 `Watch` 会记录意图并返回 `ErrSessionDisconnected`，重连后自动生效；`Unwatch` 对称。
-- 首次调用 `Watch` 与 `Listen`/`Dial` 一样会触发 Serve 开始连接。
+- 冷启动（首次连接尚未建立）时调用 `Watch` 会阻塞等待首次连接完成（最长为 connect timeout）并返回真实快照；重连中调用会记录意图并返回 `ErrSessionDisconnected`，重连后自动生效；`Unwatch` 对称。
+- 首次调用 `Watch` 与 `Listen`/`Dial`/`PingDomain` 一样会触发 Serve 开始连接。
 
 ```go
 sess.SetPresenceHandler(func(ev packet.PresenceEvent) {

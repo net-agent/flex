@@ -232,13 +232,19 @@ err = n.Unwatch(3*time.Second, "agent-1")
 - Notifications are informational only — the protocol stack takes no automatic action. For fail-fast semantics (e.g. closing streams to an offline node or aborting in-flight dials), compose them yourself in the callback.
 - The callback runs synchronously on the dispatcher goroutine and must not block.
 
+### Session: Cold Start and Connect Timeout
+
+`Session` connects lazily: the first `Listen`/`Dial`/`Watch`/`PingDomain` call triggers `Serve` to start connecting. During the initial connect (before the session has ever been online), `Dial`/`Watch`/`PingDomain` block until the first connect completes instead of failing immediately. The wait is bounded by `SetConnectTimeout` (default 15s; 0 disables waiting) and returns `ErrSessionConnectTimeout` on expiry.
+
+Once the session has been online, the semantics switch to fail-fast: while reconnecting, `Dial`/`Watch`/`PingDomain` return `ErrSessionDisconnected` immediately; combine with `WaitReady` or the state-change callback to wait out a reconnect.
+
 ### Session: Presence Across Reconnects
 
 `Session` exposes the same presence API as `Node` (`Watch` / `Unwatch` / `SetPresenceHandler` / `GetPresence` / `ListPresence`) and removes the subscription gap caused by reconnects:
 
 - Subscription intents survive reconnects: after every reconnect the session resubscribes all domains automatically and reconciles its local view with the new snapshot. The snapshot is applied with authoritative-reset semantics — a version regression can only mean a switcher restart or eviction of a long-dead offline entry, in which case the new snapshot is the current truth.
-- Calling `Watch` while disconnected records the intent and returns `ErrSessionDisconnected`; it takes effect once the session is back online. `Unwatch` is symmetric.
-- Like `Listen`/`Dial`, the first `Watch` call triggers `Serve` to start connecting.
+- During the initial connect (before the session has ever been online), `Watch` blocks until the first connect completes (bounded by the connect timeout) and returns the real snapshot; while reconnecting, it records the intent and returns `ErrSessionDisconnected`, taking effect once the session is back online. `Unwatch` is symmetric.
+- Like `Listen`/`Dial`/`PingDomain`, the first `Watch` call triggers `Serve` to start connecting.
 
 ```go
 sess.SetPresenceHandler(func(ev packet.PresenceEvent) {

@@ -16,16 +16,20 @@ import (
 )
 
 var (
-	ErrSessionClosed       = errors.New("session closed")
-	ErrSessionDisconnected = errors.New("session disconnected")
+	ErrSessionClosed         = errors.New("session closed")
+	ErrSessionDisconnected   = errors.New("session disconnected")
+	ErrSessionConnectTimeout = errors.New("session connect timeout")
 )
+
+// defaultConnectTimeout 是冷启动阶段等待首次连接完成的默认时长。
+const defaultConnectTimeout = 15 * time.Second
 
 // SessionState 表示 Session 的连接状态
 type SessionState int32
 
 const (
 	SessionReady      SessionState = iota // 已创建，Serve 尚未启动
-	SessionIdle                           // 已进入 Serve loop，等待首次 Listen/Dial 触发
+	SessionIdle                           // 已进入 Serve loop，等待首次使用触发（懒连接）
 	SessionConnecting                     // 连接中 / 重连中
 	SessionOnline                         // 已连接
 	SessionClosed                         // 已关闭
@@ -64,10 +68,15 @@ type Session struct {
 
 	enableFairConn atomic.Bool
 
-	mu        sync.RWMutex
-	node      *Node
-	listeners map[uint16]*SessionListener
-	ready     chan struct{} // closed when node is ready
+	// connectTimeout 是冷启动阶段等待首次连接完成的最长时间（纳秒），
+	// 见 SetConnectTimeout。
+	connectTimeout atomic.Int64
+
+	mu         sync.RWMutex
+	node       *Node
+	listeners  map[uint16]*SessionListener
+	ready      chan struct{} // closed when node is ready; recreated each reconnect
+	firstReady chan struct{} // closed once on first Online; never recreated
 
 	// presence 订阅意图跨重连存活；view 由快照与事件增量维护，
 	// 重连后通过 resubscribePresence 用新快照 reconcile
@@ -76,8 +85,9 @@ type Session struct {
 	handler    func(packet.PresenceEvent)
 	view       PresenceView
 
-	trigger   chan struct{} // closed on first Listen/Dial to start connecting
+	trigger   chan struct{} // closed on first use (Listen/Dial/Watch/PingDomain) to start connecting
 	onceStart sync.Once
+	onceReady sync.Once // 首次 Online 时关闭 firstReady
 
 	done      chan struct{}
 	onceClose sync.Once
@@ -93,16 +103,18 @@ type Session struct {
 
 func NewSession(connector ConnectFunc, cfg SessionConfig) *Session {
 	s := &Session{
-		connector: connector,
-		config:    cfg,
-		listeners: make(map[uint16]*SessionListener),
-		watched:   make(map[string]struct{}),
-		ready:     make(chan struct{}),
-		trigger:   make(chan struct{}),
-		done:      make(chan struct{}),
-		logger:    slog.Default(),
+		connector:  connector,
+		config:     cfg,
+		listeners:  make(map[uint16]*SessionListener),
+		watched:    make(map[string]struct{}),
+		ready:      make(chan struct{}),
+		firstReady: make(chan struct{}),
+		trigger:    make(chan struct{}),
+		done:       make(chan struct{}),
+		logger:     slog.Default(),
 	}
 	s.enableFairConn.Store(true)
+	s.connectTimeout.Store(int64(defaultConnectTimeout))
 	return s
 }
 
@@ -111,6 +123,17 @@ func NewSession(connector ConnectFunc, cfg SessionConfig) *Session {
 // Must be called before Serve.
 func (s *Session) SetEnableFairConn(enable bool) {
 	s.enableFairConn.Store(enable)
+}
+
+// SetConnectTimeout 设置冷启动阶段（首次连接尚未建立）Dial/Watch/PingDomain
+// 等待首次连接完成的最长时间，默认 15s。设为 0 表示不等待（冷启动也 fail-fast）。
+// 可在运行期间调整，对后续调用生效。
+func (s *Session) SetConnectTimeout(timeout time.Duration) {
+	s.connectTimeout.Store(int64(timeout))
+}
+
+func (s *Session) getConnectTimeout() time.Duration {
+	return time.Duration(s.connectTimeout.Load())
 }
 
 // SetLogger 设置 Session 日志器，每次重连新建 Node 时会自动注入。仅应在 Serve 之前调用。
@@ -209,18 +232,26 @@ func (s *Session) Listen(port uint16) (net.Listener, error) {
 	return sl, nil
 }
 
-// Dial 通过当前 Node 发起连接。如果当前处于断线状态，立即返回错误。
-// 首次调用会触发 Serve 开始连接。
+// Dial 通过当前 Node 发起连接。首次调用会触发 Serve 开始连接（懒连接）。
+// 冷启动阶段（首次连接尚未建立）会阻塞等待首次连接完成，最长等待
+// SetConnectTimeout 设定的时间，超时返回 ErrSessionConnectTimeout；
+// 曾经连接过但当前断线（重连中）时立即返回 ErrSessionDisconnected。
 func (s *Session) Dial(addr string) (*stream.Stream, error) {
-	s.ensureServing()
-
-	s.mu.RLock()
-	n := s.node
-	s.mu.RUnlock()
-	if n == nil {
-		return nil, ErrSessionDisconnected
+	n, err := s.waitNode()
+	if err != nil {
+		return nil, err
 	}
 	return n.Dial(addr)
+}
+
+// PingDomain 对指定节点进行连通性测试并返回 RTT。domain 为空时返回到中转节点的 RTT。
+// 首次调用会触发 Serve 开始连接；冷启动等待与 fail-fast 语义同 Dial。
+func (s *Session) PingDomain(domain string, timeout time.Duration) (time.Duration, error) {
+	n, err := s.waitNode()
+	if err != nil {
+		return 0, err
+	}
+	return n.PingDomain(domain, timeout)
 }
 
 // WaitReady 阻塞等待 Node 就绪（已连接）。可用于在 Dial 前等待重连完成。
@@ -243,6 +274,39 @@ func (s *Session) WaitReady(timeout time.Duration) error {
 	}
 }
 
+// waitNode 返回当前可用的 Node，必要时触发懒连接。
+// 已连接时立即返回；冷启动阶段（首次连接尚未建立）阻塞等待首次连接完成，
+// 超时返回 ErrSessionConnectTimeout，Session 关闭返回 ErrSessionClosed；
+// 曾经连接过但当前断线（重连中）时立即返回 ErrSessionDisconnected。
+func (s *Session) waitNode() (*Node, error) {
+	s.ensureServing()
+
+	s.mu.RLock()
+	n := s.node
+	firstReady := s.firstReady
+	s.mu.RUnlock()
+	if n != nil {
+		return n, nil
+	}
+
+	select {
+	case <-firstReady:
+	case <-time.After(s.getConnectTimeout()):
+		return nil, ErrSessionConnectTimeout
+	case <-s.done:
+		return nil, ErrSessionClosed
+	}
+
+	s.mu.RLock()
+	n = s.node
+	s.mu.RUnlock()
+	if n == nil {
+		// firstReady 已关闭但 node 为空：曾经连接成功，当前处于重连中
+		return nil, ErrSessionDisconnected
+	}
+	return n, nil
+}
+
 // GetNode 返回当前活跃的 Node，可能为 nil。
 func (s *Session) GetNode() *Node {
 	s.mu.RLock()
@@ -254,8 +318,9 @@ func (s *Session) GetNode() *Node {
 
 // Watch 订阅一组域名的上下线事件，返回当前状态快照。
 // 订阅意图跨重连存活：断线重连后 Session 自动重订阅并用新快照 reconcile 本地视图。
-// 首次调用会触发 Serve 开始连接。
-// 离线时调用返回 ErrSessionDisconnected，但意图已记录，重连后仍会生效。
+// 首次调用会触发 Serve 开始连接；冷启动阶段会阻塞等待首次连接完成
+// （最长为 SetConnectTimeout 设定的时间），随后返回真实快照。
+// 重连中调用返回 ErrSessionDisconnected，但意图已记录，重连后仍会生效。
 func (s *Session) Watch(timeout time.Duration, domains ...string) ([]packet.PresenceState, error) {
 	s.ensureServing()
 
@@ -268,11 +333,9 @@ func (s *Session) Watch(timeout time.Duration, domains ...string) ([]packet.Pres
 	}
 	s.presenceMu.Unlock()
 
-	s.mu.RLock()
-	n := s.node
-	s.mu.RUnlock()
-	if n == nil {
-		return nil, ErrSessionDisconnected
+	n, err := s.waitNode()
+	if err != nil {
+		return nil, err
 	}
 	states, err := n.Watch(timeout, domains...)
 	if err != nil {
@@ -386,7 +449,7 @@ func (s *Session) ensureServing() {
 }
 
 // Serve 启动重连循环。阻塞直到 Close 被调用。
-// 实际连接在首次 Listen 或 Dial 调用时才开始（懒连接）。
+// 实际连接在首次 Listen/Dial/Watch/PingDomain 调用时才开始（懒连接）。
 //
 // 状态流转：
 //
@@ -402,7 +465,7 @@ func (s *Session) ensureServing() {
 // 各状态说明：
 //
 //	Ready      — Session 已创建，Serve 尚未启动
-//	Idle       — 已进入 Serve loop，等待首次 Listen/Dial 触发（懒连接）
+//	Idle       — 已进入 Serve loop，等待首次使用触发（懒连接）
 //	Connecting — 连接中或断线重连中
 //	Online     — 与服务器成功建立连接，Node 可用
 //	Closed     — Session 已永久关闭，不可复用
@@ -479,6 +542,7 @@ func (s *Session) Serve() error {
 
 		s.setState(SessionOnline, nil) // ★ 触发回调：Connecting → Online
 		close(ready)                   // 状态就绪后再唤醒等待者，保证 WaitReady 返回时已 Online
+		s.onceReady.Do(func() { close(s.firstReady) })
 
 		go s.resubscribePresence(node)
 

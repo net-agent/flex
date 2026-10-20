@@ -11,7 +11,9 @@
 //   SetLogger        — nil 不变 / 非 nil 替换
 //   GetNode          — nil / 非 nil
 //   Listen           — Serve 前注册 | 端口重复 | 运行中注册+桥接 | 运行中 node.Listen 失败
-//   Dial             — node 为 nil 返回错误 | 正常委托
+//   Dial             — 冷启动等待首次连接 | 连接超时 | 已关闭 | 重连中 fail-fast | 正常委托
+//   PingDomain       — 冷启动等待首次连接并代理到底层 Node
+//   Watch            — 冷启动等待首次连接 | 超时返回错误但意图已记录 | 离线 Unwatch
 //   WaitReady        — 已就绪 | 超时 | Session 已关闭 | 等待后就绪
 //   Serve            — 启动前已关闭 | connector 失败+backoff 中 Close | 断线重连
 //   Close            — 有活跃 Node | 无 Node | 幂等
@@ -179,10 +181,20 @@ func TestSessionListenWhileRunning(t *testing.T) {
 
 // --- Dial ---
 
-func TestSessionDialDisconnected(t *testing.T) {
-	s := NewSession(nil, SessionConfig{})
+func TestSessionDialConnectTimeout(t *testing.T) {
+	s := NewSession(nil, SessionConfig{}) // Serve 未启动，连接永远不会建立
+	s.SetConnectTimeout(50 * time.Millisecond)
+
 	_, err := s.Dial("1:80")
-	assert.Equal(t, ErrSessionDisconnected, err)
+	assert.Equal(t, ErrSessionConnectTimeout, err)
+}
+
+func TestSessionDialClosed(t *testing.T) {
+	s := NewSession(nil, SessionConfig{})
+	s.Close()
+
+	_, err := s.Dial("1:80")
+	assert.Equal(t, ErrSessionClosed, err)
 }
 
 func TestSessionDialConnected(t *testing.T) {
@@ -203,6 +215,87 @@ func TestSessionDialConnected(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, st)
 	st.Close()
+}
+
+// Dial 作为首个调用：触发懒连接并阻塞等待首次连接完成
+func TestSessionDialWaitsInitialConnect(t *testing.T) {
+	connector, getServers := newTestConnector()
+	s := NewSession(connector, testSessionConfig())
+	s.SetConnectTimeout(2 * time.Second)
+	go s.Serve()
+	defer s.Close()
+
+	// 对端尚未监听 80 端口：预期收到对端 ack 错误，证明首次连接已建立，
+	// 而不是返回"未连接/连接超时"类错误
+	_, err := s.Dial("2:80")
+	assert.NotNil(t, err)
+	assert.NotEqual(t, ErrSessionConnectTimeout, err)
+	assert.NotEqual(t, ErrSessionDisconnected, err)
+	assert.NotNil(t, s.GetNode())
+
+	servers := getServers()
+	_, err = servers[0].Listen(80)
+	assert.Nil(t, err)
+
+	st, err := s.Dial("2:80")
+	assert.Nil(t, err)
+	assert.NotNil(t, st)
+	st.Close()
+}
+
+// PingDomain 作为首个调用：触发懒连接并等待首次连接完成
+func TestSessionPingDomain(t *testing.T) {
+	connector, _ := newTestConnector()
+	s := NewSession(connector, testSessionConfig())
+	s.SetConnectTimeout(2 * time.Second)
+	go s.Serve()
+	defer s.Close()
+
+	// server 节点的 domain 在握手中被设为客户端域名（见 newTestConnector）
+	_, err := s.PingDomain("testclient", time.Second)
+	assert.Nil(t, err)
+}
+
+// 重连中（曾经连接过）Dial 应 fail-fast
+func TestSessionDialFailFastWhenReconnecting(t *testing.T) {
+	gate := make(chan struct{})
+	var mu sync.Mutex
+	calls := 0
+	inner, getServers := newTestConnector()
+	connector := func() (packet.Conn, error) {
+		mu.Lock()
+		calls++
+		n := calls
+		mu.Unlock()
+		if n > 1 {
+			<-gate // 重连阻塞，模拟重连迟迟不成功
+		}
+		return inner()
+	}
+
+	s := NewSession(connector, testSessionConfig())
+	s.SetConnectTimeout(time.Second)
+	s.ensureServing()
+	go s.Serve()
+	defer s.Close()
+
+	assert.Nil(t, s.WaitReady(time.Second))
+	servers := getServers()
+	servers[0].Close() // 触发断线
+
+	// 等待 session 进入重连中（node 被清空）
+	deadline := time.Now().Add(time.Second)
+	for s.GetNode() != nil && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	assert.Nil(t, s.GetNode())
+
+	_, err := s.Dial("2:80")
+	assert.Equal(t, ErrSessionDisconnected, err)
+
+	// 放行重连，session 恢复
+	close(gate)
+	assert.Nil(t, s.WaitReady(time.Second))
 }
 
 // --- WaitReady ---
@@ -922,28 +1015,86 @@ func waitSessionView(t *testing.T, s *Session, domain string, version uint64) pa
 	return packet.PresenceState{}
 }
 
-func TestSessionWatchWhileDisconnected(t *testing.T) {
-	s := NewSession(nil, SessionConfig{})
+func TestSessionWatchWhileOffline(t *testing.T) {
+	s := NewSession(nil, SessionConfig{}) // Serve 未启动，连接永远不会建立
+	s.SetConnectTimeout(50 * time.Millisecond)
 
 	// 空域名直接报错，不记录意图
 	_, err := s.Watch(time.Second)
 	assert.Equal(t, ErrEmptyWatchDomains, err)
 
-	// 离线 Watch：返回错误但意图已记录
+	// 冷启动 Watch：等待首次连接直至超时，意图已记录
 	_, err = s.Watch(time.Second, "target")
-	assert.Equal(t, ErrSessionDisconnected, err)
+	assert.Equal(t, ErrSessionConnectTimeout, err)
 	s.presenceMu.RLock()
 	_, ok := s.watched["target"]
 	s.presenceMu.RUnlock()
-	assert.True(t, ok, "watch intent should be recorded while disconnected")
+	assert.True(t, ok, "watch intent should be recorded while offline")
 
-	// 离线 Unwatch：返回错误且意图被移除
+	// 离线 Unwatch：立即返回错误且意图被移除
 	err = s.Unwatch(time.Second, "target")
 	assert.Equal(t, ErrSessionDisconnected, err)
 	s.presenceMu.RLock()
 	_, ok = s.watched["target"]
 	s.presenceMu.RUnlock()
 	assert.False(t, ok, "watch intent should be removed")
+}
+
+// Watch 作为首个调用：触发懒连接，等待首次连接完成后返回真实快照
+func TestSessionWatchWaitsInitialConnect(t *testing.T) {
+	swCh := make(chan packet.Conn, 1)
+	s := NewSession(newPresenceConnector(swCh), testSessionConfig())
+	s.SetConnectTimeout(3 * time.Second)
+	go s.Serve()
+	defer s.Close()
+
+	type watchResult struct {
+		states []packet.PresenceState
+		err    error
+	}
+	resCh := make(chan watchResult, 1)
+	go func() {
+		states, err := s.Watch(3*time.Second, "target")
+		resCh <- watchResult{states, err}
+	}()
+
+	// Watch 阻塞期间完成建连。意图在连上前已记录，resubscribe 与 Watch 会
+	// 并发产生重复订阅；应答循环对 teardown 时的写错误静默处理，不用 t.Fatal
+	sw := recvSwitcher(t, swCh)
+	defer sw.Close()
+	go func() {
+		ack := packet.SubscribeACK{OK: true, States: []packet.PresenceState{
+			{Domain: "target", Online: true, IP: 7, Mac: "m1", Version: 1},
+		}}
+		for {
+			pbuf, err := sw.ReadBuffer()
+			if err != nil {
+				return
+			}
+			if pbuf.Cmd() != packet.CmdSubscribePresence {
+				packet.PutBuffer(pbuf)
+				continue
+			}
+			resp := packet.NewBufferWithCmd(packet.AckSubscribePresence)
+			resp.SetSrc(packet.SwitcherIP, 0)
+			resp.SetDist(pbuf.SrcIP(), pbuf.SrcPort())
+			if err := resp.SetPayload(ack.Encode()); err == nil {
+				_ = sw.WriteBuffer(resp)
+			}
+			packet.PutBuffer(pbuf)
+		}
+	}()
+
+	select {
+	case res := <-resCh:
+		assert.Nil(t, res.err)
+		assert.Len(t, res.states, 1)
+		st, ok := s.GetPresence("target")
+		assert.True(t, ok)
+		assert.True(t, st.Online)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timeout waiting cold-start Watch")
+	}
 }
 
 func TestSessionWatchAndNotify(t *testing.T) {

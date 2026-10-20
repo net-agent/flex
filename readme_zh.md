@@ -105,7 +105,8 @@ sess := node.NewSession(func() (packet.Conn, error) {
 }, node.SessionConfig{Domain: "client-a", Password: "password"})
 go sess.Serve()
 
-// 首次 Listen/Dial 会触发连接（懒连接）；
+// 首次 Listen/Dial/Watch/PingDomain 触发连接（懒连接），冷启动期间
+// 这些调用会等待首次连接完成（SetConnectTimeout，默认 15s）；
 // 监听器在每次重连后自动恢复。
 ln, err := sess.Listen(80)
 ```

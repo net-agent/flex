@@ -105,7 +105,9 @@ sess := node.NewSession(func() (packet.Conn, error) {
 }, node.SessionConfig{Domain: "client-a", Password: "password"})
 go sess.Serve()
 
-// The first Listen/Dial triggers the connection (lazy connect);
+// The first Listen/Dial/Watch/PingDomain triggers the connection (lazy connect);
+// during cold start these calls wait for the initial connect to complete
+// (SetConnectTimeout, default 15s);
 // the listener is restored automatically after every reconnect.
 ln, err := sess.Listen(80)
 ```
