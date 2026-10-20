@@ -205,6 +205,12 @@ func (node *Node) SetDialTimeout(timeout time.Duration) {
 	node.dialer.SetDialTimeout(timeout)
 }
 
+// SetDetachRetention 设置流完全关闭后的滞留时长：滞留期内流仍可按 SID 寻址，
+// 用于消化晚到的包；设为 0 表示立即清理。仅应在 Serve 之前调用。
+func (node *Node) SetDetachRetention(d time.Duration) {
+	node.streamHub.detachRetention = d
+}
+
 // PingDomain 对指定节点进行连通性测试并返回 RTT。domain 为空时返回到中转节点的 RTT。
 func (node *Node) PingDomain(domain string, timeout time.Duration) (time.Duration, error) {
 	return node.pinger.PingDomain(domain, timeout)
@@ -252,6 +258,12 @@ func (node *Node) GetStreamStates() []*stream.State {
 // nextPos 的跳变感知中间存在缺口。
 func (node *Node) GetClosedStates(pos int64) ([]*stream.State, int64) {
 	return node.streamHub.GetClosedStates(pos)
+}
+
+// CloseStream 按 State.Index 关闭一条活跃流（手动关闭，CloseReason 记为 "manual"）。
+// 找不到返回 false。关闭通过 CloseRead+CloseWrite 完成，走正常协议关闭流程。
+func (node *Node) CloseStream(index int32) bool {
+	return node.streamHub.closeStreamByIndex(index)
 }
 
 // Serve 启动节点的读循环、分发与心跳，阻塞直到连接断开或 Close 被调用。

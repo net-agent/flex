@@ -279,3 +279,89 @@ func TestGetClosedStatesRingWrap(t *testing.T) {
 	states, _ = hub.GetClosedStates(pos - 5)
 	assert.Len(t, states, 5)
 }
+
+func TestCloseStreamByIndex(t *testing.T) {
+	hub := &StreamHub{}
+	hub.init(nil, nil)
+
+	s := stream.New(nil, 0)
+	index := s.GetState().Index
+	hub.streams.Store(uint64(100), s)
+
+	// 找不到：未知 index 返回 false
+	assert.False(t, hub.closeStreamByIndex(index+1000))
+
+	// 找到并关闭：返回 true，CloseReason 记为 "manual"
+	assert.True(t, hub.closeStreamByIndex(index))
+	st := s.GetState()
+	assert.True(t, st.IsClosed)
+	assert.True(t, st.ReadClosed)
+	assert.True(t, st.WriteClosed)
+	assert.Equal(t, "manual", st.CloseReason)
+
+	// 已完全关闭的滞留流（滞留期内仍在 hub 中）视为未找到
+	assert.False(t, hub.closeStreamByIndex(index))
+}
+
+func TestNodeCloseStream(t *testing.T) {
+	n1, n2 := Pipe("test1", "test2")
+	defer n1.Close()
+	defer n2.Close()
+
+	l, err := n2.Listen(80)
+	assert.Nil(t, err)
+	go func() {
+		c, err := l.Accept()
+		if err == nil {
+			io.Copy(io.Discard, c) // 保持连接，直到对端关闭
+			c.Close()
+		}
+	}()
+
+	s, err := n1.Dial("test2:80")
+	assert.Nil(t, err)
+	index := s.GetState().Index
+
+	// 未知 index 返回 false
+	assert.False(t, n1.CloseStream(index+1000))
+
+	// 手动关闭指定流：返回 true，CloseReason 记为 "manual"
+	assert.True(t, n1.CloseStream(index))
+	st := s.GetState()
+	assert.True(t, st.IsClosed)
+	assert.Equal(t, "manual", st.CloseReason)
+
+	// 滞留期满后流从 hub 移除，且关闭状态记录 manual 原因
+	waitForCondition(t, 5*time.Second, func() bool {
+		return len(n1.GetStreamStates()) == 0
+	}, "manually closed stream should be detached after retention")
+	waitForCondition(t, 5*time.Second, func() bool {
+		closed, _ := n1.GetClosedStates(0)
+		return len(closed) == 1 && closed[0].CloseReason == "manual"
+	}, "closed state should record manual reason")
+}
+
+func TestNodeCloseStreamsReasonNode(t *testing.T) {
+	n1, n2 := Pipe("test1", "test2")
+	defer n2.Close()
+
+	l, err := n2.Listen(80)
+	assert.Nil(t, err)
+	go func() {
+		c, err := l.Accept()
+		if err == nil {
+			io.Copy(io.Discard, c)
+			c.Close()
+		}
+	}()
+
+	_, err = n1.Dial("test2:80")
+	assert.Nil(t, err)
+
+	// 节点关闭：所有活跃流的 CloseReason 记为 "node"
+	n1.Close()
+	waitForCondition(t, 5*time.Second, func() bool {
+		closed, _ := n1.GetClosedStates(0)
+		return len(closed) == 1 && closed[0].CloseReason == "node"
+	}, "node close should record reason=node")
+}

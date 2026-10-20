@@ -259,11 +259,8 @@ func TestHandleAckOpen(t *testing.T) {
 }
 
 func TestHandleAckOpen_LateAckDoesNotLeakStream(t *testing.T) {
-	old := DetachRetention
-	DetachRetention = 0
-	defer func() { DetachRetention = old }()
-
 	n := New(nil)
+	n.SetDetachRetention(0)
 	n.SetDomain("test1")
 	n.SetIP(1)
 

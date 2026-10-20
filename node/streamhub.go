@@ -10,14 +10,17 @@ import (
 	"github.com/net-agent/flex/v3/stream"
 )
 
+const (
+	// DefaultDetachRetention 是流完全关闭后的默认滞留时长：滞留期内流仍可按 SID
+	// 寻址，晚到的包由 stream 层逻辑消化。可用 Node.SetDetachRetention 按节点覆盖。
+	DefaultDetachRetention = 2 * time.Second
+)
+
 var (
 	errStreamNotFound    = errors.New("stream not found")
 	errInvalidStreamType = errors.New("invalid stream type")
 
 	maxClosedStates = 1024
-	// DetachRetention keeps a fully-closed stream addressable by SID for a short
-	// period so late packets can still be handled by stream-level logic.
-	DetachRetention = 2 * time.Second
 )
 
 type StreamHub struct {
@@ -27,11 +30,15 @@ type StreamHub struct {
 	closedStates []*stream.State // 保存已经关闭的连接状态（环形缓冲区，最多保留 maxClosedStates 条）
 	closedSeq    int64           // 累计写入 closedStates 的记录数（单调递增，作为增量拉取的游标）
 	closedMut    sync.RWMutex
+
+	// detachRetention 仅在 Serve 前写入（init/SetDetachRetention），运行期只读
+	detachRetention time.Duration
 }
 
 func (hub *StreamHub) init(host *Node, portm *idpool.Pool) {
 	hub.host = host
 	hub.portm = portm
+	hub.detachRetention = DefaultDetachRetention
 }
 
 func (hub *StreamHub) attachStream(s *stream.Stream, sid uint64) error {
@@ -90,22 +97,50 @@ func (hub *StreamHub) scheduleStreamCleanup(sid uint64, s *stream.Stream) {
 		}
 		hub.recordClosedState(s.GetState())
 	}
-	if DetachRetention <= 0 {
+	retention := hub.detachRetention
+	if retention <= 0 {
 		doCleanup()
 		return
 	}
-	time.AfterFunc(DetachRetention, doCleanup)
+	time.AfterFunc(retention, doCleanup)
 }
 
 func (hub *StreamHub) closeAllStreams() {
 	hub.streams.Range(func(key, value interface{}) bool {
 		if s, ok := value.(*stream.Stream); ok {
+			// 节点关闭统一预设原因（first-wins，不被 CloseRead/CloseWrite 的 "local" 覆盖）
+			s.SetCloseReason("node")
 			s.CloseRead()
 			s.CloseWrite()
 		}
 		hub.streams.Delete(key)
 		return true
 	})
+}
+
+// closeStreamByIndex 按 State.Index 查找活跃流并关闭（手动关闭，CloseReason 记为 "manual"）。
+// 已完全关闭但仍在滞留期内的流视为未找到，返回 false。
+func (hub *StreamHub) closeStreamByIndex(index int32) bool {
+	var target *stream.Stream
+	hub.streams.Range(func(key, value interface{}) bool {
+		s, ok := value.(*stream.Stream)
+		if !ok {
+			return true
+		}
+		st := s.GetState()
+		if st.Index == index && !st.IsClosed {
+			target = s
+			return false
+		}
+		return true
+	})
+	if target == nil {
+		return false
+	}
+	target.SetCloseReason("manual")
+	target.CloseRead()
+	target.CloseWrite()
+	return true
 }
 
 func (hub *StreamHub) GetStreamStates() []*stream.State {

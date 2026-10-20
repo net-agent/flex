@@ -77,20 +77,18 @@ func TestInspect(t *testing.T) {
 }
 
 func TestTraceStreamOpenClosed(t *testing.T) {
-	old := DetachRetention
-	DetachRetention = 0
-	defer func() { DetachRetention = old }()
-
 	type counter struct {
 		opens  int32
 		closes int32
 	}
 	var c1, c2 counter
 
-	// 手工建对连节点，以便在 Serve 之前注入 Trace
+	// 手工建对连节点，以便在 Serve 之前注入 Trace 并关闭滞留期
 	pc1, pc2 := packet.Pipe()
 	n1 := New(pc1)
 	n2 := New(pc2)
+	n1.SetDetachRetention(0)
+	n2.SetDetachRetention(0)
 	n1.SetDomain("trace1")
 	n1.SetIP(1)
 	n2.SetDomain("trace2")
@@ -383,4 +381,14 @@ func TestHeartbeatLastRTT(t *testing.T) {
 
 	n.heartbeat.setLastRTT(123 * time.Millisecond)
 	assert.Equal(t, 123*time.Millisecond, n.Inspect().Heartbeat.LastRTT, "snapshot should expose last probed RTT")
+}
+
+func TestGetLastRTT(t *testing.T) {
+	n := New(nil)
+	defer n.Close()
+
+	assert.Equal(t, time.Duration(0), n.GetLastRTT(), "未测量过时返回 0")
+
+	n.heartbeat.setLastRTT(123 * time.Millisecond)
+	assert.Equal(t, 123*time.Millisecond, n.GetLastRTT(), "应返回最近一次心跳测得的 RTT")
 }

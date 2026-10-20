@@ -18,3 +18,8 @@ func (h *Heartbeat) setLastRTT(rtt time.Duration) {
 func (h *Heartbeat) lastRTT() time.Duration {
 	return time.Duration(h.lastRTTNano.Load())
 }
+
+// GetLastRTT 返回最近一次心跳测量的到中转节点的 RTT；未测量过时返回 0
+func (node *Node) GetLastRTT() time.Duration {
+	return node.heartbeat.lastRTT()
+}
