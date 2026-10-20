@@ -64,6 +64,9 @@ func (s *Stream) HandleAckPushStreamData(pbuf *packet.Buffer) {
 // * 由于对端已经请求关闭，所以本地应该尽快关闭write状态，并告知对面
 func (s *Stream) HandleCmdCloseStream(pbuf *packet.Buffer) {
 	atomic.AddInt32(&s.state.RecvBufferCount, 1)
+	// 关闭由对端发起，预设原因（first-wins，不被后续 CloseRead/CloseWrite 的 "local" 覆盖）
+	s.SetCloseReason("remote")
+
 	// step1：响应对端的close请求，停止继续读数据
 	s.CloseRead()
 

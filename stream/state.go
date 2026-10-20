@@ -11,6 +11,10 @@ type State struct {
 	Created  time.Time `json:"created"`
 	Closed   time.Time `json:"closed"`
 
+	ReadClosed  bool   `json:"read_closed"`            // 读方向已关闭（半关闭状态）
+	WriteClosed bool   `json:"write_closed"`           // 写方向已关闭（半关闭状态）
+	CloseReason string `json:"close_reason,omitempty"` // 关闭原因：manual/local/remote/node
+
 	Direction    Direction `json:"direction"` // 1=outbound(local→remote)，2=inbound(remote→local)
 	LocalDomain  string    `json:"local_domain"`
 	LocalAddr    Addr      `json:"local_addr"`
@@ -61,4 +65,10 @@ func (a *Addr) SetIPPort(ip, port uint16) {
 	a.text = fmt.Sprintf("%v:%v", ip, port)
 	a.IP = ip
 	a.Port = port
+}
+
+// NewAddr 以文本形式构造 Addr，供外部组件合成 State（非 flex 连接的观测适配）。
+// IP/Port 字段无法从文本可靠解析时保持零值。
+func NewAddr(network, text string) Addr {
+	return Addr{network: network, text: text}
 }

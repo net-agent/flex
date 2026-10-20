@@ -64,3 +64,31 @@ func TestAddrStruct(t *testing.T) {
 	assert.Equal(t, port, a.Port)
 	assert.Equal(t, "1234:5678", a.String())
 }
+
+func TestNewAddr(t *testing.T) {
+	a := NewAddr("tcp", "1.2.3.4:80")
+	assert.Equal(t, "tcp", a.Network())
+	assert.Equal(t, "1.2.3.4:80", a.String())
+	// 文本无法可靠解析为 uint16 时 IP/Port 保持零值
+	assert.Equal(t, uint16(0), a.IP)
+	assert.Equal(t, uint16(0), a.Port)
+}
+
+func TestStateMarshalCloseFields(t *testing.T) {
+	st := State{
+		ReadClosed:  true,
+		WriteClosed: true,
+		CloseReason: "manual",
+	}
+	buf, err := json.Marshal(&st)
+	assert.Nil(t, err)
+	s := string(buf)
+	assert.Contains(t, s, `"read_closed":true`)
+	assert.Contains(t, s, `"write_closed":true`)
+	assert.Contains(t, s, `"close_reason":"manual"`)
+
+	// omitempty：无原因时不输出该字段
+	buf, err = json.Marshal(&State{})
+	assert.Nil(t, err)
+	assert.NotContains(t, string(buf), "close_reason")
+}

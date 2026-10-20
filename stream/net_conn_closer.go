@@ -49,6 +49,9 @@ func (s *Stream) CloseRead() error {
 	s.readClosed = true
 	close(s.recvQueue)
 	s.rchanMu.Unlock()
+
+	// 本地主动关闭默认记为 "local"；若已被预设（remote/node/manual）则保持首次赋值
+	s.SetCloseReason("local")
 	s.markReadClosed()
 
 	return nil
@@ -73,6 +76,9 @@ func (s *Stream) CloseWrite() error {
 	// Signal blocked Write to wake up immediately (P1 fix)
 	close(s.closeCh)
 	s.writeMu.Unlock()
+
+	// 本地主动关闭默认记为 "local"；若已被预设（remote/node/manual）则保持首次赋值
+	s.SetCloseReason("local")
 
 	// Best effort: also interrupt an in-flight blocking send.
 	s.sender.InterruptWrite()

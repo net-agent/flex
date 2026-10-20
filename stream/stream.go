@@ -73,12 +73,21 @@ func (s *Stream) GetState() *State {
 	st.IsClosed = s.state.IsClosed
 	st.Created = s.state.Created
 	st.Closed = s.state.Closed
+	st.CloseReason = s.state.CloseReason
 	st.Direction = s.state.Direction
 	st.LocalDomain = s.state.LocalDomain
 	st.LocalAddr = s.state.LocalAddr
 	st.RemoteDomain = s.state.RemoteDomain
 	st.RemoteAddr = s.state.RemoteAddr
 	s.stateMu.RUnlock()
+
+	s.rchanMu.RLock()
+	st.ReadClosed = s.readClosed
+	s.rchanMu.RUnlock()
+
+	s.writeMu.Lock()
+	st.WriteClosed = s.writeClosed
+	s.writeMu.Unlock()
 
 	st.SentBufferCount = atomic.LoadInt32(&s.state.SentBufferCount)
 	st.RecvBufferCount = atomic.LoadInt32(&s.state.RecvBufferCount)

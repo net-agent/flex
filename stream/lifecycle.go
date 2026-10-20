@@ -17,6 +17,19 @@ func (s *Stream) SetOnDetach(fn func()) {
 	s.tryOnDetach()
 }
 
+// SetCloseReason 记录流的关闭原因，首次赋值生效（first-wins），后续调用被忽略。
+// 原因仅在流完全关闭后具有观测意义，但允许在关闭前预设
+// （如节点关闭、手动关闭场景先预设原因再走 CloseRead/CloseWrite）。
+// 本地主动关闭路径（Close/CloseRead/CloseWrite）会默认记录 "local"，
+// 已被预设的原因不会被其覆盖。
+func (s *Stream) SetCloseReason(reason string) {
+	s.stateMu.Lock()
+	if s.state.CloseReason == "" {
+		s.state.CloseReason = reason
+	}
+	s.stateMu.Unlock()
+}
+
 func (s *Stream) markReadClosed() {
 	s.markClosed(closeMaskRead)
 }

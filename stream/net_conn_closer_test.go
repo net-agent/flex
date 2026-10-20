@@ -218,3 +218,61 @@ func TestBidirectionalSimultaneousClose(t *testing.T) {
 	}
 	assert.GreaterOrEqual(t, nilCount, 1, "at least one side should close gracefully")
 }
+
+// --- 关闭原因与半关闭状态观测 ---
+
+func TestGetStateCloseFields(t *testing.T) {
+	s := New(&mockWriter{}, 0)
+
+	st := s.GetState()
+	assert.False(t, st.ReadClosed)
+	assert.False(t, st.WriteClosed)
+	assert.Equal(t, "", st.CloseReason)
+
+	// 半关闭：只关读方向
+	err := s.CloseRead()
+	assert.Nil(t, err)
+	st = s.GetState()
+	assert.True(t, st.ReadClosed)
+	assert.False(t, st.WriteClosed)
+	assert.Equal(t, "local", st.CloseReason)
+
+	// 完全关闭
+	err = s.CloseWrite()
+	assert.Nil(t, err)
+	st = s.GetState()
+	assert.True(t, st.ReadClosed)
+	assert.True(t, st.WriteClosed)
+	assert.Equal(t, "local", st.CloseReason)
+}
+
+func TestCloseReasonLocal(t *testing.T) {
+	s1, _ := Pipe()
+	err := s1.Close()
+	assert.Nil(t, err)
+	assert.Equal(t, "local", s1.GetState().CloseReason)
+}
+
+func TestCloseReasonRemote(t *testing.T) {
+	s1, s2 := Pipe()
+
+	err := s1.Close()
+	assert.Nil(t, err)
+
+	// 等待对端的 HandleCmdCloseStream 处理完成
+	time.Sleep(testShortTimeout)
+	st := s2.GetState()
+	assert.True(t, st.IsClosed)
+	assert.Equal(t, "remote", st.CloseReason)
+}
+
+func TestCloseReasonFirstWins(t *testing.T) {
+	s := New(&mockWriter{}, 0)
+
+	// 关闭前预设，后续本地关闭路径的 "local" 不应覆盖
+	s.SetCloseReason("manual")
+	s.SetCloseReason("node") // 第二次赋值被忽略
+	assert.Nil(t, s.CloseRead())
+	assert.Nil(t, s.CloseWrite())
+	assert.Equal(t, "manual", s.GetState().CloseReason)
+}
