@@ -99,6 +99,7 @@ func (w *Watcher) subscribe(op byte, timeout time.Duration, domains ...string) (
 	defer w.pending.Remove(port)
 
 	pbuf := packet.NewBufferWithCmd(packet.CmdSubscribePresence)
+	defer packet.PutBuffer(pbuf)
 	pbuf.SetSrc(w.host.GetIP(), port)
 	pbuf.SetDist(packet.SwitcherIP, 0)
 	req := packet.SubscribeRequest{Op: op, Domains: domains}

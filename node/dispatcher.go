@@ -111,15 +111,30 @@ func (d *Dispatcher) processCmdChan() {
 		} else {
 			d.host.logger.Warn("unknown cmd", "cmd", pbuf.Cmd(), "header", pbuf.HeaderString(), "domain", d.host.domain)
 		}
+		// 命令类处理器只做同步解析/就地应答，不保留 buffer 所有权。
+		// 统一在此归还，使读路径的 payload 数组可以在池中复用。
+		packet.PutBuffer(pbuf)
 	}
 }
 
 func (d *Dispatcher) processDataChan() {
 	for pbuf := range d.dataChan {
-		if handler, ok := d.dataHandlers[pbuf.Cmd()]; ok {
+		// 必须在调用 handler 前捕获命令字：
+		// handler 可能消费 buffer（数据包入队/合并后就地归还，Head 被清零），
+		// 若在返回后再读 pbuf.Cmd() 会读到 0，导致同一 buffer 被二次归还，
+		// 池中出现重复所有权、并发读写同一 Buffer。
+		cmd := pbuf.Cmd()
+
+		if handler, ok := d.dataHandlers[cmd]; ok {
 			handler(pbuf)
 		} else {
-			d.host.logger.Warn("unknown cmd", "cmd", pbuf.Cmd(), "header", pbuf.HeaderString(), "domain", d.host.domain)
+			d.host.logger.Warn("unknown cmd", "cmd", cmd, "header", pbuf.HeaderString(), "domain", d.host.domain)
+		}
+
+		// CmdPushStreamData 的所有权已转移给接收队列（由流在消费后归还），
+		// 其余数据命令（OpenAck/Close/CloseAck）在处理器内同步消费完毕，在此归还。
+		if cmd != packet.CmdPushStreamData {
+			packet.PutBuffer(pbuf)
 		}
 	}
 }

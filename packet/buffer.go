@@ -106,7 +106,7 @@ func (buf *Buffer) WriteTo(w io.Writer) (total int64, err error) {
 	n, err := w.Write(buf.Head[:])
 	total += int64(n)
 	if err != nil {
-		return total, ErrWriteHeaderFailed
+		return total, fmt.Errorf("%w: %w", ErrWriteHeaderFailed, err)
 	}
 
 	if len(buf.Payload) == 0 {
@@ -116,7 +116,7 @@ func (buf *Buffer) WriteTo(w io.Writer) (total int64, err error) {
 	n, err = w.Write(buf.Payload)
 	total += int64(n)
 	if err != nil {
-		return total, ErrWritePayloadFailed
+		return total, fmt.Errorf("%w: %w", ErrWritePayloadFailed, err)
 	}
 
 	return total, nil

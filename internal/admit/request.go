@@ -44,6 +44,7 @@ func (req *Request) WriteTo(pc packet.Conn, password string) error {
 		return err
 	}
 	pbuf := packet.NewBufferWithCmd(packet.CmdAdmit)
+	defer packet.PutBuffer(pbuf)
 	randomFillHeader(pbuf)
 	if err := pbuf.SetPayload(ciphertext); err != nil {
 		return err

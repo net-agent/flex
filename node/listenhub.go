@@ -120,21 +120,24 @@ func (hub *ListenHub) handleCmdOpenStream(pbuf *packet.Buffer) {
 
 	req := packet.DecodeOpenStreamRequest(pbuf.Payload)
 	remoteDomain := req.Domain
-	remoteWindowSize := int32(req.WindowSize)
 
 	if remoteDomain == "" && pbuf.SrcIP() == hub.host.ip {
 		remoteDomain = hub.host.domain
 	}
 
-	// Negotiate Window Size
-	localWindowSize := hub.host.getWindowSize()
-	negotiatedWindowSize = localWindowSize // Default to local
-	if remoteWindowSize > 0 {
-		if localWindowSize <= 0 || remoteWindowSize < localWindowSize {
-			negotiatedWindowSize = remoteWindowSize
+	// Negotiate Window Size：双方都使用确定值，取较小者。
+	// 对端请求值超过硬上限时按上限处理，防止恶意请求撑大本端发送窗口。
+	localWindowSize := hub.host.effectiveWindowSize()
+	negotiatedWindowSize = localWindowSize
+	if req.WindowSize > 0 {
+		remoteWindowSize := req.WindowSize
+		if remoteWindowSize > uint32(stream.MaxWindowSize) {
+			remoteWindowSize = uint32(stream.MaxWindowSize)
+		}
+		if int32(remoteWindowSize) < localWindowSize {
+			negotiatedWindowSize = int32(remoteWindowSize)
 		}
 	}
-	// If both are 0, NewAcceptStream will handle default
 
 	s := stream.NewAcceptStream(
 		hub.host,

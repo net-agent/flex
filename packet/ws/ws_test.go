@@ -2,6 +2,8 @@ package ws
 
 import (
 	"bytes"
+	"encoding/binary"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -127,6 +129,116 @@ func TestReader_BadDataType(t *testing.T) {
 
 	_, err := pc.ReadBuffer()
 	assert.Equal(t, ErrBadDataType, err)
+}
+
+// 回归：长度小于 11 字节的二进制帧曾直接 data[:11] 切片，触发
+// "slice bounds out of range" 打崩进程。必须以错误返回而非 panic。
+func TestReader_ShortFrame(t *testing.T) {
+	for _, size := range []int{0, 1, 3, 10} {
+		t.Run(fmt.Sprintf("len=%d", size), func(t *testing.T) {
+			client, server := rawWSPair(t)
+			defer client.Close()
+			defer server.Close()
+
+			pc := NewConn(client)
+			go func() {
+				_ = server.WriteMessage(websocket.BinaryMessage, make([]byte, size))
+			}()
+
+			_, err := pc.ReadBuffer()
+			assert.ErrorIs(t, err, ErrShortFrame)
+		})
+	}
+}
+
+// 回归：头部 Size 与实际 payload 不一致时，若放行会在转发到 TCP 对端时
+// 造成字节流错位（对端按头部长度读取）。
+func TestReader_FrameSizeMismatch(t *testing.T) {
+	client, server := rawWSPair(t)
+	defer client.Close()
+	defer server.Close()
+
+	pc := NewConn(client)
+
+	// 头部声明 payload=5，实际只带 2 字节
+	frame := make([]byte, packet.HeaderSz+2)
+	copy(frame, []byte("hello"))
+	frame[0] = packet.CmdPushStreamData
+	binary.BigEndian.PutUint16(frame[9:11], 5)
+
+	go func() {
+		_ = server.WriteMessage(websocket.BinaryMessage, frame)
+	}()
+
+	_, err := pc.ReadBuffer()
+	assert.ErrorIs(t, err, ErrBadFrameSize)
+}
+
+// AckPushStreamData 的 [9:11] 是 ACK 计数，帧里不允许再带 payload。
+func TestReader_AckDataWithPayload(t *testing.T) {
+	client, server := rawWSPair(t)
+	defer client.Close()
+	defer server.Close()
+
+	pc := NewConn(client)
+
+	frame := make([]byte, packet.HeaderSz+1)
+	frame[0] = packet.AckPushStreamData
+	binary.BigEndian.PutUint16(frame[9:11], 1234)
+
+	go func() {
+		_ = server.WriteMessage(websocket.BinaryMessage, frame)
+	}()
+
+	_, err := pc.ReadBuffer()
+	assert.ErrorIs(t, err, ErrBadFrameSize)
+}
+
+// 超大帧必须被读限截断，而不是无限分配内存。
+func TestReader_OversizeFrame(t *testing.T) {
+	client, server := rawWSPair(t)
+	defer client.Close()
+	defer server.Close()
+
+	pc := NewConn(client)
+
+	go func() {
+		_ = server.WriteMessage(websocket.BinaryMessage, make([]byte, MaxFrameSize+1))
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := pc.ReadBuffer()
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		assert.Error(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("oversize frame was not rejected")
+	}
+}
+
+func TestReader_ValidFrameAfterValidation(t *testing.T) {
+	client, server := rawWSPair(t)
+	defer client.Close()
+	defer server.Close()
+
+	pc := NewConn(client)
+
+	src := packet.NewBufferWithCmd(packet.CmdPushStreamData)
+	src.SetHeader(packet.CmdPushStreamData, 1, 2, 3, 4)
+	require.NoError(t, src.SetPayload([]byte("payload")))
+
+	go func() {
+		_ = server.WriteMessage(websocket.BinaryMessage, append(src.Head[:], src.Payload...))
+	}()
+
+	got, err := pc.ReadBuffer()
+	require.NoError(t, err)
+	assert.Equal(t, src.Head, got.Head)
+	assert.Equal(t, src.Payload, got.Payload)
 }
 
 func TestReader_ReadTimeout(t *testing.T) {

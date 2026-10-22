@@ -41,12 +41,13 @@ To create a node, you need an underlying `packet.Conn` (which wraps a `net.Conn`
 import (
     "github.com/net-agent/flex/v3/node"
     "github.com/net-agent/flex/v3/packet"
+    "github.com/net-agent/flex/v3/packet/ws"
 )
 
 // Wrap your physical connection
 pconn := packet.NewWithConn(netConn)
 // or for WebSocket
-// pconn := packet.NewWithWs(wsConn)
+// pconn := ws.NewConn(wsConn)
 
 // Create Node
 n := node.New(pconn)
@@ -313,3 +314,55 @@ go http.ListenAndServe(":9091", nil)
 
 See `examples/ws-gate` for a working example exposing `GetStats()` and
 `GetClients()` of a Switcher as `/api/stats` and `/api/clients`.
+
+---
+
+## Deployment & Security
+
+### Confidentiality
+
+`flex` encrypts **only the admission handshake** (AES-GCM, password-derived key)
+so that the shared password never crosses the wire in clear text. Stream data,
+control packets and presence events are sent as plain text. In other words:
+
+> `flex` is a multiplexing/relay layer, not a VPN. For any untrusted network,
+> wrap the physical connection with TLS (`tls.Listener` + `tls.Dial`, or `wss://`).
+
+### Resource limits (Switcher)
+
+The Switcher bounds connection floods, stream floods, presence subscription
+storms and handshake brute force with generous defaults:
+
+```go
+srv := switcher.NewServer(password, nil, nil)
+srv.SetLimits(switcher.Limits{          // call before Serve
+    MaxConnections:           4096,
+    MaxStreamsPerContext:     8192,
+    MaxPresenceSubscriptions: 1024,
+    HandshakeRatePerIP:       20,       // tokens per second
+    HandshakeBurstPerIP:      40,
+})
+```
+
+`0` disables the corresponding limit. Every node may only use its own assigned
+virtual IP as source address; packets with a spoofed `SrcIP` are dropped.
+
+### Canceling the connect phase
+
+`Session` is lazy-connecting. The legacy `ConnectFunc` cannot be interrupted
+mid-dial, so provide a context-aware connector when you need prompt shutdown:
+
+```go
+sess := node.NewSession(nil, cfg)
+sess.SetContextConnector(func(ctx context.Context) (packet.Conn, error) {
+    d := net.Dialer{Timeout: 5 * time.Second}
+    c, err := d.DialContext(ctx, "tcp", addr)
+    if err != nil {
+        return nil, err
+    }
+    return packet.NewWithConn(c), nil
+})
+go sess.Serve()
+```
+
+`Close()` cancels the context and also interrupts an in-flight handshake.

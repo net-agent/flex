@@ -46,7 +46,7 @@ import (
 // 包装物理连接
 pconn := packet.NewWithConn(netConn)
 // 或者用于 WebSocket
-// pconn := packet.NewWithWs(wsConn)
+// pconn := ws.NewConn(wsConn)
 
 // 创建 Node
 n := node.New(pconn)
@@ -307,3 +307,53 @@ go http.ListenAndServe(":9091", nil)
 
 `examples/ws-gate` 中有完整示例，将 Switcher 的 `GetStats()` 与
 `GetClients()` 暴露为 `/api/stats` 和 `/api/clients`。
+
+---
+
+## 部署与安全
+
+### 机密性边界
+
+`flex` 只对**接入握手**做加密（AES-GCM，密钥由共享口令派生），口令不会明文过网。
+握手之后的流数据、控制包与 presence 事件都是明文。也就是说：
+
+> `flex` 是多路复用/中继层，不是 VPN。任何不可信网络都应在外层套 TLS
+> （`tls.Listener` + `tls.Dial`，或 `wss://`）。
+
+### 资源限制（Switcher）
+
+Switcher 对连接洪水、流洪水、订阅风暴与握手爆破做了配额，默认值宽松但有效：
+
+```go
+srv := switcher.NewServer(password, nil, nil)
+srv.SetLimits(switcher.Limits{          // 必须在 Serve 之前调用
+    MaxConnections:           4096,
+    MaxStreamsPerContext:     8192,
+    MaxPresenceSubscriptions: 1024,
+    HandshakeRatePerIP:       20,       // 每秒令牌数
+    HandshakeBurstPerIP:      40,
+})
+```
+
+字段为 `0` 表示该维度不限制。每个节点只能使用分配给自己的虚拟 IP 作为源地址，
+伪造 `SrcIP` 的数据包会被丢弃。
+
+### 取消建连
+
+`Session` 是懒连接。旧的 `ConnectFunc` 无法中断正在进行的拨号，
+需要及时关闭时请使用支持 context 的连接器：
+
+```go
+sess := node.NewSession(nil, cfg)
+sess.SetContextConnector(func(ctx context.Context) (packet.Conn, error) {
+    d := net.Dialer{Timeout: 5 * time.Second}
+    c, err := d.DialContext(ctx, "tcp", addr)
+    if err != nil {
+        return nil, err
+    }
+    return packet.NewWithConn(c), nil
+})
+go sess.Serve()
+```
+
+`Close()` 会取消该 context，并中断进行中的握手。

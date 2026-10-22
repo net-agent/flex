@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 
@@ -32,11 +33,14 @@ func routeCmd(h Handler, ch chan *packet.Buffer) {
 	for pbuf := range ch {
 		switch pbuf.Cmd() {
 		case packet.CmdPushStreamData:
+			// 数据包所有权转移给流，由流负责归还
 			h.HandleCmdPushStreamData(pbuf)
 		case packet.CmdCloseStream:
 			h.HandleCmdCloseStream(pbuf)
+			packet.PutBuffer(pbuf)
 		default:
 			slog.Warn("unexpected pbuf cmd", "header", pbuf.HeaderString())
+			packet.PutBuffer(pbuf)
 		}
 	}
 }
@@ -45,10 +49,13 @@ func routeAck(h Handler, ch chan *packet.Buffer) {
 		switch pbuf.Cmd() {
 		case packet.AckPushStreamData:
 			h.HandleAckPushStreamData(pbuf)
+			packet.PutBuffer(pbuf)
 		case packet.AckCloseStream:
 			h.HandleAckCloseStream(pbuf)
+			packet.PutBuffer(pbuf)
 		default:
 			slog.Warn("unexpected pbuf ack", "header", pbuf.HeaderString())
+			packet.PutBuffer(pbuf)
 		}
 	}
 }
@@ -62,7 +69,7 @@ func demuxPackets(cmdCh, ackCh chan *packet.Buffer, pc packet.Reader) {
 	for {
 		pbuf, err := pc.ReadBuffer()
 		if err != nil {
-			if err != io.EOF {
+			if !errors.Is(err, io.EOF) {
 				slog.Warn("demuxPackets read error", "error", err)
 			}
 			return

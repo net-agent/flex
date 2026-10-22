@@ -2,8 +2,10 @@ package node
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
+	"runtime/debug"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -174,6 +176,21 @@ func (node *Node) getWindowSize() int32 {
 	return 0 // uses default in stream package
 }
 
+// effectiveWindowSize 返回本端实际使用的流控窗口：未配置时取默认值，
+// 并钳制到协议硬上限。Dial 请求必须携带该确定值，而不是 0——
+// 否则双方对"0 的含义"理解不一致（本地默认 vs 对端默认）会导致窗口不对称，
+// 接收端缓冲上限小于发送端窗口时会误触发溢出保护。
+func (node *Node) effectiveWindowSize() int32 {
+	w := node.getWindowSize()
+	if w <= 0 {
+		w = stream.DefaultWindowSize
+	}
+	if w > stream.MaxWindowSize {
+		w = stream.MaxWindowSize
+	}
+	return w
+}
+
 //
 // 面向用户的转发方法：底层能力由 listenHub/dialer/pinger/streamHub 提供
 //
@@ -269,12 +286,22 @@ func (node *Node) CloseStream(index int32) bool {
 }
 
 // Serve 启动节点的读循环、分发与心跳，阻塞直到连接断开或 Close 被调用。
-func (node *Node) Serve() error {
-	err := node.dispatcher.start()
-	if err != nil {
+//
+// 读循环直接处理来自网络的不可信字节，必须对输入驱动的 panic 兜底，
+// 否则一条畸形连接即可打崩进程。recover 只覆盖 Serve 所在的 goroutine
+// （读循环与调用栈上的 handler）；dispatcher/heartbeat 等派生 goroutine
+// 中的 panic 不在覆盖范围内，仍应作为 bug 暴露。
+func (node *Node) Serve() (err error) {
+	if err = node.dispatcher.start(); err != nil {
 		return err
 	}
 	defer node.Close()
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("node: recovered from panic: %v", r)
+			node.logger.Error("panic recovered in Node.Serve", "panic", r, "stack", string(debug.Stack()))
+		}
+	}()
 
 	go node.dispatcher.processCmdChan()
 	go node.dispatcher.processDataChan()
@@ -311,9 +338,20 @@ func (node *Node) Close() error {
 // WriteBuffer 实现 packet.Writer，供 stream 层及包内组件写入协议包。
 // DistIP 为本机或未设置时包会被就地分发，否则写入底层连接。
 // 该方法属于协议内部实现，业务代码不应直接调用。
+//
+// 所有权约定：与 packet.Writer 一致——返回后调用方仍持有 pbuf，
+// 可立即归还池子。本地分发是异步的，因此在此处复制一份交给 dispatcher。
 func (node *Node) WriteBuffer(pbuf *packet.Buffer) error {
 	if pbuf.DistIP() == 0 || pbuf.DistIP() == node.ip {
-		node.dispatcher.dispatch(pbuf)
+		clone := packet.GetBuffer()
+		clone.Head = pbuf.Head
+		clone.Payload = append(clone.Payload[:0], pbuf.Payload...)
+		// 本地分发沿用既有的 fire-and-forget 语义：节点未运行时包被丢弃，
+		// 由调用方（Dial/Ping）各自的超时机制兜底；失败时自行归还克隆体。
+		if err := node.dispatcher.dispatch(clone); err != nil {
+			packet.PutBuffer(clone)
+			return nil
+		}
 		return nil
 	}
 	if node.pconn == nil {

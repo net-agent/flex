@@ -4,6 +4,8 @@ flex 是一个基于单条 TCP/WebSocket 连接的虚拟网络多路复用库。
 
 整体分层自底向上为：**Transport → Packet → Fair 调度 → Switcher → Node → Stream → Session**。
 
+> 交互式可视化：[FairConn 调度可视化](fairconn_visualizer.html) —— 写路径架构、调度模拟，以及 C（包数）/ A（字节 DRR）/ B（成本计费）参数的同场对比，可直接离线打开。
+
 ## 分层架构总览
 
 ```
@@ -47,7 +49,7 @@ type Conn interface {
 
 两种实现：
 - **TCP** — `NewWithConn(net.Conn)` → 内部使用 `connReader` / `connWriter`
-- **WebSocket** — `NewWithWs(*websocket.Conn)` → 内部使用 `wsReader` / `wsWriter`
+- **WebSocket** — `ws.NewConn(*websocket.Conn)` → 内部使用 `wsReader` / `wsWriter`
 
 TCP 写入支持 `WriteBufferBatch`，利用 `net.Buffers`（writev）减少系统调用。
 
@@ -165,18 +167,23 @@ type Node struct {
 发送端                                接收端
   │                                    │
   │  bucketSz > 0 ?                    │
-  │  是 → 发送 CmdPushStreamData ────→ │  写入 bytesChan
+  │  是 → 发送 CmdPushStreamData ────→ │  append 到字节有界接收队列
   │       bucketSz -= len(data)        │
   │                                    │  应用层 Read() 消费数据
-  │  ←── AckPushStreamData(n) ─────────│  回复已消费字节数
+  │  ←── AckPushStreamData(n) ─────────│  ACK 合批（64KB 或 10ms）
   │  bucketSz += n                     │
   │  bucketSz ≤ 0 ?                    │
   │  是 → 阻塞等待 bucketEv 信号       │
 ```
 
-- **窗口大小**：默认 `DefaultBucketSize = 2MB`，Dial/Accept 时双方协商取较小值
-- **分片**：Write 自动按 `DefaultSplitSize = 63KB` 分片
-- **bytesChan**：缓冲 channel，容量 = `4 × windowSize / splitSize`
+- **窗口大小**：默认 `DefaultWindowSize = 2MB`，Dial/Accept 时双方显式协商取较小值，
+  并被 `MaxWindowSize = 16MB` 钳制（防止恶意对端指定超大窗口）。
+- **分片**：Write 自动按 `DefaultSplitSize = 16KB` 分片。
+- **接收队列**：容量按字节计（等于协商窗口），大包零拷贝、小包合并进 16KB chunk；
+  入队永不阻塞。队满只可能来自违反窗口约定的对端，此时主动发送 `CmdCloseStream`
+  并关闭两端（fail-loud），不会静默丢包。
+- **ACK 合批**：每条流最多一个 ACK 发送 goroutine，按 64KB 阈值或 10ms 窗口合并，
+  避免"一次 Read 一个 goroutine + 一个 ACK 包"的放大。
 
 ### 关闭握手
 
@@ -237,7 +244,7 @@ Session.Serve()
     │←─ AckOpenStream ─────────│                          │
     │  创建 Stream              │                          │
     │                          │                          │
-    │═ CmdPushStreamData ═════→│═════════════════════════→│  写入 bytesChan
+    │═ CmdPushStreamData ═════→│═════════════════════════→│  写入接收队列
     │                          │                          │  Read() 消费
     │←═ AckPushStreamData ═════│←═════════════════════════│  回复 DataACK
     │  bucketSz += n           │                          │

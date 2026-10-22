@@ -237,60 +237,89 @@ func TestAppendRecordPruning(t *testing.T) {
 	}
 }
 
-func TestAcquireDomainRace(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping slow acquireDomain race test")
-	}
-
+// 域名在 ping 探测期间被第三方接管时，本次 attach 必须放弃而不是覆盖新持有者
+// （旧实现会在 else 分支直接覆盖域名槽位，并泄漏被替换 ctx 的 ipIndex 条目）。
+func TestAttachRace_DomainTakenDuringProbe(t *testing.T) {
 	s := NewServer("", nil, nil)
+	s.registry.domainPingTimeout = 100 * time.Millisecond
 
-	// 创建 context A，使用真实 conn 使 ping 能写入但永远收不到回复（超时）
+	// ctxA 持有域名但不应答 ping（net.Pipe 对端不读，写阻塞至超时）
 	connA, connB := packet.Pipe()
+	defer connA.Close()
+	defer connB.Close()
 	ctxA := NewContext(1, connA, "test", "", nil)
 	ctxA.IP = 10
 	ctxA.setAttached(true)
-
 	s.registry.domainMu.Lock()
 	s.registry.domainIndex["test"] = ctxA
 	s.registry.domainMu.Unlock()
 
-	// connB 端只读不回复，使 ping 超时
+	// 在 ping 进行中，用 ctxC 抢占域名槽位
+	ctxC := NewContext(3, nil, "test", "", nil)
+	ctxC.setAttached(true)
 	go func() {
-		for {
-			if _, err := connB.ReadBuffer(); err != nil {
-				return
-			}
-		}
-	}()
-
-	// 在 ping 进行中，用 ctxC 替换 domain 槽位，制造竞态
-	ctxC := &Context{id: 3, Domain: "test"}
-	go func() {
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 		s.registry.domainMu.Lock()
 		s.registry.domainIndex["test"] = ctxC
 		s.registry.domainMu.Unlock()
 	}()
 
-	// ctxB 尝试获取 domain "test"
 	ctxB := NewContext(2, nil, "test", "", nil)
-	prev, ok := s.registry.acquireDomain(ctxB)
+	err := s.registry.attach(ctxB)
+	if err != errReplaceDomainFailed {
+		t.Fatalf("expected errReplaceDomainFailed, got %v", err)
+	}
 
-	if !ok {
-		t.Error("expected acquireDomain to succeed")
-	}
-	// prev 应该是最初检查时的 ctxA
-	if prev != ctxA {
-		t.Errorf("expected prev=ctxA, got id=%v", prev.id)
-	}
-	// domain 槽位应该指向 ctxB
 	s.registry.domainMu.Lock()
 	current := s.registry.domainIndex["test"]
 	s.registry.domainMu.Unlock()
-	if current != ctxB {
-		t.Error("expected domain to point to ctxB after race")
+	if current != ctxC {
+		t.Error("domain slot must stay with the context that took it over")
+	}
+	if ctxB.isAttached() || ctxB.IP != 0 {
+		t.Error("losing attach must not register the new context")
+	}
+}
+
+// 回归：域名替换路径中 IP 曾被 detach 与 attach 各释放一次。
+// 现在 IP 由租约持有，替换后池内占用数必须与活跃 ctx 数一致。
+func TestAttachReplace_ReleasesIPOnce(t *testing.T) {
+	s := NewServer("", nil, nil)
+	s.registry.domainPingTimeout = 50 * time.Millisecond
+
+	conn1, peer1 := packet.Pipe()
+	defer peer1.Close()
+	ctx1 := NewContext(1, conn1, "dup", "", nil)
+	if err := s.registry.attach(ctx1); err != nil {
+		t.Fatalf("attach ctx1 failed: %v", err)
+	}
+	ip1 := ctx1.IP
+
+	// 让 ctx1 的存活探测失败
+	ctx1.release()
+
+	ctx2 := NewContext(2, nil, "dup", "", nil)
+	if err := s.registry.attach(ctx2); err != nil {
+		t.Fatalf("attach ctx2 failed: %v", err)
 	}
 
-	connA.Close()
-	connB.Close()
+	if got := s.registry.ipm.InUse(); got != 1 {
+		t.Fatalf("expected exactly 1 IP in use after replace, got %d", got)
+	}
+	s.registry.ipMu.Lock()
+	_, staleIP := s.registry.ipIndex[ip1]
+	curIP := s.registry.ipIndex[ctx2.IP]
+	s.registry.ipMu.Unlock()
+	if staleIP {
+		t.Error("replaced context must be removed from ipIndex")
+	}
+	if curIP != ctx2 {
+		t.Error("new context must own its ipIndex slot")
+	}
+	s.registry.domainMu.Lock()
+	curDomain := s.registry.domainIndex["dup"]
+	s.registry.domainMu.Unlock()
+	if curDomain != ctx2 {
+		t.Error("domain slot must point to the new context")
+	}
 }

@@ -103,3 +103,10 @@ func (w *failOnCmdWriter) WriteBuffer(buf *packet.Buffer) error {
 }
 
 func (w *failOnCmdWriter) SetWriteTimeout(dur time.Duration) {}
+
+// pushData 模拟收到一个数据包（走真实 handler 路径，便于测试所有权与入队语义）。
+func pushData(s *Stream, payload []byte) {
+	buf := packet.NewBufferWithCmd(packet.CmdPushStreamData)
+	_ = buf.SetPayload(payload)
+	s.HandleCmdPushStreamData(buf)
+}

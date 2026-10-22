@@ -62,8 +62,9 @@ func (d *Dialer) DialDomain(domain string, port uint16) (*stream.Stream, error) 
 	pbuf.SetCmd(packet.CmdOpenStream)
 	pbuf.SetSrc(d.host.GetIP(), 0)
 	pbuf.SetDist(packet.SwitcherIP, port)
-	req := packet.OpenStreamRequest{Domain: domain, WindowSize: uint32(d.host.getWindowSize())}
+	req := packet.OpenStreamRequest{Domain: domain, WindowSize: uint32(d.host.effectiveWindowSize())}
 	_ = pbuf.SetPayload(req.Encode())
+	defer packet.PutBuffer(pbuf)
 	return d.dialPbuf(pbuf)
 }
 
@@ -73,13 +74,16 @@ func (d *Dialer) DialIP(ip, port uint16) (*stream.Stream, error) {
 	pbuf.SetCmd(packet.CmdOpenStream)
 	pbuf.SetSrc(d.host.GetIP(), 0)
 	pbuf.SetDist(ip, port)
-	req := packet.OpenStreamRequest{WindowSize: uint32(d.host.getWindowSize())}
+	req := packet.OpenStreamRequest{WindowSize: uint32(d.host.effectiveWindowSize())}
 	_ = pbuf.SetPayload(req.Encode())
+	defer packet.PutBuffer(pbuf)
 	return d.dialPbuf(pbuf)
 }
 
-// DialPbuf dial的底层实现
-// 注意：pbuf里的srcPort还需要在writeBuffer前进行确认
+// dialPbuf 是 Dial 的底层实现。
+// 注意：pbuf 里的 srcPort 还需要在 WriteBuffer 前进行确认。
+// 所有权约定与 packet.Writer 一致：pbuf 仍归调用方所有，
+// dialPbuf 不负责归还（由 DialDomain/DialIP 统一 defer Put）。
 func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 	remoteDomain := packet.DecodeOpenStreamRequest(pbuf.Payload).Domain
 	if remoteDomain == "" {
@@ -117,7 +121,7 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 	err = d.host.WriteBuffer(pbuf)
 	if err != nil {
 		atomic.AddInt64(&d.host.failures.DialWriteFailed, 1)
-		return nil, ErrWriteDialPbufFailed
+		return nil, fmt.Errorf("%w: %w", ErrWriteDialPbufFailed, err)
 	}
 
 	// 第四步：等待ack返回（设置超时时间）
@@ -141,6 +145,17 @@ func (d *Dialer) dialPbuf(pbuf *packet.Buffer) (*stream.Stream, error) {
 	}
 }
 
+// negotiateWindow 钳制对端应答的窗口值。
+// 合法对端返回 min(双方本地窗口) <= 本端请求值；超出即视为异常输入，
+// 回落到本端有效窗口，避免按对端指定的超大值分配接收缓冲。
+func (d *Dialer) negotiateWindow(raw uint32) int32 {
+	local := d.host.effectiveWindowSize()
+	if raw == 0 || raw > uint32(local) {
+		return local
+	}
+	return int32(raw)
+}
+
 func (d *Dialer) handleAckOpenStream(pbuf *packet.Buffer) {
 	evKey := pbuf.DistPort()
 	ack := packet.DecodeOpenStreamACK(pbuf.Payload)
@@ -153,7 +168,7 @@ func (d *Dialer) handleAckOpenStream(pbuf *packet.Buffer) {
 		return
 	}
 
-	negotiatedWindowSize := int32(ack.WindowSize)
+	negotiatedWindowSize := d.negotiateWindow(ack.WindowSize)
 
 	//
 	// create and bind stream

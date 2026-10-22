@@ -94,8 +94,15 @@ func TestHandleCmdOpenErr(t *testing.T) {
 	assert.Nil(t, err)
 	assert.NotNil(t, s)
 
-	//用重复的pbuf去创建连接，触发attachStream错误
-	n1.WriteBuffer(pbuf)
+	// 用相同的 SID 再次发起 Open，触发 attachStream 错误。
+	// dialPbuf 不接管所有权，但这里用新对象避免与在途 ack 共享状态。
+	dup := packet.NewBuffer()
+	dup.SetCmd(packet.CmdOpenStream)
+	dup.SetDist(packet.SwitcherIP, 80)
+	dup.SetSrc(1, 1000)
+	_ = dup.SetPayload([]byte("test2"))
+	_ = n1.WriteBuffer(dup)
+	packet.PutBuffer(dup)
 }
 
 func TestAcceptErr(t *testing.T) {

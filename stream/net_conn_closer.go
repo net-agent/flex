@@ -14,6 +14,7 @@ var (
 
 func (s *Stream) Close() error {
 	// 1. Ensure absolute resource cleanup locally
+	defer s.recv.discard() // 应用主动关闭：未读数据不再承诺可读，归还缓冲池
 	defer s.CloseRead()
 
 	// 2. Mark Write as closed locally
@@ -40,15 +41,29 @@ func (s *Stream) Close() error {
 }
 
 func (s *Stream) CloseRead() error {
+	return s.closeRead(false)
+}
+
+// closeRead 关闭读方向。
+//
+// discard=true 表示应用/节点主动放弃读取：未消费的接收数据直接归还缓冲池
+// （与 net.Conn 语义一致，Close 后不再承诺可读）。
+// discard=false 用于对端主动发送 Close 的场景：对端可能"先发数据、后发 Close"，
+// 缓冲区中尚未读走的数据必须保留，由应用继续读取直到 EOF。
+func (s *Stream) closeRead(discard bool) error {
 	s.rchanMu.Lock()
 	if s.readClosed {
 		s.rchanMu.Unlock()
 		return ErrReaderIsClosed
 	}
-
 	s.readClosed = true
-	close(s.recvQueue)
 	s.rchanMu.Unlock()
+
+	s.recv.close()
+	s.acks.stop()
+	if discard {
+		s.recv.discard()
+	}
 
 	// 本地主动关闭默认记为 "local"；若已被预设（remote/node/manual）则保持首次赋值
 	s.SetCloseReason("local")

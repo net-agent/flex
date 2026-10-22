@@ -2,10 +2,11 @@ package stream
 
 import (
 	"io"
-	"math"
 	"sync/atomic"
 )
 
+// Read 实现 net.Conn。数据来自按字节有界的接收队列，
+// ACK 由 ackTracker 合批后异步发送，不再每次 Read 派生 goroutine。
 func (s *Stream) Read(dist []byte) (int, error) {
 	s.readMu.Lock()
 	defer s.readMu.Unlock()
@@ -13,84 +14,62 @@ func (s *Stream) Read(dist []byte) (int, error) {
 	if len(dist) == 0 {
 		return 0, nil
 	}
+	s.ensureAckFlusher()
 
-	total := 0
-
-	copyFromReadBuf := func() {
-		if len(s.readBuf) == 0 || total >= len(dist) {
-			return
+	for {
+		n, err := s.recv.read(dist)
+		if n > 0 {
+			atomic.AddInt64(&s.state.BytesRead, int64(n))
+			s.acks.add(n)
+			return n, nil
 		}
-		n := copy(dist[total:], s.readBuf)
-		total += n
-		s.readBuf = s.readBuf[n:]
-	}
-
-	for total == 0 {
-		copyFromReadBuf()
-		if total > 0 {
-			break
+		if err != nil {
+			return 0, err
 		}
 
 		select {
-		case buf, ok := <-s.recvQueue:
-			if !ok {
-				return 0, io.EOF
-			}
-			s.readBuf = buf
-
+		case <-s.recv.notify:
+			// 有新数据，回到循环顶部重新尝试
+		case <-s.recv.done:
+			// 读侧关闭：回到顶部排空剩余数据，随后返回 io.EOF
 		case <-s.readDeadline.Done():
 			// Could be a real timeout OR a deadline reset (Set closed old channel).
 			// Re-read Done(): if the NEW channel is still closed → real timeout.
 			// If the new channel is open → deadline was reset, retry.
-			select {
-			case <-s.readDeadline.Done():
+			if s.isReadDeadlineExceeded() {
 				return 0, ErrTimeout
-			default:
-				continue
 			}
 		}
 	}
-
-	for total < len(dist) {
-		copyFromReadBuf()
-		if total >= len(dist) || len(s.readBuf) > 0 {
-			continue
-		}
-
-		select {
-		case buf, ok := <-s.recvQueue:
-			if !ok {
-				goto ACK
-			}
-			s.readBuf = buf
-		default:
-			goto ACK
-		}
-	}
-
-ACK:
-	atomic.AddInt64(&s.state.BytesRead, int64(total))
-	if total > 0 {
-		// TODO(low-priority): ACK is sent in a goroutine per Read call.
-		// Under extreme slow-network conditions this can accumulate goroutines.
-		// Keep current behavior for simplicity; optimize later if needed.
-		go func(n int) {
-			remaining := n
-			for remaining > 0 {
-				chunk := remaining
-				if chunk > math.MaxUint16 {
-					chunk = math.MaxUint16
-				}
-
-				err := s.sender.SendDataAck(uint16(chunk))
-				if err != nil {
-					s.logger.Warn("SendDataAck failed", "error", err.Error())
-					return
-				}
-				atomic.AddInt64(&s.state.SentAckTotal, int64(chunk))
-				remaining -= chunk
-			}
-		}(total)
-	}
-	return total, nil
 }
+
+// ensureAckFlusher 惰性启动每条流的 ACK 合并 goroutine。
+// 从未发生过 Read 的流不会产生这个 goroutine。
+func (s *Stream) ensureAckFlusher() {
+	s.ackOnce.Do(func() {
+		go s.acks.loop()
+	})
+}
+
+// isReadDeadlineExceeded performs double-read to distinguish true timeout
+// from deadline-reset wakeups (old done channel closed by Set()).
+func (s *Stream) isReadDeadlineExceeded() bool {
+	select {
+	case <-s.readDeadline.Done():
+		select {
+		case <-s.readDeadline.Done():
+			return true
+		default:
+			return false
+		}
+	default:
+		return false
+	}
+}
+
+// available 返回当前可读字节数，供测试与观测使用。
+func (s *Stream) available() int {
+	return s.recv.pending()
+}
+
+var _ io.Reader = (*Stream)(nil)

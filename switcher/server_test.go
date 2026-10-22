@@ -1,8 +1,10 @@
 package switcher
 
 import (
+	"errors"
 	"log"
 	"net"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -136,7 +138,7 @@ func TestHandlePCErr_WriteResponse(t *testing.T) {
 	}()
 
 	err := s.ServeConn(pc2)
-	if err != errHandlePCWriteFailed {
+	if !errors.Is(err, errHandlePCWriteFailed) {
 		t.Errorf("unexpected err=%v\n", err)
 		return
 	}
@@ -214,4 +216,51 @@ func TestServerCloseReleasesClients(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Errorf("expected registry emptied after Close, got %v", len(s.registry.activeContexts()))
+}
+
+// 回归：NewContext 会启动 runForwardLoop，attach 失败/应答写失败路径
+// 若直接 return 而不 release，每次失败都会永久泄漏一个 goroutine 与 Context。
+func TestServeConn_NoGoroutineLeakOnFailure(t *testing.T) {
+	pswd := "testpswd"
+	s := NewServer(pswd, nil, nil)
+	defer s.Close()
+
+	runOnce := func() {
+		pc1, pc2 := packet.Pipe()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			var req admit.Request
+			req.Domain = "leak-probe"
+			req.Version = packet.VERSION
+			req.Timestamp = time.Now().UnixNano()
+			req.Sum = req.CalcSum(pswd)
+			if err := req.WriteTo(pc1, pswd); err != nil {
+				return
+			}
+			// 服务端应答前断开，触发 response 写失败路径
+			pc1.Close()
+		}()
+		_ = s.ServeConn(pc2)
+		<-done
+	}
+
+	// 预热一轮，排除运行时内部 goroutine 的首次分配
+	runOnce()
+	time.Sleep(50 * time.Millisecond)
+	base := runtime.NumGoroutine()
+
+	const rounds = 30
+	for i := 0; i < rounds; i++ {
+		runOnce()
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if runtime.NumGoroutine() <= base+3 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("goroutine leak: base=%d now=%d, failed rounds=%d", base, runtime.NumGoroutine(), rounds)
 }

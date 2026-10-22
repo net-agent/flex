@@ -126,6 +126,8 @@ ln, err := sess.Listen(80)
 
 关于详细的使用方法、配置和 API 参考，请参阅 **[开发者手册](docs/manual_zh.md)**。
 
+- **[FairConn 调度可视化](docs/fairconn_visualizer.html)** —— 单文件交互页：写路径架构、实时调度模拟、C/A/B 策略同场对比。
+
 ## 状态查询 API
 
 Node 和 Switcher 都以编程方式暴露运行时状态：
@@ -156,6 +158,15 @@ clients := srv.GetClients() // 在线节点：域名、IP、流数量、流量�
 ```
 
 Session 通过 `GetState()`、`GetLastErr()`、`GetReconnectCount()` 和 `OnStateChange()` 暴露连接生命周期，并提供 `SetLogger`/`SetTrace`，会在每次重连重建 Node 时自动注入，配置跨重连存活。详见[开发者手册](docs/manual_zh.md#可观测性)。
+
+## 安全与限制
+
+`flex` 只加密接入握手，流数据是明文。请把它当作多路复用/中继层而不是 VPN：
+在不可信网络上应在外层套 TLS（`tls.Listener` / `tls.Dial` 或 `wss://`）。
+
+Switcher 按 `switcher.Limits` 拒绝超额的连接、流与 presence 订阅（可用 `SetLimits` 调整），
+按 IP 限制握手速率，并丢弃源地址与认证节点不一致的数据包。
+详见[部署与安全](docs/manual_zh.md#部署与安全)。
 
 ## 许可证
 

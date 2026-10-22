@@ -47,6 +47,7 @@ func (p *Pinger) PingDomain(domain string, timeout time.Duration) (time.Duration
 	pingStart := time.Now()
 
 	pbuf := packet.NewBuffer()
+	defer packet.PutBuffer(pbuf)
 	pbuf.SetCmd(packet.CmdPingDomain)
 	pbuf.SetSrc(p.host.GetIP(), port)
 	pbuf.SetDist(packet.SwitcherIP, 0) // 忽略
@@ -73,13 +74,18 @@ func (p *Pinger) PingDomain(domain string, timeout time.Duration) (time.Duration
 	}
 }
 
-// handleCmdPingDomain 处理远端的PingDomain请求
+// handleCmdPingDomain 处理远端的PingDomain请求。
+//
+// 空域名为通用存活探测（心跳使用）：任何节点都应应答 OK，
+// 而不是返回 "domain not match"。直连模式没有 switcher，心跳正是靠
+// 对端应答这一分支存活；旧实现在直连下会在首个心跳周期后误判断链。
 func (p *Pinger) handleCmdPingDomain(pbuf *packet.Buffer) {
 	if p.ignorePing {
 		p.host.logger.Warn("ignore ping request", "srcip", pbuf.SrcIP())
 		return
 	}
-	if string(pbuf.Payload) != p.host.domain {
+	probeDomain := string(pbuf.Payload)
+	if probeDomain != "" && probeDomain != p.host.domain {
 		_ = pbuf.SetPayload([]byte("domain not match"))
 	} else {
 		_ = pbuf.SetPayload(nil)

@@ -1,8 +1,8 @@
 package stream
 
 import (
+	"errors"
 	"sync/atomic"
-	"time"
 
 	"github.com/net-agent/flex/v3/packet"
 )
@@ -17,39 +17,53 @@ type Handler interface {
 	HandleAckCloseStream(pbuf *packet.Buffer)
 }
 
-// HandleCmdPushStreamData 处理对端发送过来的数据包
+// HandleCmdPushStreamData 处理对端发送过来的数据包。
+//
+// 所有权约定：本方法总是消费 pbuf（成功入队由流负责归还，
+// 失败在本方法内归还），调用方不得再访问 pbuf。
+//
+// 入队永不阻塞，因此单条慢流的接收积压不会拖住 dispatcher goroutine，
+// 也就不会阻塞同一节点上的其他流（队头阻塞）。
 func (s *Stream) HandleCmdPushStreamData(pbuf *packet.Buffer) {
 	atomic.AddInt32(&s.state.RecvBufferCount, 1)
-	s.rchanMu.RLock()
-	defer s.rchanMu.RUnlock()
 
-	if s.readClosed {
-		s.logger.Info("stream closed")
+	size := len(pbuf.Payload)
+	if size == 0 {
+		s.logger.Debug("drop empty data packet", "sid", pbuf.SIDStr())
+		packet.PutBuffer(pbuf)
 		return
 	}
 
-	if pbuf.PayloadSize() <= 0 {
-		s.logger.Info("payload is empty")
+	if err := s.recv.append(pbuf); err != nil {
+		packet.PutBuffer(pbuf)
+		switch {
+		case errors.Is(err, errRecvClosed):
+			// 读侧已关闭：对端很快会收到 Close/CloseAck，丢弃即可
+			s.logger.Debug("drop data packet on closed stream", "sid", pbuf.SIDStr())
+		case errors.Is(err, ErrRecvBufferFull):
+			// 对端在窗口之外继续发送（或本地对端实现有 bug）。
+			// 静默丢包会造成两端窗口记账永久不一致，必须主动关闭并通知对端。
+			s.logger.Error("recv buffer overflow, closing stream",
+				"sid", pbuf.SIDStr(), "buffered", s.recv.pending(), "limit", s.recv.limit)
+			s.failOnce.Do(func() { go s.failClose() })
+		}
 		return
 	}
 
-	timer := time.NewTimer(s.recvPushTimeout)
-	defer timer.Stop()
+	atomic.AddInt64(&s.state.RecvDataSize, int64(size))
+}
 
-	select {
-	case s.recvQueue <- pbuf.Payload:
-		atomic.AddInt64(&s.state.RecvDataSize, int64(pbuf.PayloadSize()))
-		return
-	case <-timer.C:
-		s.logger.Error("append data timeout, closing stream to prevent window desync")
-		// 数据丢失会导致流控窗口不一致（发送端窗口无法恢复），
-		// 必须主动关闭 stream 让两端都能感知异常。
-		go func() {
-			s.CloseWrite()
-			s.CloseRead()
-		}()
-		return
+// failClose 在检测到协议级异常时主动断开并向对端发送 Close，
+// 让两端都能感知失败，而不是一方静默丢弃数据、另一方继续写入。
+func (s *Stream) failClose() {
+	if s.logger != nil {
+		s.logger.Warn("closing stream on protocol error", "reason", "overflow")
 	}
+	s.SetCloseReason("overflow")
+	_ = s.sender.SendClose()
+	_ = s.CloseWrite()
+	_ = s.CloseRead()
+	s.recv.discard()
 }
 
 func (s *Stream) HandleAckPushStreamData(pbuf *packet.Buffer) {
@@ -67,14 +81,16 @@ func (s *Stream) HandleCmdCloseStream(pbuf *packet.Buffer) {
 	// 关闭由对端发起，预设原因（first-wins，不被后续 CloseRead/CloseWrite 的 "local" 覆盖）
 	s.SetCloseReason("remote")
 
-	// step1：响应对端的close请求，停止继续读数据
-	s.CloseRead()
+	// step1：响应对端的close请求，停止继续读数据。
+	// 注意：对端可能"先发数据、后发 Close"，此时缓冲区里的数据仍应可读，
+	// 因此这里不能丢弃未消费数据（discard=false）。
+	_ = s.closeRead(false)
 
 	// step2：停止继续写入
-	s.CloseWrite()
+	_ = s.CloseWrite()
 
 	// step3：回复closeAck，让对端停止读取
-	s.sender.SendCloseAck()
+	_ = s.sender.SendCloseAck()
 }
 
 func (s *Stream) HandleAckCloseStream(pbuf *packet.Buffer) {

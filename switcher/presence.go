@@ -64,6 +64,10 @@ type presenceCenter struct {
 	offlineTTL time.Duration // offline 条目在无订阅者时的保留时长
 	sweepEvery time.Duration // 淘汰清扫周期
 
+	// maxSubscriptions 是单节点订阅域名数量上限（0=不限），
+	// 由 Server 的 Limits 注入；使用 atomic 以便在 Serve 前调整。
+	maxSubscriptions atomic.Int32
+
 	// 以下字段仅由 run() goroutine 访问，无需加锁
 	state    map[string]presenceEntry       // domain → 节点信息（快照数据源）
 	subs     map[uint16]*presenceSub        // subscriber IP → 订阅关系
@@ -247,8 +251,8 @@ func (pc *presenceCenter) fanout(msg presenceMsg, version uint64, online bool) {
 }
 
 func (pc *presenceCenter) handleSubscribeMsg(msg presenceMsg) {
-	sub, ok := pc.subs[msg.subCtx.IP]
-	if !ok {
+	sub, existed := pc.subs[msg.subCtx.IP]
+	if !existed {
 		sub = &presenceSub{ctx: msg.subCtx, domains: make(map[string]struct{})}
 		pc.subs[msg.subCtx.IP] = sub
 	} else {
@@ -258,6 +262,24 @@ func (pc *presenceCenter) handleSubscribeMsg(msg presenceMsg) {
 	ack := packet.SubscribeACK{OK: true}
 	switch msg.op {
 	case packet.SubscribeAdd:
+		// 订阅配额：域名数量是每个节点可无限增长的唯一控制面状态，
+		// 不设上限时单个客户端即可撑大 watchers 倒排索引与扇出成本。
+		if max := int(pc.maxSubscriptions.Load()); max > 0 {
+			add := 0
+			for _, d := range msg.domains {
+				if _, ok := sub.domains[d]; !ok {
+					add++
+				}
+			}
+			if len(sub.domains)+add > max {
+				if !existed {
+					delete(pc.subs, msg.subCtx.IP)
+				}
+				pc.replySubscribeACK(msg.subCtx, msg.ackPort,
+					packet.SubscribeACK{OK: false, Error: "subscription quota exceeded"})
+				return
+			}
+		}
 		for _, d := range msg.domains {
 			sub.domains[d] = struct{}{}
 			set, ok := pc.watchers[d]

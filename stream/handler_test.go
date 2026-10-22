@@ -1,6 +1,7 @@
 package stream
 
 import (
+	"io"
 	"sync"
 	"testing"
 	"time"
@@ -10,10 +11,11 @@ import (
 )
 
 func TestHandleCmdData(t *testing.T) {
-	t.Run("empty payload is ignored", func(t *testing.T) {
-		s1, _ := Pipe()
+	t.Run("empty payload is dropped", func(t *testing.T) {
+		s := New(&mockWriter{}, 0)
 		emptyBuf := packet.NewBufferWithCmd(packet.CmdPushStreamData)
-		s1.HandleCmdPushStreamData(emptyBuf)
+		s.HandleCmdPushStreamData(emptyBuf)
+		assert.Equal(t, 0, s.available())
 	})
 
 	t.Run("write to closed stream is ignored", func(t *testing.T) {
@@ -21,18 +23,62 @@ func TestHandleCmdData(t *testing.T) {
 		err := s2.Close()
 		assert.Nil(t, err)
 
-		s1.HandleCmdPushStreamData(packet.NewBufferWithCmd(packet.CmdPushStreamData))
+		buf := packet.NewBufferWithCmd(packet.CmdPushStreamData)
+		_ = buf.SetPayload([]byte("late"))
+		s1.HandleCmdPushStreamData(buf)
+		assert.Equal(t, 0, s1.available())
 	})
 }
 
-func TestHandleCmdData_AppendTimeout(t *testing.T) {
-	s := New(nil, 0)
-	pbuf := packet.NewBufferWithCmd(packet.CmdPushStreamData)
-	pbuf.SetPayload([]byte("hello"))
+// 旧实现在接收队列满时阻塞 dispatcher goroutine 最多 2s 后静默关闭，
+// 导致发送端无感知地继续写、数据永久丢失。新实现：append 永不阻塞，
+// 超限只可能来自违反窗口的对端，并且必须主动向对端发送 Close。
+func TestHandleCmdData_OverflowFailsLoud(t *testing.T) {
+	fw := &recordingWriter{}
+	s := New(fw, 1) // recv limit 被钳制到 DefaultSplitSize
+	defer s.CloseRead()
 
-	s.recvQueue = make(chan []byte)
-	s.recvPushTimeout = testMedTimeout
-	s.HandleCmdPushStreamData(pbuf)
+	full := packet.NewBufferWithCmd(packet.CmdPushStreamData)
+	assert.NoError(t, full.SetPayload(make([]byte, DefaultSplitSize)))
+	s.HandleCmdPushStreamData(full)
+	assert.Equal(t, DefaultSplitSize, s.available())
+
+	// 超出上限：不应阻塞，也不应静默丢弃
+	over := packet.NewBufferWithCmd(packet.CmdPushStreamData)
+	assert.NoError(t, over.SetPayload([]byte("x")))
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.HandleCmdPushStreamData(over)
+	}()
+	select {
+	case <-done:
+	case <-time.After(testLongTimeout):
+		t.Fatal("HandleCmdPushStreamData blocked on full buffer")
+	}
+
+	// failClose 异步执行：等待 Close 包写出 & 双向关闭
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if isReadClosed(s) && isWriteClosed(s) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	assert.True(t, isReadClosed(s), "overflow must close read side")
+	assert.True(t, isWriteClosed(s), "overflow must close write side")
+	assert.Equal(t, "overflow", s.GetState().CloseReason)
+
+	fw.mu.Lock()
+	sentClose := false
+	for _, h := range fw.bufs {
+		if h[0] == packet.CmdCloseStream {
+			sentClose = true
+		}
+	}
+	fw.mu.Unlock()
+	assert.True(t, sentClose, "peer must be notified with CmdCloseStream")
 }
 
 func TestHandleAckData(t *testing.T) {
@@ -61,6 +107,26 @@ func TestHandleCmdCloseStream(t *testing.T) {
 	assert.True(t, isWriteClosed(s), "wclosed should be true")
 }
 
+// 对端"先发数据、后发 Close"时，缓冲中的数据必须仍可读（不能被 Close 丢弃）。
+func TestHandleCmdCloseStream_KeepsBufferedData(t *testing.T) {
+	s := New(&mockWriter{}, 0)
+
+	data := packet.NewBufferWithCmd(packet.CmdPushStreamData)
+	assert.NoError(t, data.SetPayload([]byte("tail-data")))
+	s.HandleCmdPushStreamData(data)
+
+	s.HandleCmdCloseStream(packet.NewBufferWithCmd(packet.CmdCloseStream))
+
+	buf := make([]byte, 32)
+	n, err := s.Read(buf)
+	assert.NoError(t, err)
+	assert.Equal(t, "tail-data", string(buf[:n]))
+
+	n, err = s.Read(buf)
+	assert.Equal(t, 0, n)
+	assert.Equal(t, io.EOF, err)
+}
+
 func TestHandleAckCloseStream_DuplicateAck(t *testing.T) {
 	s := New(&mockWriter{}, 0)
 	pbuf := packet.NewBufferWithCmd(packet.AckCloseStream)
@@ -81,51 +147,36 @@ func TestConcurrentHandleCmdPushStreamData(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			pbuf := packet.NewBufferWithCmd(packet.CmdPushStreamData)
-			pbuf.SetPayload([]byte("concurrent"))
+			_ = pbuf.SetPayload([]byte("concurrent"))
 			s.HandleCmdPushStreamData(pbuf)
 		}()
 	}
 	wg.Wait()
+
+	assert.Equal(t, goroutines*len("concurrent"), s.available())
 }
 
-// --- 缺口补充：HandleCmdPushStreamData + CloseRead 软死锁 ---
-
-func TestHandleCmdPushStreamData_CloseReadWhileChannelFull(t *testing.T) {
-	// 验证当 bytesChan 满时，CloseRead 不会被 HandleCmdPushStreamData 长时间阻塞
+// 新实现中 append 不阻塞，因此 CloseRead 不会被在途数据包拖延。
+func TestHandleCmdPushStreamData_CloseReadNotBlocked(t *testing.T) {
 	s := New(&mockWriter{}, 0)
-	s.recvPushTimeout = testMedTimeout
-	// 填满 bytesChan
-	for i := 0; i < cap(s.recvQueue); i++ {
-		s.recvQueue <- []byte("fill")
+
+	// 持续投递，直到缓冲区接近上限
+	fill := packet.NewBufferWithCmd(packet.CmdPushStreamData)
+	assert.NoError(t, fill.SetPayload(make([]byte, DefaultSplitSize)))
+	for i := 0; i < 8; i++ {
+		s.HandleCmdPushStreamData(fill)
+		fill = packet.NewBufferWithCmd(packet.CmdPushStreamData)
+		assert.NoError(t, fill.SetPayload(make([]byte, DefaultSplitSize)))
 	}
 
-	// 启动一个 handler，它会阻塞在 bytesChan 发送上
-	handlerDone := make(chan struct{})
-	go func() {
-		defer close(handlerDone)
-		pbuf := packet.NewBufferWithCmd(packet.CmdPushStreamData)
-		pbuf.SetPayload([]byte("blocked"))
-		s.HandleCmdPushStreamData(pbuf)
-	}()
-
-	// CloseRead 应该在 appendDataTimeout 内完成（handler 释放 RLock 后）
 	closeDone := make(chan error, 1)
-	go func() {
-		closeDone <- s.CloseRead()
-	}()
+	go func() { closeDone <- s.CloseRead() }()
 
 	select {
 	case err := <-closeDone:
-		assert.Nil(t, err)
-	case <-time.After(s.recvPushTimeout + testLongTimeout):
-		t.Fatal("CloseRead blocked too long — soft deadlock detected")
-	}
-
-	// handler 也应该退出
-	select {
-	case <-handlerDone:
+		assert.NoError(t, err)
 	case <-time.After(testLongTimeout):
-		t.Fatal("HandleCmdPushStreamData did not exit after CloseRead")
+		t.Fatal("CloseRead blocked by in-flight appends")
 	}
 }
 
@@ -137,7 +188,7 @@ func TestHandlerStateCounters(t *testing.T) {
 	// 发送 3 个数据包
 	for i := 0; i < 3; i++ {
 		pbuf := packet.NewBufferWithCmd(packet.CmdPushStreamData)
-		pbuf.SetPayload([]byte("12345")) // 5 bytes each
+		_ = pbuf.SetPayload([]byte("12345")) // 5 bytes each
 		s.HandleCmdPushStreamData(pbuf)
 	}
 
@@ -169,7 +220,7 @@ func TestHandleCmdCloseStream_SendCloseAckFails(t *testing.T) {
 	assert.True(t, isWriteClosed(s), "wclosed should be true even if SendCmdCloseAck fails")
 }
 
-// --- C1: currBuf 不超过 MaxPayloadSize 防御性验证 ---
+// --- C1: 接收数据不超过 MaxPayloadSize 防御性验证 ---
 
 func TestHandleCmdPushStreamData_PayloadBoundedByMaxPayloadSize(t *testing.T) {
 	s := New(&mockWriter{}, 0)
@@ -181,14 +232,12 @@ func TestHandleCmdPushStreamData_PayloadBoundedByMaxPayloadSize(t *testing.T) {
 	assert.Nil(t, err)
 	s.HandleCmdPushStreamData(pbuf)
 
-	// 从 bytesChan 取出，验证长度
-	select {
-	case buf := <-s.recvQueue:
-		assert.Equal(t, packet.MaxPayloadSize, len(buf),
-			"payload in bytesChan should be exactly MaxPayloadSize")
-	default:
-		t.Fatal("bytesChan should have one entry")
-	}
+	assert.Equal(t, packet.MaxPayloadSize, s.available())
+
+	buf := make([]byte, packet.MaxPayloadSize)
+	n, err := s.Read(buf)
+	assert.Nil(t, err)
+	assert.Equal(t, packet.MaxPayloadSize, n)
 
 	// 超过 MaxPayloadSize 的 payload 应该被 SetPayload 拒绝
 	overPayload := make([]byte, packet.MaxPayloadSize+1)

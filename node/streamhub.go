@@ -193,13 +193,15 @@ func (hub *StreamHub) GetClosedStates(pos int64) ([]*stream.State, int64) {
 	return result, seq
 }
 
-// 处理数据包
+// 处理数据包。所有权总是被消费：找到流则交给流（消费后归还），
+// 找不到则在本地归还，避免读路径的 payload 数组泄漏给 GC。
 func (hub *StreamHub) handleCmdPushStreamData(pbuf *packet.Buffer) {
 	c, err := hub.getStream(pbuf.SID())
 	if err != nil {
 		if hub.host != nil {
-			hub.host.logger.Warn("push data: stream not found, possibly closed", "sid", pbuf.SID(), "header", pbuf.HeaderString())
+			hub.host.logger.Warn("push data: stream not found, possibly closed", "sid", pbuf.SIDStr())
 		}
+		packet.PutBuffer(pbuf)
 		return
 	}
 
@@ -226,7 +228,8 @@ func (hub *StreamHub) handleCmdCloseStream(pbuf *packet.Buffer) {
 			ack := packet.NewBufferWithCmd(packet.AckCloseStream)
 			ack.SetSrc(pbuf.DistIP(), pbuf.DistPort())
 			ack.SetDist(pbuf.SrcIP(), pbuf.SrcPort())
-			hub.host.WriteBuffer(ack)
+			_ = hub.host.WriteBuffer(ack)
+			packet.PutBuffer(ack)
 		}
 		return
 	}

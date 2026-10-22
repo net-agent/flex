@@ -153,3 +153,55 @@ func TestConcurrentAllocateRelease(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// 回归：资源所有权在超时路径与关闭路径之间竞争时，第二次释放会归还
+// 已被重新分配的同号 ID。租约必须保证幂等。
+func TestLeaseReleaseIdempotent(t *testing.T) {
+	p, _ := New(1, 1)
+
+	old, err := p.Acquire()
+	if err != nil {
+		t.Fatalf("acquire failed: %v", err)
+	}
+	if old.ID() != 1 {
+		t.Fatalf("expected id 1, got %d", old.ID())
+	}
+	if err := old.Release(); err != nil {
+		t.Fatalf("release failed: %v", err)
+	}
+	if !old.Released() {
+		t.Fatal("lease should be marked released")
+	}
+
+	cur, err := p.Acquire()
+	if err != nil {
+		t.Fatalf("re-acquire failed: %v", err)
+	}
+	if cur.ID() != 1 {
+		t.Fatalf("expected id 1, got %d", cur.ID())
+	}
+
+	// 迟到的第二次释放不得影响当前持有者
+	if err := old.Release(); err != nil {
+		t.Fatalf("repeat release should be no-op, got %v", err)
+	}
+	if p.InUse() != 1 {
+		t.Fatalf("repeat release freed an ID owned by another lease: in_use=%d", p.InUse())
+	}
+	if _, err := p.Allocate(); err != ErrPoolExhausted {
+		t.Fatalf("expected pool exhausted, got %v", err)
+	}
+	if cur.Released() {
+		t.Fatal("current lease must not be released")
+	}
+}
+
+func TestLeaseNilSafe(t *testing.T) {
+	var l *Lease
+	if err := l.Release(); err != nil {
+		t.Fatalf("nil lease release should be no-op, got %v", err)
+	}
+	if l.ID() != 0 || !l.Released() {
+		t.Fatal("nil lease should report zero id and released state")
+	}
+}

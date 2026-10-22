@@ -27,13 +27,13 @@
 package node
 
 import (
+	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"sync"
 	"testing"
 	"time"
-
-	"net"
 
 	"github.com/net-agent/flex/v3/internal/admit"
 	"github.com/net-agent/flex/v3/packet"
@@ -1224,4 +1224,98 @@ func TestSessionDispatchPresence(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, uint64(3), st.Version)
 	assert.True(t, st.Online)
+}
+
+// ---------------- 建连阶段取消 ----------------
+
+// Connect 阶段必须能被 Close 立即取消（ContextConnector 变体）。
+func TestSessionCloseCancelsContextConnect(t *testing.T) {
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	s := NewSession(nil, testSessionConfig())
+	s.SetContextConnector(func(ctx context.Context) (packet.Conn, error) {
+		close(started)
+		<-ctx.Done()
+		close(canceled)
+		return nil, ctx.Err()
+	})
+
+	s.ensureServing() // Session 是懒连接，需先触发
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- s.Serve() }()
+	<-started
+	s.Close()
+
+	select {
+	case <-serveDone:
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not return after Close during connect")
+	}
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("connector context was not canceled")
+	}
+	assert.Equal(t, SessionClosed, s.GetState())
+}
+
+// Handshake 阶段必须能被 Close 中断，而不是卡到 10s 握手超时。
+func TestSessionCloseInterruptsHandshake(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+
+	s := NewSession(func() (packet.Conn, error) {
+		return packet.NewWithConn(client), nil
+	}, testSessionConfig())
+
+	s.ensureServing() // Session 是懒连接，需先触发
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- s.Serve() }()
+
+	// 等待进入握手（连接已建立、无对端应答）
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) && s.GetState() != SessionConnecting {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	start := time.Now()
+	s.Close()
+	select {
+	case <-serveDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Serve did not return after Close during handshake")
+	}
+	assert.Less(t, time.Since(start), time.Second, "handshake must be interrupted promptly")
+}
+
+// 连接器在 Close 之后才返回时，不得安装一个无人关闭的 Node。
+func TestSessionCloseAfterConnectorDoesNotInstallNode(t *testing.T) {
+	release := make(chan struct{})
+	client, peer := packet.Pipe()
+
+	s := NewSession(func() (packet.Conn, error) {
+		<-release
+		return client, nil
+	}, testSessionConfig())
+
+	s.ensureServing() // Session 是懒连接，需先触发
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- s.Serve() }()
+	time.Sleep(20 * time.Millisecond)
+	s.Close()
+	close(release)
+
+	select {
+	case <-serveDone:
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not return")
+	}
+	assert.Nil(t, s.GetNode(), "node must not be installed after Close")
+
+	// 连接应已被关闭：对端读取应立即失败而不是阻塞
+	peer.SetReadTimeout(200 * time.Millisecond)
+	if _, err := peer.ReadBuffer(); err == nil {
+		t.Fatal("connection should be closed after abort")
+	}
 }

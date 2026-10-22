@@ -333,5 +333,5 @@ func TestDialBuffErr_timeoutAndWriteFailed(t *testing.T) {
 	// portm(2)
 	pbuf.SetDistIP(1) // 会通过pipe发送，触发writetimeout
 	_, err = d1.dialPbuf(pbuf)
-	assert.Equal(t, ErrWriteDialPbufFailed, err)
+	assert.ErrorIs(t, err, ErrWriteDialPbufFailed)
 }

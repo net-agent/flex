@@ -30,6 +30,9 @@ jobs:
     - name: Test
       run: go test -v -race ./...
 
+    - name: Check docs and examples
+      run: ./scripts/check-docs.sh
+
     - name: Run Coverage
       run: ./coverage_test.sh
 

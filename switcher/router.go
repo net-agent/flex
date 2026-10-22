@@ -3,6 +3,7 @@ package switcher
 import (
 	"errors"
 	"log/slog"
+	"sync/atomic"
 
 	"github.com/net-agent/flex/v3/packet"
 )
@@ -14,6 +15,9 @@ var (
 type packetRouter struct {
 	registry *contextRegistry
 	logger   *slog.Logger
+
+	// maxStreams 是单节点活跃流数量上限（0=不限），由 Server 的 Limits 注入。
+	maxStreams atomic.Int32
 }
 
 func newPacketRouter(registry *contextRegistry, logger *slog.Logger) *packetRouter {
@@ -30,6 +34,13 @@ func (rt *packetRouter) serve(ctx *Context) error {
 		if err != nil {
 			return err
 		}
+		if err := rt.checkSource(ctx, pbuf); err != nil {
+			rt.logger.Warn("drop packet with spoofed source",
+				"ctx_id", ctx.id, "ctx_ip", ctx.IP, "src_ip", pbuf.SrcIP(),
+				"dist_ip", pbuf.DistIP(), "cmd", pbuf.CmdType())
+			packet.PutBuffer(pbuf)
+			continue
+		}
 		ctx.recordIncoming(pbuf)
 
 		if pbuf.DistIP() != packet.SwitcherIP {
@@ -41,6 +52,16 @@ func (rt *packetRouter) serve(ctx *Context) error {
 		// 无需保证顺序
 		go rt.dispatch(ctx, pbuf)
 	}
+}
+
+// checkSource 校验入站包的源虚拟 IP 是否等于认证上下文分配的 IP。
+// 没有这一步时，任意已认证节点都能伪造 SrcIP/SrcPort，向其他节点的既有流
+// 注入数据（SID 由地址四元组构成，虚拟端口按序分配、可枚举）。
+func (rt *packetRouter) checkSource(ctx *Context, pbuf *packet.Buffer) error {
+	if pbuf.SrcIP() != ctx.IP {
+		return errSourceAddress
+	}
+	return nil
 }
 
 // forward forwards a packet to its destination by IP lookup.
@@ -138,6 +159,21 @@ func (rt *packetRouter) handleAckPingDomain(caller *Context, pbuf *packet.Buffer
 // handleOpenStream resolves the destination domain and forwards the open-stream request.
 // pbuf 经改写后回投/转发（所有权随之转移）；入队失败的分支在此归还。
 func (rt *packetRouter) handleOpenStream(caller *Context, pbuf *packet.Buffer) {
+	if limit := rt.maxStreams.Load(); limit > 0 && caller.streamCount() > limit {
+		rt.logger.Warn("stream quota exceeded",
+			"ctx_id", caller.id, "domain", caller.Domain, "active", caller.streamCount(), "limit", limit)
+		ack := packet.OpenStreamACK{Error: errStreamQuota.Error()}
+		pbuf.SetCmd(packet.AckOpenStream)
+		pbuf.SwapSrcDist()
+		_ = pbuf.SetPayload(ack.Encode())
+		pbuf.SetSrcIP(0)
+		if err := caller.enqueueForward(pbuf); err != nil {
+			rt.logger.Warn("stream quota reply enqueue failed", "ctx_id", caller.id, "error", err)
+			packet.PutBuffer(pbuf)
+		}
+		return
+	}
+
 	req := packet.DecodeOpenStreamRequest(pbuf.Payload)
 
 	distCtx, err := rt.registry.lookupByDomain(req.Domain)

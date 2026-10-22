@@ -26,6 +26,10 @@ type contextRegistry struct {
 	logger   *slog.Logger
 	presence *presenceCenter
 
+	// domainPingTimeout 是域名抢占前对旧持有者做存活探测的超时。
+	// 可在测试中缩短，生产默认为 3s。
+	domainPingTimeout time.Duration
+
 	domainMu    sync.Mutex
 	domainIndex map[string]*Context
 
@@ -41,11 +45,12 @@ func newContextRegistry(ipm *idpool.Pool, logger *slog.Logger, presence *presenc
 		logger = slog.Default()
 	}
 	return &contextRegistry{
-		ipm:         ipm,
-		logger:      logger,
-		presence:    presence,
-		domainIndex: make(map[string]*Context),
-		ipIndex:     make(map[uint16]*Context),
+		ipm:               ipm,
+		logger:            logger,
+		presence:          presence,
+		domainPingTimeout: 3 * time.Second,
+		domainIndex:       make(map[string]*Context),
+		ipIndex:           make(map[uint16]*Context),
 	}
 }
 
@@ -57,111 +62,90 @@ func (r *contextRegistry) attach(ctx *Context) error {
 	}
 	ctx.Domain = normalized
 
-	prev, acquired := r.acquireDomain(ctx)
-	if !acquired {
-		r.logger.Warn("attach failed: replace domain failed", "ctx_id", ctx.id, "domain", ctx.Domain)
+	// 预检：域名被占用时先在锁外做存活探测。网络 IO 不得持锁，
+	// 否则一个无响应的节点会把整个 registry 卡住 domainPingTimeout。
+	r.domainMu.Lock()
+	occupied := r.domainIndex[ctx.Domain]
+	r.domainMu.Unlock()
+	if occupied != nil && occupied != ctx {
+		if _, err := occupied.ping(r.domainPingTimeout); err == nil {
+			r.logger.Warn("attach failed: replace domain failed", "ctx_id", ctx.id, "domain", ctx.Domain)
+			return errReplaceDomainFailed
+		}
+	}
+
+	// 临界区：一次性完成"确认持有者 + 分配 IP 租约 + 双索引登记"。
+	// 旧实现把域名认领与 IP 分配拆成两步，中间态会成为并发替换的僵尸条目，
+	// 且 IP 在 attach 与 detach 两处各释放一次。
+	r.domainMu.Lock()
+	current := r.domainIndex[ctx.Domain]
+	if current == ctx {
+		// 幂等 re-attach（同一 ctx 重复 attach）：保持既有登记不变。
+		r.domainMu.Unlock()
+		return nil
+	}
+	if current != nil && current != occupied {
+		// ping 期间域名已被第三方接管：放弃本次 attach，交由上层重连。
+		r.domainMu.Unlock()
+		r.logger.Warn("attach failed: domain taken during probe", "ctx_id", ctx.id, "domain", ctx.Domain)
 		return errReplaceDomainFailed
 	}
 
-	if prev != nil {
-		prev.release()
-		r.ipm.Release(prev.IP)
-	}
-
-	ip, err := r.ipm.Allocate()
+	lease, err := r.ipm.Acquire()
 	if err != nil {
-		// 域名已被 acquireDomain 认领，失败路径必须回滚，否则留下永不 serve 的僵尸占位
-		r.rollbackDomainClaim(ctx)
+		r.domainMu.Unlock()
 		r.logger.Warn("attach failed: IP exhausted", "ctx_id", ctx.id, "domain", ctx.Domain, "error", err)
 		return errGetFreeContextIPFailed
 	}
-	ctx.IP = ip
 
 	r.ipMu.Lock()
-	if _, exists := r.ipIndex[ctx.IP]; exists {
+	if _, exists := r.ipIndex[lease.ID()]; exists {
 		r.ipMu.Unlock()
-		r.rollbackDomainClaim(ctx)
-		ctx.release()
-		r.ipm.Release(ctx.IP)
-		r.logger.Warn("attach failed: IP conflict", "ctx_id", ctx.id, "domain", ctx.Domain, "ip", ctx.IP)
+		r.domainMu.Unlock()
+		lease.Release()
+		r.logger.Warn("attach failed: IP conflict", "ctx_id", ctx.id, "domain", ctx.Domain, "ip", lease.ID())
 		return errContextIPExist
 	}
+	ctx.IP = lease.ID()
+	ctx.ipLease = lease
+	ctx.AttachTime = time.Now()
 	r.ipIndex[ctx.IP] = ctx
 	r.ipMu.Unlock()
 
-	ctx.AttachTime = time.Now()
+	r.domainIndex[ctx.Domain] = ctx
+	ctx.setAttached(true)
+	r.domainMu.Unlock()
+
+	if current != nil {
+		// 旧持有者已被替换：先广播下线，再从索引/池中摘除（detach 幂等）。
+		r.presence.emitOffline(current.Domain, current.IP, current.Mac)
+		r.logger.Info("domain replaced", "domain", ctx.Domain, "old_ctx_id", current.id, "new_ctx_id", ctx.id)
+		r.detach(current)
+	}
+
+	r.appendRecord(ctx)
 	r.presence.emitOnline(ctx.Domain, ctx.IP, ctx.Mac)
 	r.logger.Info("context attached", "ctx_id", ctx.id, "domain", ctx.Domain, "ip", ctx.IP, "mac", ctx.Mac)
 	return nil
 }
 
-// rollbackDomainClaim 在 attach 失败时撤销 acquireDomain 的域名认领。
-// 仅当域名仍指向本 ctx 时才删除，避免误删并发替换者的认领。
-// 失败路径上本 ctx 从未 emitOnline，因此无需补偿 presence 事件。
-func (r *contextRegistry) rollbackDomainClaim(ctx *Context) {
-	r.domainMu.Lock()
-	if current, ok := r.domainIndex[ctx.Domain]; ok && current == ctx {
-		delete(r.domainIndex, ctx.Domain)
-	}
-	r.domainMu.Unlock()
-	ctx.setAttached(false)
-}
-
-// acquireDomain tries to claim the domain slot for newCtx.
-// If the slot is occupied, pings the existing holder to check liveness;
-// replaces it only if the ping fails.
-// Uses optimistic locking: lock to check, unlock to ping, re-lock to verify and replace.
-func (r *contextRegistry) acquireDomain(newCtx *Context) (prev *Context, ok bool) {
-	r.domainMu.Lock()
-	existing, loaded := r.domainIndex[newCtx.Domain]
-	if !loaded {
-		r.domainIndex[newCtx.Domain] = newCtx
-		r.domainMu.Unlock()
-		r.appendRecord(newCtx)
-		newCtx.setAttached(true)
-		return nil, true
-	}
-	r.domainMu.Unlock()
-
-	// Ping outside the lock to avoid holding it during network I/O
-	_, err := existing.ping(time.Second * 3)
-	if err == nil {
-		return existing, false
-	}
-
-	// Ping failed — re-lock and verify the domain still points to the same context
-	r.domainMu.Lock()
-	current, stillExists := r.domainIndex[newCtx.Domain]
-	if stillExists && current == existing {
-		r.domainIndex[newCtx.Domain] = newCtx
-		r.presence.emitOffline(existing.Domain, existing.IP, existing.Mac)
-		r.domainMu.Unlock()
-		r.logger.Info("domain replaced", "domain", newCtx.Domain, "old_ctx_id", existing.id, "new_ctx_id", newCtx.id)
-		r.detach(existing)
-		r.appendRecord(newCtx)
-		newCtx.setAttached(true)
-		return existing, true
-	}
-	r.domainIndex[newCtx.Domain] = newCtx
-	r.presence.emitOffline(existing.Domain, existing.IP, existing.Mac)
-	r.domainMu.Unlock()
-	r.logger.Info("domain replaced", "domain", newCtx.Domain, "old_ctx_id", existing.id, "new_ctx_id", newCtx.id)
-	r.appendRecord(newCtx)
-	newCtx.setAttached(true)
-	return existing, true
-}
-
+// detach 取消一个 ctx 的全部登记。整个过程幂等：
+// 域名替换与连接断开可能并发/先后调用，重复调用不会误删他人条目，
+// 也不会重复归还 IP（租约保证只归还一次）。
 func (r *contextRegistry) detach(ctx *Context) {
-	if !ctx.isAttached() {
-		return
-	}
-
+	offline := false
 	r.domainMu.Lock()
 	if current, ok := r.domainIndex[ctx.Domain]; ok && current == ctx {
 		delete(r.domainIndex, ctx.Domain)
+		offline = true
+	}
+	r.domainMu.Unlock()
+
+	// presence 事件入队可能阻塞（队列满时会等到 run() 消费），
+	// 必须放在锁外，避免拖住整个 registry。
+	if offline {
 		r.presence.emitOffline(ctx.Domain, ctx.IP, ctx.Mac)
 	}
-	r.domainMu.Unlock()
 
 	r.ipMu.Lock()
 	if current, ok := r.ipIndex[ctx.IP]; ok && current == ctx {
@@ -171,7 +155,9 @@ func (r *contextRegistry) detach(ctx *Context) {
 	r.ipMu.Unlock()
 
 	ctx.release()
-	r.ipm.Release(ctx.IP)
+	// 租约释放幂等：域名替换与连接断开两条路径都可能走到这里，
+	// 重复释放不会把已重新分配给其他节点的同号 IP 归还池子。
+	ctx.ipLease.Release()
 
 	duration := ctx.DetachTime.Sub(ctx.AttachTime)
 	r.logger.Info("context detached", "ctx_id", ctx.id, "domain", ctx.Domain, "duration", duration)

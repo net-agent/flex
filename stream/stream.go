@@ -16,15 +16,20 @@ const (
 
 	DefaultSplitSize = 16 * KB
 
+	// MaxWindowSize 是协商窗口的硬上限。
+	// 窗口值来自对端应答，若不钳制，恶意对端可返回 0x7FFFFFFF 迫使本端
+	// 按窗口大小分配接收缓冲（每流可达数百 MB）。合法对端只会返回
+	// min(双方本地窗口)，因此该上限不影响正常协商。
+	MaxWindowSize int32 = 16 * MB
+
 	DirectionOutbound Direction = 1 // local → remote
 	DirectionInbound  Direction = 2 // remote → local
 )
 
 var (
 	// Flow Control Parameters (Global Defaults)
-	DefaultWindowSize        int32         = 2 * MB
-	DefaultCloseAckTimeout   time.Duration = time.Second * 2
-	DefaultAppendDataTimeout time.Duration = time.Second * 2
+	DefaultWindowSize      int32         = 2 * MB
+	DefaultCloseAckTimeout time.Duration = time.Second * 2
 )
 
 type Stream struct {
@@ -34,12 +39,16 @@ type Stream struct {
 	boundPort uint16       // 占用的端口。应当在Dial时进行绑定
 
 	// for reader
-	rchanMu      sync.RWMutex // 保护 recvQueue 的生命周期（RLock=写入chan, Lock=close chan）
+	rchanMu      sync.RWMutex // 保护 readClosed 状态位（供观测与幂等关闭）
 	readClosed   bool
-	recvQueue    chan []byte
-	readMu       sync.Mutex // 序列化 Read 调用，保护 readBuf（net.Conn 契约）
-	readBuf      []byte
+	recv         *recvBuffer
+	readMu       sync.Mutex // 序列化 Read 调用（net.Conn 契约）
 	readDeadline *DeadlineGuard
+
+	// for ack batching
+	acks     *ackTracker
+	ackOnce  sync.Once
+	failOnce sync.Once
 
 	// for writer
 	writeCallMu   sync.Mutex // serializes Write call-order for stream-ordered semantics
@@ -52,9 +61,6 @@ type Stream struct {
 	closeCh         chan struct{} // closed when CloseWrite is called, to interrupt blocked Write
 	closeAckCh      chan struct{}
 	closeAckTimeout time.Duration
-
-	// variables
-	recvPushTimeout time.Duration
 
 	// lifecycle hook: called once when both read+write are closed.
 	closeMask  atomic.Uint32
@@ -111,29 +117,26 @@ func New(pwriter Writer, initialWindowSize int32) *Stream {
 		initialWindowSize = DefaultWindowSize
 	}
 
-	// Calculate chan cap based on window size
-	chanCap := int(initialWindowSize) / DefaultSplitSize * 4
-	if chanCap < 16 {
-		chanCap = 16
-	}
-
 	state := &State{
 		Index:   atomic.AddInt32(&streamIndex, 1),
 		Created: time.Now(),
 	}
-	return &Stream{
+	s := &Stream{
 		state:           state,
-		sender:          newSender(pwriter, &state.SentBufferCount),
-		recvQueue:       make(chan []byte, chanCap),
+		recv:            newRecvBuffer(initialWindowSize),
 		window:          NewWindowGuard(initialWindowSize, 16),
 		readDeadline:    &DeadlineGuard{},
 		writeDeadline:   &DeadlineGuard{},
 		closeCh:         make(chan struct{}),
 		closeAckCh:      make(chan struct{}, 1),
 		closeAckTimeout: DefaultCloseAckTimeout,
-		recvPushTimeout: DefaultAppendDataTimeout,
 		logger:          slog.Default(),
 	}
+	s.sender = newSender(pwriter, &state.SentBufferCount)
+	s.acks = newAckTracker(s.sender.SendDataAck, func(n int64) {
+		atomic.AddInt64(&s.state.SentAckTotal, n)
+	}, s.logger)
+	return s
 }
 
 func NewDialStream(w Writer,
@@ -177,6 +180,9 @@ func (s *Stream) SetRemoteDomain(domain string) {
 func (s *Stream) SetLogger(l *slog.Logger) {
 	if l != nil {
 		s.logger = l
+		if s.acks != nil {
+			s.acks.logger = l
+		}
 	}
 }
 

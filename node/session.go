@@ -1,6 +1,7 @@
 package node
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -54,6 +55,11 @@ func (s SessionState) String() string {
 
 type ConnectFunc func() (packet.Conn, error)
 
+// ConnectContextFunc 是支持取消的连接器。相比 ConnectFunc，它让建立 TCP/WS
+// 连接的过程（DNS、握手前 IO）也能响应 Session.Close：
+// 传入的 ctx 在 Session 关闭时取消，实现方应把它传给 net.Dialer.DialContext。
+type ConnectContextFunc func(ctx context.Context) (packet.Conn, error)
+
 type SessionConfig struct {
 	Domain   string
 	Password string
@@ -63,8 +69,13 @@ type SessionConfig struct {
 // Session 是一个带有断线重连能力的 Node 代理。
 // 对外提供与 Node 一致的 Listen/Dial 语义，内部管理 Node 的生命周期和自动重连。
 type Session struct {
-	connector ConnectFunc
-	config    SessionConfig
+	connector    ConnectFunc
+	connectorCtx ConnectContextFunc
+	config       SessionConfig
+
+	// ctx 在 Close 时取消，用于中断连接/握手阶段（Serve 循环之外无法直接感知 done）
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	enableFairConn atomic.Bool
 
@@ -84,6 +95,11 @@ type Session struct {
 	watched    map[string]struct{}
 	handler    func(packet.PresenceEvent)
 	view       PresenceView
+	// epoch 标记当前 Node 连接代数，viewEpoch 记录视图最后一次权威重置的代数。
+	// 同一条连接内快照与事件在线上有序，但本地应用顺序可能颠倒，
+	// 因此只有跨连接（epoch 变化）才允许权威重置，避免旧快照回滚新事件。
+	epoch     atomic.Uint64
+	viewEpoch uint64 // 由 presenceMu 保护
 
 	trigger   chan struct{} // closed on first use (Listen/Dial/Watch/PingDomain) to start connecting
 	onceStart sync.Once
@@ -102,8 +118,11 @@ type Session struct {
 }
 
 func NewSession(connector ConnectFunc, cfg SessionConfig) *Session {
+	ctx, cancel := context.WithCancel(context.Background())
 	s := &Session{
 		connector:  connector,
+		ctx:        ctx,
+		cancel:     cancel,
 		config:     cfg,
 		listeners:  make(map[uint16]*SessionListener),
 		watched:    make(map[string]struct{}),
@@ -116,6 +135,13 @@ func NewSession(connector ConnectFunc, cfg SessionConfig) *Session {
 	s.enableFairConn.Store(true)
 	s.connectTimeout.Store(int64(defaultConnectTimeout))
 	return s
+}
+
+// SetContextConnector 设置支持取消的连接器，优先于 NewSession 传入的 ConnectFunc。
+// 必须在 Serve 之前调用。未设置时沿用 ConnectFunc，此时连接建立过程无法被 Close
+// 中断（只能在其返回后放弃结果），实现方应自行设置 Dial 超时。
+func (s *Session) SetContextConnector(fn ConnectContextFunc) {
+	s.connectorCtx = fn
 }
 
 // SetEnableFairConn controls whether the Session wraps its connection with
@@ -341,7 +367,7 @@ func (s *Session) Watch(timeout time.Duration, domains ...string) ([]packet.Pres
 	if err != nil {
 		return nil, err
 	}
-	s.view.applySnapshot(states)
+	s.applyPresenceSnapshot(states)
 	return states, nil
 }
 
@@ -419,7 +445,24 @@ func (s *Session) resyncPresence(domain string) {
 		s.logger.Warn("presence resync failed", "domain", domain, "error", err)
 		return
 	}
-	s.view.applySnapshot(states)
+	s.applyPresenceSnapshot(states)
+}
+
+// applyPresenceSnapshot 应用一次订阅快照。
+// 跨连接（epoch 变化）时使用权威重置：switcher 重启或离线条目淘汰会让
+// version 归零，此时必须接受更小的版本号。
+// 同一条连接内使用版本单调应用：快照与事件在线上有序，但 ACK 唤醒的
+// goroutine 可能晚于后续事件执行，强行重置会让已经应用的新事件回滚。
+func (s *Session) applyPresenceSnapshot(states []packet.PresenceState) {
+	epoch := s.epoch.Load()
+	s.presenceMu.Lock()
+	if s.viewEpoch != epoch {
+		s.view.resetSnapshot(states)
+		s.viewEpoch = epoch
+	} else {
+		s.view.applySnapshot(states)
+	}
+	s.presenceMu.Unlock()
 }
 
 // resubscribePresence 在重连成功后恢复全部订阅意图，
@@ -441,7 +484,7 @@ func (s *Session) resubscribePresence(n *Node) {
 		s.logger.Warn("presence resubscribe failed", "domains", domains, "error", err)
 		return
 	}
-	s.view.resetSnapshot(states)
+	s.applyPresenceSnapshot(states)
 }
 
 func (s *Session) ensureServing() {
@@ -490,8 +533,23 @@ func (s *Session) Serve() error {
 		default:
 		}
 
-		conn, err := s.connector()
+		var (
+			conn packet.Conn
+			err  error
+		)
+		if s.connectorCtx != nil {
+			conn, err = s.connectorCtx(s.ctx)
+		} else {
+			conn, err = s.connector()
+		}
+		if err == nil && conn == nil {
+			err = errors.New("connector returned nil connection")
+		}
 		if err != nil {
+			if s.ctx.Err() != nil {
+				// Close 取消了正在进行的连接，属于正常退出
+				return nil
+			}
 			s.logger.Warn("connect failed", "error", err, "retry_in", backoff)
 			s.setState(SessionConnecting, err) // 状态不变，仅更新 lastErr
 			select {
@@ -503,9 +561,31 @@ func (s *Session) Serve() error {
 			continue
 		}
 
+		// 连接建立后，若 Close 已发生则不得继续占用该连接
+		select {
+		case <-s.done:
+			conn.Close()
+			return nil
+		default:
+		}
+
+		// 握手是可能阻塞 10s 的 IO：用 watcher 在 Close 时主动关连接，
+		// 使 Handshake 立即返回，而不是让 Serve 卡到握手超时。
+		handshakeDone := make(chan struct{})
+		go func() {
+			select {
+			case <-s.done:
+				conn.Close()
+			case <-handshakeDone:
+			}
+		}()
 		ip, err := admit.Handshake(conn, s.config.Domain, s.config.Mac, s.config.Password)
+		close(handshakeDone)
 		if err != nil {
 			conn.Close()
+			if s.ctx.Err() != nil {
+				return nil
+			}
 			s.logger.Warn("handshake failed", "error", err, "retry_in", backoff)
 			s.setState(SessionConnecting, err) // 状态不变，仅更新 lastErr
 			select {
@@ -527,8 +607,19 @@ func (s *Session) Serve() error {
 
 		backoff = time.Second // 连接成功，重置退避
 
+		// 安装 node 与 Close 必须在同一临界区判定：
+		// 否则 Close 后仍可能装入一个无人关闭的 Node，直到对端断线才释放。
 		s.mu.Lock()
+		select {
+		case <-s.done:
+			s.mu.Unlock()
+			node.Close()
+			return nil
+		default:
+		}
 		s.node = node
+		// 新连接代数：下一次快照应用走权威重置路径
+		s.epoch.Add(1)
 		for port, sl := range s.listeners {
 			nl, err := node.Listen(port)
 			if err != nil {
@@ -562,6 +653,7 @@ func (s *Session) Serve() error {
 
 func (s *Session) Close() error {
 	s.onceClose.Do(func() {
+		s.cancel() // 中断连接/握手阶段
 		close(s.done)
 		s.mu.Lock()
 		if s.node != nil {

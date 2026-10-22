@@ -25,3 +25,8 @@ func (s *Stream) setNetwork(name string) {
 	s.state.RemoteAddr.SetNetwork(name)
 	s.stateMu.Unlock()
 }
+
+// GetWindowAvailable 返回当前剩余的发送窗口（字节），用于观测与测试。
+func (s *Stream) GetWindowAvailable() int32 {
+	return s.window.Available()
+}

@@ -132,14 +132,14 @@ func TestConcurrentReadWriteClose(t *testing.T) {
 func TestNewWithNegativeWindowSize(t *testing.T) {
 	s := New(&mockWriter{}, -1)
 	assert.Equal(t, DefaultWindowSize, s.window.Available(), "negative window should fallback to default")
-	assert.GreaterOrEqual(t, cap(s.recvQueue), 16, "channel cap should have minimum 16")
+	assert.Equal(t, int(DefaultWindowSize), s.recv.limit, "recv buffer limit should follow the window")
 }
 
 func TestNewWithSmallWindowSize(t *testing.T) {
 	s := New(&mockWriter{}, 1)
-	// chanCap = 1 / DefaultSplitSize * 4 = 0, should be clamped to 16
 	assert.Equal(t, int32(1), s.window.Available())
-	assert.Equal(t, 16, cap(s.recvQueue), "small window should clamp chanCap to 16")
+	// 接收缓冲以字节计，并至少容纳一个最大分片
+	assert.Equal(t, DefaultSplitSize, s.recv.limit, "small window should still fit one split")
 }
 
 func TestNewDialStream(t *testing.T) {

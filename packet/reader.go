@@ -2,6 +2,7 @@ package packet
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"time"
@@ -40,7 +41,9 @@ func (reader *connReader) ReadBuffer() (retBuf *Buffer, retErr error) {
 	_, err := io.ReadFull(reader.conn, pb.Head[:])
 	if err != nil {
 		PutBuffer(pb)
-		return nil, ErrReadHeaderFailed
+		// 同时包装哨兵值与底层原因：调用方既能 errors.Is(err, ErrReadHeaderFailed)，
+		// 也能区分 io.EOF / net.ErrClosed / 超时，便于日志与重连决策。
+		return nil, fmt.Errorf("%w: %w", ErrReadHeaderFailed, err)
 	}
 
 	sz := pb.PayloadSize()
@@ -53,7 +56,7 @@ func (reader *connReader) ReadBuffer() (retBuf *Buffer, retErr error) {
 		_, err := io.ReadFull(reader.conn, pb.Payload)
 		if err != nil {
 			PutBuffer(pb)
-			return nil, ErrReadPayloadFailed
+			return nil, fmt.Errorf("%w: %w", ErrReadPayloadFailed, err)
 		}
 	}
 

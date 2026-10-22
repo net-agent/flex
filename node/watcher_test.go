@@ -1,6 +1,9 @@
 package node
 
 import (
+	"errors"
+	"io"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +45,11 @@ func writeSubscribeACK(t *testing.T, sw packet.Conn, req *packet.Buffer, ack pac
 		t.Fatalf("set ack payload failed: %v", err)
 	}
 	if err := sw.WriteBuffer(resp); err != nil {
+		// 会话在重连/关闭窗口内会主动断开旧连接，fake switcher 的迟到应答
+		// 写失败属于预期，不应判测试失败。
+		if errors.Is(err, io.ErrClosedPipe) || errors.Is(err, net.ErrClosed) {
+			return
+		}
 		t.Fatalf("write ack failed: %v", err)
 	}
 }

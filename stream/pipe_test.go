@@ -62,12 +62,12 @@ func TestReadAndRoutePbufFailed(t *testing.T) {
 }
 
 func TestRouteErr(t *testing.T) {
-	badPbuf := packet.NewBufferWithCmd(0)
 	cmdCh := make(chan *packet.Buffer, 10)
 	ackCh := make(chan *packet.Buffer, 10)
 
-	cmdCh <- badPbuf
-	ackCh <- badPbuf
+	// 两个路由 goroutine 各自接管一个 buffer 的所有权，不能共享同一对象
+	cmdCh <- packet.NewBufferWithCmd(0)
+	ackCh <- packet.NewBufferWithCmd(0)
 	go routeCmd(nil, cmdCh)
 	go routeAck(nil, ackCh)
 

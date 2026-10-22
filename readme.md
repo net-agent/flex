@@ -14,6 +14,8 @@
 -   **Presence Subscription**: `Node.Watch()` subscribes to named nodes' online/offline states; the Switcher pushes change events in real time (the subscribe ACK carries a state snapshot, seamlessly stitched with later events), replacing `PingDomain` polling.
 -   **Fair Scheduling**: Built-in **Fair Queuing** (DRR-based, see `internal/sched`) ensures that a single high-bandwidth stream cannot starve control signals (ACKs, Pings) or other small streams. Enabled by default on both `switcher.Server` and `node.Session`.
 -   **Inspection APIs**: `Node.GetInfo()` / `Node.GetListeners()`, `Switcher.GetStats()` / `Switcher.GetClients()`, and `Stream.GetState()` expose traffic counters, active streams, and RTT in real time.
+-   **Backpressure that fails loud**: the receive queue is bounded by bytes (matching the flow-control window), never blocks the dispatcher, and reports a protocol violation by actively closing the stream instead of silently dropping data.
+-   **Admission control**: connection/stream/subscription quotas, per-IP handshake rate limiting and source-address validation are enabled with generous defaults on `switcher.Server` (see `SetLimits`).
 -   **Reliability**: Robust connection management with heartbeat keep-alive and active/passive close handling.
 
 ## Architecture
@@ -127,6 +129,8 @@ ln, err := sess.Listen(80)
 
 For detailed usage, configuration, and API reference, please see the **[Developer Manual](docs/manual.md)**.
 
+- **[FairConn scheduling visualizer](docs/fairconn_visualizer.html)** — a self-contained interactive page: write-path architecture, live scheduling simulation, and a side-by-side comparison of the C/A/B policies.
+
 ## Inspection APIs
 
 Both Node and Switcher expose their runtime state programmatically:
@@ -159,6 +163,17 @@ clients := srv.GetClients() // online nodes: domain, IP, stream count, bytes, RT
 ```
 
 Session exposes its connection lifecycle via `GetState()`, `GetLastErr()`, `GetReconnectCount()` and `OnStateChange()`, and provides `SetLogger`/`SetTrace`, which are automatically injected into every Node rebuilt across reconnects. See the [Developer Manual](docs/manual.md#observability) for details.
+
+## Security & Limits
+
+`flex` encrypts the admission handshake only; stream data is plain text. Treat it
+as a multiplexing/relay layer, not a VPN: wrap the transport with TLS
+(`tls.Listener` / `tls.Dial`, or `wss://`) on any untrusted network.
+
+The Switcher rejects connections, streams and presence subscriptions beyond
+`switcher.Limits` (configurable via `SetLimits`), rate-limits handshakes per IP,
+and drops packets whose source address differs from the authenticated node.
+See [Deployment & Security](docs/manual.md#deployment--security) for details.
 
 ## License
 

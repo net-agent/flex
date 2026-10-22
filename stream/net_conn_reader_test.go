@@ -54,32 +54,28 @@ func TestReadErr_SendDataAckFailed(t *testing.T) {
 	c, _ := net.Pipe()
 	pc := packet.NewConnWriter(c)
 	s := New(pc, 0)
-
 	pc.SetWriteTimeout(testMedTimeout)
 
-	// simulate buffered data
-	s.readBuf = []byte("12345abcde12345abcde")
+	pushData(s, []byte("12345abcde12345abcde"))
 	n, err := s.Read(make([]byte, 10))
 	assert.Equal(t, 10, n)
 	assert.Nil(t, err)
 
-	// wait for async ack write to timeout and log error
-	time.Sleep(testMedTimeout + testLongTimeout)
+	// 等待合批窗口到期后 ACK 写超时（只验证不 panic / 不死锁）
+	time.Sleep(DefaultAckFlushInterval + testLongTimeout)
 }
 
 func TestPartialRead(t *testing.T) {
 	s := New(&mockWriter{}, 0)
-	data := []byte("hello world")
-	s.readBuf = data
+	pushData(s, []byte("hello world"))
 
-	// Read with a small buffer — only 5 bytes
 	buf := make([]byte, 5)
 	n, err := s.Read(buf)
 	assert.Nil(t, err)
 	assert.Equal(t, 5, n)
 	assert.Equal(t, []byte("hello"), buf)
 
-	// Read remaining from currBuf
+	// 剩余部分在下一次 Read 返回
 	buf2 := make([]byte, 20)
 	n, err = s.Read(buf2)
 	assert.Nil(t, err)
@@ -87,22 +83,27 @@ func TestPartialRead(t *testing.T) {
 	assert.Equal(t, []byte(" world"), buf2[:n])
 }
 
-func TestReadPartialFromReadBufKeepsRemainder(t *testing.T) {
+func TestReadPartialKeepsRemainder(t *testing.T) {
 	s := New(&mockWriter{}, 0)
-	s.readBuf = []byte("abcdef")
+	pushData(s, []byte("abcdef"))
 
 	buf := make([]byte, 3)
 	n, err := s.Read(buf)
 	assert.Nil(t, err)
 	assert.Equal(t, 3, n)
 	assert.Equal(t, []byte("abc"), buf[:n])
-	assert.Equal(t, []byte("def"), s.readBuf)
+	assert.Equal(t, 3, s.available())
+
+	n, err = s.Read(buf)
+	assert.Nil(t, err)
+	assert.Equal(t, 3, n)
+	assert.Equal(t, []byte("def"), buf[:n])
 }
 
 func TestReadExactFitThenEOFAfterCloseRead(t *testing.T) {
 	s := New(&mockWriter{}, 0)
-	s.recvQueue <- []byte("abc")
-	s.recvQueue <- []byte("def")
+	pushData(s, []byte("abc"))
+	pushData(s, []byte("def"))
 	assert.Nil(t, s.CloseRead())
 
 	buf := make([]byte, 6)
@@ -118,9 +119,9 @@ func TestReadExactFitThenEOFAfterCloseRead(t *testing.T) {
 
 func TestReadSkipsEmptyPacketsThenReadsData(t *testing.T) {
 	s := New(&mockWriter{}, 0)
-	s.recvQueue <- []byte{}
-	s.recvQueue <- []byte{}
-	s.recvQueue <- []byte("xyz")
+	pushData(s, []byte{})
+	pushData(s, []byte{})
+	pushData(s, []byte("xyz"))
 
 	buf := make([]byte, 8)
 	n, err := s.Read(buf)
@@ -131,8 +132,8 @@ func TestReadSkipsEmptyPacketsThenReadsData(t *testing.T) {
 
 func TestReadOnlyEmptyPacketsThenEOF(t *testing.T) {
 	s := New(&mockWriter{}, 0)
-	s.recvQueue <- []byte{}
-	s.recvQueue <- []byte{}
+	pushData(s, []byte{})
+	pushData(s, []byte{})
 	assert.Nil(t, s.CloseRead())
 
 	buf := make([]byte, 8)
@@ -152,7 +153,7 @@ func TestReadTimeoutWhenNoDataAndDeadlineExceeded(t *testing.T) {
 
 func TestReadReturnsBufferedDataEvenWhenDeadlineExceeded(t *testing.T) {
 	s := New(&mockWriter{}, 0)
-	s.readBuf = []byte("hello")
+	pushData(s, []byte("hello"))
 	s.SetReadDeadline(time.Now().Add(-time.Second))
 
 	buf := make([]byte, 8)
@@ -164,9 +165,9 @@ func TestReadReturnsBufferedDataEvenWhenDeadlineExceeded(t *testing.T) {
 
 func TestReadBytesReadAccountingAcrossReads(t *testing.T) {
 	s := New(&mockWriter{}, 0)
-	s.recvQueue <- []byte("ab")
-	s.recvQueue <- []byte("cde")
-	s.recvQueue <- []byte("fg")
+	pushData(s, []byte("ab"))
+	pushData(s, []byte("cde"))
+	pushData(s, []byte("fg"))
 	assert.Nil(t, s.CloseRead())
 
 	buf1 := make([]byte, 4)
@@ -192,9 +193,9 @@ func TestReadBytesReadAccountingAcrossReads(t *testing.T) {
 func TestReadDataIntegritySmallReadsVsLargeRead(t *testing.T) {
 	buildStream := func() *Stream {
 		s := New(&mockWriter{}, 0)
-		s.recvQueue <- []byte("ab")
-		s.recvQueue <- []byte("cd")
-		s.recvQueue <- []byte("ef")
+		pushData(s, []byte("ab"))
+		pushData(s, []byte("cd"))
+		pushData(s, []byte("ef"))
 		assert.Nil(t, s.CloseRead())
 		return s
 	}
@@ -229,9 +230,9 @@ func TestReadDataIntegritySmallReadsVsLargeRead(t *testing.T) {
 
 func TestReadDrainsMultipleQueuedPacketsInSingleCall(t *testing.T) {
 	s := New(&mockWriter{}, 0)
-	s.recvQueue <- []byte("aa")
-	s.recvQueue <- []byte("bb")
-	s.recvQueue <- []byte("cc")
+	pushData(s, []byte("aa"))
+	pushData(s, []byte("bb"))
+	pushData(s, []byte("cc"))
 
 	buf := make([]byte, 16)
 	n, err := s.Read(buf)
@@ -242,8 +243,8 @@ func TestReadDrainsMultipleQueuedPacketsInSingleCall(t *testing.T) {
 
 func TestReadReturnsBufferedDataBeforeEOFInSingleCall(t *testing.T) {
 	s := New(&mockWriter{}, 0)
-	s.recvQueue <- []byte("aaa")
-	s.recvQueue <- []byte("bbb")
+	pushData(s, []byte("aaa"))
+	pushData(s, []byte("bbb"))
 	assert.Nil(t, s.CloseRead())
 
 	buf := make([]byte, 16)
@@ -278,14 +279,12 @@ func TestCloseInterruptsBlockedRead(t *testing.T) {
 }
 
 func TestParallelIndependentStreamsRead(t *testing.T) {
-	// concurrent Read on the SAME stream is not safe because currBuf
-	// is unprotected. This test verifies concurrent reads on SEPARATE streams.
 	const goroutines = 10
 	streams := make([]*Stream, goroutines)
 	for i := range streams {
 		streams[i] = New(&mockWriter{}, 0)
-		streams[i].recvQueue <- []byte("data1")
-		streams[i].recvQueue <- []byte("data2")
+		pushData(streams[i], []byte("data1"))
+		pushData(streams[i], []byte("data2"))
 	}
 
 	done := make(chan struct{}, goroutines)
@@ -307,9 +306,9 @@ func TestParallelIndependentStreamsRead(t *testing.T) {
 func TestReadDrainsBufferedDataAfterCloseRead(t *testing.T) {
 	s := New(&mockWriter{}, 0)
 
-	s.recvQueue <- []byte("aaa")
-	s.recvQueue <- []byte("bbb")
-	s.recvQueue <- []byte("ccc")
+	pushData(s, []byte("aaa"))
+	pushData(s, []byte("bbb"))
+	pushData(s, []byte("ccc"))
 
 	err := s.CloseRead()
 	assert.Nil(t, err)
@@ -329,12 +328,17 @@ func TestReadDrainsBufferedDataAfterCloseRead(t *testing.T) {
 
 func TestReadZeroLengthBuffer(t *testing.T) {
 	s := New(&mockWriter{}, 0)
-	s.readBuf = []byte("hello")
+	pushData(s, []byte("hello"))
 
 	n, err := s.Read([]byte{})
 	assert.Nil(t, err)
 	assert.Equal(t, 0, n)
-	assert.Equal(t, []byte("hello"), s.readBuf)
+	assert.Equal(t, 5, s.available())
+
+	buf := make([]byte, 8)
+	n, err = s.Read(buf)
+	assert.Nil(t, err)
+	assert.Equal(t, 5, n)
 }
 
 func TestConcurrentProducerConsumer(t *testing.T) {
@@ -368,31 +372,87 @@ func TestConcurrentProducerConsumer(t *testing.T) {
 		"consumer should receive all produced data")
 }
 
-func TestReadAckGoroutinePressure(t *testing.T) {
+// 回归 P0：慢消费者 + 小包曾导致接收队列（按包计数，512 个）先于
+// 流控窗口（按字节，2MB）耗尽：发送端在 2 秒后被静默断流，
+// 已写入的数据永久丢失且发送端无任何错误。
+// 新实现按字节计量，1 字节小包在窗口内必须全部送达。
+func TestSlowReaderSmallPacketsNoDataLoss(t *testing.T) {
 	s1, s2 := Pipe()
 
-	const totalMessages = 5000
-	const msgSize = 64
-	payload := make([]byte, msgSize)
-
+	const total = 2000
+	writeErr := make(chan error, 1)
 	go func() {
-		for i := 0; i < totalMessages; i++ {
-			s1.Write(payload)
+		b := []byte{'x'}
+		for i := 0; i < total; i++ {
+			if _, err := s1.Write(b); err != nil {
+				writeErr <- err
+				return
+			}
 		}
-		s1.Close()
+		writeErr <- nil
 	}()
 
-	buf := make([]byte, 256)
-	var totalRead int
-	for {
-		n, err := s2.Read(buf)
-		totalRead += n
-		if err != nil {
-			break
-		}
+	select {
+	case err := <-writeErr:
+		assert.NoError(t, err, "sender must not fail while data is within the window")
+	case <-time.After(3 * time.Second):
+		t.Fatal("writer blocked unexpectedly")
 	}
 
-	assert.Equal(t, totalMessages*msgSize, totalRead)
+	// 消费端此时才开始读（模拟消费者停顿超过旧的 2s 超时）
+	buf := make([]byte, 64)
+	got := 0
+	for got < total {
+		n, err := s2.Read(buf)
+		assert.NoError(t, err)
+		if n == 0 {
+			break
+		}
+		got += n
+	}
+	assert.Equal(t, total, got, "all small packets must be delivered")
+}
+
+// ACK 合批：大量小读不应产生“一读一包”的 ACK 放大。
+func TestReadAckBatching(t *testing.T) {
+	rec := &recordingWriter{}
+	s := New(rec, 0)
+	// flusher 在首次 Read 时才启动，此前调整参数是安全的
+	s.acks.interval = 20 * time.Millisecond
+	s.acks.threshold = 64 * KB
+	defer s.CloseRead()
+
+	const packets = 2000
+	const size = 256
+	payload := make([]byte, size)
+	for i := 0; i < packets; i++ {
+		pushData(s, payload)
+	}
+
+	buf := make([]byte, 512)
+	read := 0
+	for read < packets*size {
+		n, err := s.Read(buf)
+		assert.NoError(t, err)
+		read += n
+	}
+
+	// 等待尾批 ACK flush
+	time.Sleep(s.acks.interval * 4)
+
+	rec.mu.Lock()
+	ackPackets := 0
+	ackBytes := 0
+	for _, h := range rec.bufs {
+		if h[0] == packet.AckPushStreamData {
+			ackPackets++
+			ackBytes += int(h[9])<<8 | int(h[10])
+		}
+	}
+	rec.mu.Unlock()
+
+	assert.Equal(t, packets*size, ackBytes, "all consumed bytes must be acked")
+	assert.Less(t, ackPackets, 30, "ACKs must be batched, got %d packets", ackPackets)
 }
 
 // Test that read deadline returns a proper timeout error satisfying net.Error

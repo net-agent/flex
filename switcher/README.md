@@ -48,7 +48,7 @@ func main() {
 如果使用 WebSocket，可以在 HTTP handler 中手动调用 `ServeConn`：
 
 ```go
-pConn := packet.NewWithWs(wsConn)
+pConn := ws.NewConn(wsConn)
 go s.ServeConn(pConn)
 ```
 

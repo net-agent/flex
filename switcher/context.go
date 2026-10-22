@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/net-agent/flex/v3/internal/idpool"
 	"github.com/net-agent/flex/v3/packet"
 )
 
@@ -29,6 +30,10 @@ type Context struct {
 	mu       sync.Mutex
 	conn     packet.Conn
 	attached bool
+
+	// ipLease 是该 ctx 虚拟 IP 的租约。释放走 Lease.Release（幂等），
+	// 避免 detach / 域名替换两条路径各释放一次导致 IP 池记账漂移。
+	ipLease *idpool.Lease
 
 	forwardCh   chan *packet.Buffer
 	forwardDone chan struct{}
@@ -141,13 +146,34 @@ func (ctx *Context) writeBuffer(buf *packet.Buffer) error {
 // recordIncoming updates receive stats for an incoming packet.
 func (ctx *Context) recordIncoming(pbuf *packet.Buffer) {
 	atomic.AddInt64(&ctx.Stats.BytesReceived, int64(pbuf.PayloadSize()+packet.HeaderSz))
-	cmd := pbuf.Cmd()
-	switch cmd {
-	case packet.CmdOpenStream:
-		atomic.AddInt32(&ctx.Stats.StreamCount, 1)
-	case packet.CmdCloseStream:
-		atomic.AddInt32(&ctx.Stats.StreamCount, -1)
+	switch pbuf.Cmd() {
+	case packet.CmdOpenStream, packet.AckOpenStream:
+		// 一条流在两端各有一个端点：发起方发 Open，接收方回 OpenAck，
+		// 两个方向都计数，才能得到该节点真实的活跃流数量。
+		ctx.addStream(1)
+	case packet.CmdCloseStream, packet.AckCloseStream:
+		ctx.addStream(-1)
 	}
+}
+
+// addStream 原子增减活跃流计数，并钳制下界为 0。
+// 旧实现直接 AddInt32，接收方被 Close 时计数会变成负数，导致可观测性失真，
+// 也会让后续的流配额判断失效。
+func (ctx *Context) addStream(delta int32) int32 {
+	for {
+		cur := atomic.LoadInt32(&ctx.Stats.StreamCount)
+		next := cur + delta
+		if next < 0 {
+			next = 0
+		}
+		if atomic.CompareAndSwapInt32(&ctx.Stats.StreamCount, cur, next) {
+			return next
+		}
+	}
+}
+
+func (ctx *Context) streamCount() int32 {
+	return atomic.LoadInt32(&ctx.Stats.StreamCount)
 }
 
 func (ctx *Context) release() {

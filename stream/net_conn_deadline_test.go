@@ -67,7 +67,7 @@ func TestDeadline(t *testing.T) {
 		s.SetReadDeadline(time.Now().Add(time.Second))
 
 		// Inject data, should be readable
-		s.recvQueue <- []byte("hello")
+		pushData(s, []byte("hello"))
 		buf := make([]byte, 10)
 		n, err := s.Read(buf)
 		assert.Nil(t, err)
