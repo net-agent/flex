@@ -306,7 +306,7 @@
       <button class="tab active" data-tab="sim" role="tab">② 调度模拟</button>
       <button class="tab" data-tab="guide" role="tab">③ 参数指南</button>
     </nav>
-    <div class="head-meta">DRR · quantum · writev</div>
+    <div class="head-meta">cost-budget · quantum · writev</div>
   </div>
 </header>
 <main class="wrap">
@@ -315,10 +315,10 @@
   <div class="arch-hero">
     <div>
       <h1>FairConn 写路径：从 per-stream 队列到 writev</h1>
-      <p>FairConn 只替换 <code>packet.Conn</code> 的写路径：包先进入所属 SID 的队列，SID 被激活后进入 readyQueue；调度循环优先排空控制通道，再按轮转取一个 SID，一次发送 quantum 个包。读路径不受影响。</p>
+      <p>FairConn 只替换 <code>packet.Conn</code> 的写路径：包先进入所属 SID 的队列，SID 被激活后进入 readyQueue；调度循环优先排空控制通道，再按轮转取一个 SID，默认按 32KB 成本预算取一轮（C 方案则一次 quantum 个包）。读路径不受影响。</p>
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap">
-      <span class="pill"><b>quantum</b> 2</span>
+      <span class="pill"><b>B</b> 32KB / 1KB</span>
       <span class="pill"><b>controlCh</b> 128</span>
       <span class="pill"><b>readyQueue</b> 1024</span>
       <span class="pill"><b>writev</b> batch</span>
@@ -406,7 +406,7 @@
           <text x="526" y="112" class="box-sub">单 goroutine · 保序 · 背压收口</text>
           <text x="526" y="142" class="mono" fill="#c6d5e8" font-size="11.5">1  drainControl()</text>
           <text x="526" y="168" class="mono" fill="#c6d5e8" font-size="11.5">2  sid ← readyQueue</text>
-          <text x="526" y="194" class="mono" fill="#c6d5e8" font-size="11.5">3  Drain(quantum)</text>
+          <text x="526" y="194" class="mono" fill="#c6d5e8" font-size="11.5">3  Drain(budget)</text>
           <text x="526" y="220" class="mono" fill="#c6d5e8" font-size="11.5">4  WriteBufferBatch</text>
           <text x="526" y="246" class="mono" fill="#c6d5e8" font-size="11.5">5  requeue / deactivate</text>
           <rect x="526" y="266" width="248" height="30" rx="7" fill="#0b1420" stroke="#24364d"/>
@@ -416,7 +416,7 @@
         <!-- quantum badge (inside scheduler) -->
         <g id="q-quantum">
           <rect class="qbadge" x="526" y="310" width="140" height="30" rx="8"/>
-          <text x="538" y="330">quantum = 2 包</text>
+          <text x="536" y="330">B 32KB / C 2 包</text>
         </g>
 
         <!-- control channel -->
@@ -438,7 +438,7 @@
           <text x="876" y="140" class="box-sub">TCP / WebSocket</text>
           <rect x="876" y="156" width="182" height="48" rx="8" fill="#0a111b" stroke="#24364d"/>
           <text x="888" y="174" class="tiny" fill="#9fb3cc">writev(net.Buffers)</text>
-          <text x="888" y="191" class="tiny" fill="#6d7f97">一批 ≤ quantum 个包</text>
+          <text x="888" y="191" class="tiny" fill="#6d7f97">一批 ≤ 一轮预算</text>
           <line x1="876" y1="226" x2="1058" y2="226" stroke="url(#wire)" stroke-width="3" stroke-linecap="round"/>
           <circle cx="1050" cy="226" r="4" fill="#38d9d9"/>
           <text x="876" y="252" class="tiny" fill="#8798b1">写完 PutBuffer → sync.Pool</text>
@@ -478,8 +478,8 @@
     <div>
       <div class="param-cards">
         <div class="pcard">
-          <h3>quantum · 每次访问的包预算</h3>
-          <p>默认 <code>2</code>。16KB 包时一次 visit 最多 32KB；64B 包时只有 128B。它同时决定<b>公平粒度</b>与<b>单流连续占用链路的时间</b>。</p>
+          <h3>VISIT BUDGET · 每次访问的预算</h3>
+          <p>默认 B：<code>32KB</code>/轮，每包 <code>1KB</code> 起计；16KB 包一次 visit 最多 2 个，64B 包最多 32 个。C 方案则按 quantum=2。它同时决定<b>公平粒度</b>与<b>单流连续占用链路的时间</b>。</p>
         </div>
         <div class="pcard">
           <h3>controlCh · 跨流控制包</h3>
@@ -491,7 +491,7 @@
         </div>
         <div class="pcard">
           <h3>writev · 批量写与缓冲回收</h3>
-          <p><code>processStream</code> 用 <code>Drain(quantum)</code> 取一批包，<code>WriteBufferBatch</code> 走 <code>net.Buffers</code> 一次写出；写完后统一 <code>PutBuffer</code>。switcher 转发路径用 <code>WriteBufferOwned</code> 避免 <code>cloneBuffer</code> 拷贝。</p>
+          <p><code>processStream</code> 取一批包：默认 B 按 32KB 成本预算（每包 1KB 起计，最多 32 包），C 按 <code>quantum</code> 个包。<code>WriteBufferBatch</code> 走 <code>net.Buffers</code> 一次写出，写完后统一 <code>PutBuffer</code>；switcher 转发路径用 <code>WriteBufferOwned</code> 避免 <code>cloneBuffer</code> 拷贝。</p>
         </div>
       </div>
       <div class="panel" style="margin-top:14px">
@@ -508,7 +508,7 @@
 
   <div class="panel" style="margin-top:14px">
     <div class="callout blue">
-      <b>为什么需要 FairConn？</b> 没有它时，一条持续写 16KB 包的流会长期占住 <code>packet.Conn</code> 的写锁，ACK、Ping、OpenStream 只能排在它后面；接收端窗口无法及时补充，表现为"大流量把控制面饿死"。FairConn 用 per-SID 队列 + 轮转把"一次能连续写多少"从"应用写多少"变成"quantum 个包"，控制包则走更高优先级的通道。
+      <b>为什么需要 FairConn？</b> 没有它时，一条持续写 16KB 包的流会长期占住 <code>packet.Conn</code> 的写锁，ACK、Ping、OpenStream 只能排在它后面；接收端窗口无法及时补充，表现为"大流量把控制面饿死"。FairConn 用 per-SID 队列 + 轮转把"一次能连续写多少"从"应用写多少"变成"一轮预算"（默认 B 32KB / 1KB 起计；C 为 quantum 个包），控制包则走更高优先级的通道。
     </div>
   </div>
 </section>
@@ -524,15 +524,15 @@
       <div class="ctl-group">
         <h3>策略</h3>
         <div class="seg" id="policySeg" role="group" aria-label="调度策略">
-          <button data-policy="C" class="active" title="包数 quantum（当前实现）">C · 包数</button>
+          <button data-policy="C" title="包数 quantum（历史策略）">C · 包数</button>
           <button data-policy="A" title="payload 字节 deficit DRR">A · 字节</button>
-          <button data-policy="B" title="按 max(payload, minCharge) 计费">B · 成本</button>
+          <button data-policy="B" class="active" title="按 max(payload, minCharge) 计费">B · 成本</button>
         </div>
 
         <div class="params" data-for="C">
           <div class="field">quantum（包 / 次）<output id="cQOut">2</output></div>
           <input type="range" id="cQuantum" min="1" max="8" step="1" value="2" aria-label="quantum 包数">
-          <p class="hint">每次 visit 最多发送 <b>quantum</b> 个包。16KB 包时 2 ≈ 32KB；64B 包时 2 = 128B。当前实现默认 2。</p>
+          <p class="hint">C 策略：每次 visit 最多发送 <b>quantum</b> 个包（默认 2）。当前默认是 B：32KB/轮、每包 1KB 起计。</p>
         </div>
 
         <div class="params" data-for="A" hidden>
@@ -565,7 +565,7 @@
           </div>
           <p class="hint">每包计费 <b>max(payload, 最低计费)</b>，预算耗尽让出。每次 visit 包数 ≤ Q / 最低计费。它按"车道占用"而非"搬货量"分配，能抑制 1B 包洪水，但小包流的 payload 份额会偏低。</p>
         </div>
-        <p class="hint" style="margin-top:10px;color:#f5a524">当前 Go 实现只有 C（quantum）；A / B 是候选方案，仅在本模拟器中用于对比。</p>
+        <p class="hint" style="margin-top:10px;color:#f5a524">当前默认是 B（成本计费）；C 可通过 SchedulerPolicyPackets 切回；A 仍为候选方案，仅在本模拟器中用于对比。</p>
       </div>
 
       <div class="ctl-group">
@@ -714,10 +714,10 @@
 
   <div class="policy-cards">
     <div class="policy C">
-      <h3>C · 包数 quantum</h3>
+      <h3>C · 包数 quantum（可选）</h3>
       <div class="formula">每次 visit ≤ quantum 个包
 公平单位 = packet</div>
-      <p>当前 FairConn 的实现。每个就绪流每轮最多发 quantum 个包，然后让出。</p>
+      <p>历史默认策略，可通过配置切回。每个就绪流每轮最多发 quantum 个包，然后让出。</p>
       <ul>
         <li><b>保护</b>：交互延迟、实现简单、无额外状态</li>
         <li><b>偏向</b>：大包流的 payload 字节份额</li>
@@ -739,7 +739,7 @@ while deficit ≥ len(p): send; deficit -= len(p)
       </ul>
     </div>
     <div class="policy B">
-      <h3>B · 成本计费</h3>
+      <h3>B · 成本计费（默认）</h3>
       <div class="formula">charge = max(len(p), minCharge)
 while budget ≥ charge: send; budget -= charge
 公平单位 = 近似线缆成本</div>
@@ -818,12 +818,12 @@ while budget ≥ charge: send; budget -= charge
     </div>
     <div class="rec">
       <div class="rec-card">
-        <h3 style="color:var(--blue)">默认：C · quantum=2</h3>
-        <p>交互延迟优先、改动最小。当前实现就是它；实测 quantum 2→4 约 3–8% 吞吐提升，但单次占用翻倍。若流量以大包为主，可用 4。</p>
+        <h3 style="color:var(--green)">默认：B · Q=32KB / min=1KB</h3>
+        <p>按成本分配，天然限制 1B 包洪水；每次最多 32 个包。代价是小包流 payload 份额低——交互流通常不需要大带宽，换取的是低延迟与链路稳定。</p>
       </div>
       <div class="rec-card">
-        <h3 style="color:var(--green)">多租户：B · Q=32KB / min=1KB</h3>
-        <p>按成本分配，天然限制 1B 包洪水；每次最多 32 个包。代价是小包流 payload 份额低——交互流通常不需要大带宽，换取的是低延迟与链路稳定。</p>
+        <h3 style="color:var(--blue)">低延迟 / 兼容：C · quantum=2</h3>
+        <p>每次 visit 只占 2 个包，单轮占用最短；适合包长接近、延迟敏感的流量。实测 quantum 2→4 约 3–8% 吞吐提升，但单次占用翻倍；大包为主可用 4。</p>
       </div>
       <div class="rec-card">
         <h3 style="color:var(--amber)">A：只在包长接近时使用</h3>
@@ -838,7 +838,7 @@ while budget ≥ charge: send; budget -= charge
 
   <div class="panel" style="margin-top:14px">
     <div class="panel-head">
-      <div><h2>如果实现 A / B，需要处理这些边界</h2><p>按优先级排序</p></div>
+      <div><h2>实现 A / B 时的边界</h2><p>B 已落地并默认启用；A 仍为候选</p></div>
       <span class="pill">implementation notes</span>
     </div>
     <div class="guide-grid">
@@ -854,7 +854,7 @@ while budget ≥ charge: send; budget -= charge
       </div>
       <div>
         <div class="callout blue">
-          <b>建议的落地顺序：</b>先把现有 quantum 做成可配（默认 2，行为不变），再以配置项引入 B（默认关闭），用混合包长基准对比 C2 / C4 / B 的吞吐、p99 间隔与 wire 放大，最后再决定是否把 B 设为默认。
+          <b>当前状态：</b>B 已实现并设为默认（32KB / 1KB），C 仍可通过 <code>SchedulerPolicyPackets</code> 切回；A 仍为候选。建议持续用混合包长基准对比 C2 / C4 / B 的吞吐、p99 间隔与 wire 放大，再按业务调整 minCharge / Q。
         </div>
         <div class="callout green" style="margin-top:10px">
           <b>页面上的对比表</b>已经把四种策略放在同一 workload 下；把它与 <code>go test -bench</code> 的实测吞吐结合看，避免只凭公平性指标做决定。
@@ -952,7 +952,7 @@ while budget ≥ charge: send; budget -= charge
 
   function defaults() {
     return {
-      policy: 'C',
+      policy: 'B',
       cQuantum: 2,
       aBytes: 32 * KB,
       aMaxPackets: 64,
@@ -1330,7 +1330,7 @@ while budget ≥ charge: send; budget -= charge
     { hl: ['q-streams'], text: '<b>① enqueue</b>：数据包进入所属 SID 的 <code>StreamQueue</code>；SID 通过 <code>active</code> CAS 激活，保证它在 readyQueue 中最多出现一次。' },
     { hl: ['q-ready'], text: '<b>② readyQueue</b>：FIFO 保存就绪 SID（容量 1024）。同一 SID 不会重复入队；满时 <code>requeue</code> 退化为异步 goroutine。' },
     { hl: ['q-control'], text: '<b>③ 控制通道优先</b>：Open / ACK / Ping / CloseAck 不进入 per-stream 队列；调度循环先 <code>drainControl()</code> 排空 controlCh（容量 128）。' },
-    { hl: ['q-sched', 'q-quantum'], text: '<b>④ processStream</b>：从 readyQueue 取一个 SID，<code>Drain(quantum)</code> 最多拿 2 个包。quantum 是 C 方案（当前实现）唯一的核心参数。' },
+    { hl: ['q-sched', 'q-quantum'], text: '<b>④ processStream</b>：从 readyQueue 取一个 SID。默认 B 按 32KB 成本预算取包（1KB 起计，最多 32 个）；C 方案则 <code>Drain(quantum)</code> 取 2 个包。' },
     { hl: ['q-conn'], text: '<b>⑤ writev</b>：<code>WriteBufferBatch</code> 用 <code>net.Buffers</code> 把这一批包一次写出；写完后 <code>PutBuffer</code> 归还池。switcher 转发路径用 <code>WriteBufferOwned</code> 免拷贝。' },
     { hl: ['q-requeue'], text: '<b>⑥ requeue</b>：若 per-SID 队列仍有数据，SID 回到 readyQueue 尾部；若已关闭且排空，则回收 queue 条目。' }
   ];
