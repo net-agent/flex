@@ -109,10 +109,45 @@ go s.ServeConn(pconn)
 
 ## 公平性与调度
 
-Flex v2 引入了 **公平队列 (Fair Queuing)**。
--   **问题**: 在 v1 版本中，大文件传输可能会阻塞 ACK 或 Ping 包，导致超时。
--   **解决方案**: `FairWriter` 分别对来自不同流的数据包进行排队，并以轮询方式进行服务。
--   **使用**: 在托管连接的场景默认启用：`switcher.Server` 会包装每个接入的连接，`node.Session` 会包装其连接。两者都可用 `SetEnableFairConn(false)` 关闭。直接使用 `node.New` 时连接保持原样，不做包装。
+Flex 会把托管的连接包装成 `FairConn`，避免单条流独占物理链路。`switcher.Server` 接受的连接与 `node.Session` 的连接默认启用；直接使用 `node.New` 时连接保持原样。
+
+当前实现两种策略：
+
+| 策略 | 配置 | 每轮预算 | 公平单位 |
+| --- | --- | --- | --- |
+| **成本计费（B，默认）** | `SchedulerPolicyCostBudget` | 32KB（`QuantumBytes`）；每包按 `max(payload, 1KB)`（`MinChargeBytes`）计费，因此单轮最多 32 个包 | 近似线缆成本 |
+| 包数 quantum（C） | `SchedulerPolicyPackets` | 每轮 `QuantumPackets` 个包（默认 2） | 包 |
+
+成本计费避免 1B 流演变成数千包的连续占用，同时让大包摊薄单轮固定开销。代价是小包流的 payload 份额较低（但每个包都能及时得到服务）；当所有流的包长接近、且要求单轮延迟最小时，包数 quantum 更合适。字节 DRR 变体（A）目前只是设计候选，**未实现**。
+
+```go
+// Server：对调用之后接受的连接生效。
+srv := switcher.NewServer(password, nil, nil)
+srv.SetSchedulerConfig(switcher.SchedulerConfig{
+    Policy:         switcher.SchedulerPolicyCostBudget, // 默认
+    QuantumBytes:   32 * 1024,
+    MinChargeBytes: 1024,
+})
+
+// Session：对每次（重）连重建的 Node 生效。
+sess := node.NewSession(connector, cfg)
+sess.SetSchedulerConfig(node.SchedulerConfig{
+    Policy:         node.SchedulerPolicyCostBudget,
+    QuantumBytes:   32 * 1024,
+    MinChargeBytes: 1024,
+})
+```
+
+切回历史包数 quantum：
+
+```go
+srv.SetSchedulerConfig(switcher.SchedulerConfig{
+    Policy:         switcher.SchedulerPolicyPackets,
+    QuantumPackets: 2,
+})
+```
+
+`SetSchedulerConfig` 必须在 `Serve` 之前调用；已建立的连接保留创建时的策略。`SetEnableFairConn(false)` 可完全关闭包装（多路复用场景不推荐）。Open/ACK/Ping/CloseAck、Presence 等控制包始终走高优先级控制通道，不计入数据预算。
 
 ---
 

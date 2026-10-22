@@ -4,7 +4,7 @@ flex 是一个基于单条 TCP/WebSocket 连接的虚拟网络多路复用库。
 
 整体分层自底向上为：**Transport → Packet → Fair 调度 → Switcher → Node → Stream → Session**。
 
-> 交互式可视化：[FairConn 调度可视化](fairconn_visualizer.html) —— 写路径架构、调度模拟，以及 C（包数）/ A（字节 DRR）/ B（成本计费）参数的同场对比，可直接离线打开。
+> 交互式可视化：[FairConn 调度可视化](fairconn_visualizer.html) —— 写路径架构、调度模拟，以及 C（包数）/ A（字节 DRR，候选）/ B（成本计费，默认）参数的同场对比，可直接离线打开。
 
 ## 分层架构总览
 
@@ -24,7 +24,7 @@ flex 是一个基于单条 TCP/WebSocket 连接的虚拟网络多路复用库。
 ├─────────────────────────────────────┤
 │  Switcher 层    路由转发、握手认证、Presence │
 ├─────────────────────────────────────┤
-│  Fair 调度层    DRR 公平队列（可选包装）   │
+│  Fair 调度层   成本计费 / 包数（默认包装） │
 ├─────────────────────────────────────┤
 │  Packet 层      11 字节二进制协议       │
 ├─────────────────────────────────────┤
@@ -95,10 +95,12 @@ net.Conn → packet.Conn → FairConn
 
 FairConn 替换写路径为 `FairWriter`：
 
-- **per-stream 有序包**（`CmdPushStreamData`、`CmdCloseStream`、`AckCloseStream`）→ 按 SID 分流到 `StreamQueue`，DRR 调度，每轮每 Stream 最多发送 quantum（默认 2）个包
-- **其余所有命令**（OpenStream、ACK、Ping、SubscribePresence、NotifyPresence 等跨流控制包）→ 高优先级 `controlCh`，立即发送
+- **per-stream 有序包**（`CmdPushStreamData`、`CmdCloseStream`、`AckCloseStream`）→ 按 SID 分流到 `StreamQueue`，轮转调度。默认 **成本计费（B）**：每包计费 `max(payload, 1KB)`，预算 32KB/轮，单轮最多 32 个包；可用 `SetSchedulerConfig` 切回包数 quantum（C，默认 2）。
+- **其余所有命令**（OpenStream、ACK、Ping、SubscribePresence、NotifyPresence 等跨流控制包）→ 高优先级 `controlCh`，立即发送；不计入数据预算。
 
-调度循环：优先排空 `controlCh` → 取一个就绪 Stream → 发送 quantum 个包 → 若队列仍有数据则重新入队。
+调度循环：优先排空 `controlCh` → 取一个就绪 Stream → 按策略发送一轮（B：成本预算；C：quantum 个包）→ 若队列仍有数据则重新入队。
+
+B 的取舍：1B 包在 `minCharge=1KB` 下每轮最多 32 个，无法用“包数”独占链路；代价是小包流的 payload 份额偏低，适合多租户/混合包长。C 的单轮占用更短，适合包长接近、延迟敏感的流量。A（按 payload 字节的 DRR）仍是设计候选，未实现。
 
 ---
 
@@ -214,7 +216,7 @@ Session.Serve()
   └─ loop {
        connector() → packet.Conn
        admit.Handshake() → IP
-       node = New(sched.NewFairConn(conn))  // 可选的公平调度包装
+       node = New(sched.NewFairConn(conn))  // 默认成本计费（B）
        重新注册所有持久 Listener
        node.Serve()          // 阻塞直到断线
        退避重连 (1s → 30s)

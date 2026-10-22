@@ -110,10 +110,45 @@ When a Node connects to a Switcher, it becomes a `Context`. The Switcher maintai
 
 ## Fairness & Scheduling
 
-Flex v2 introduces **Fair Queuing**.
--   **Problem**: In v1, a large file transfer could block ACKs or Pings, causing timeouts.
--   **Solution**: `FairWriter` queues packets from different streams separately and services them in a round-robin fashion.
--   **Usage**: Enabled by default where connections are managed for you: `switcher.Server` wraps every accepted connection, and `node.Session` wraps its connection. Disable with `SetEnableFairConn(false)` on either. A bare `node.New` uses the connection as-is.
+Flex wraps managed connections in a `FairConn` so one stream cannot monopolize the physical link. This is enabled by default for connections accepted by `switcher.Server` and for `node.Session` connections; a bare `node.New` uses the provided connection as-is.
+
+Two policies are implemented:
+
+| Policy | Configuration | Per-visit budget | Fairness unit |
+| --- | --- | --- | --- |
+| **Cost budget (B, default)** | `SchedulerPolicyCostBudget` | 32KB (`QuantumBytes`); each packet charged `max(payload, 1KB)` (`MinChargeBytes`), so at most 32 packets per visit | approximate wire cost |
+| Packet quantum (C) | `SchedulerPolicyPackets` | `QuantumPackets` packets (default 2) | packet |
+
+The cost policy prevents 1-byte streams from turning into thousands-of-packets monopoly runs while still letting large packets amortize the per-visit overhead. The trade-off is that a small-packet flow receives a small payload share even though its packets are serviced promptly; the packet quantum is better when all flows use similar packet sizes and per-visit latency must be minimal. A byte-DRR variant (A) is a design candidate and is **not** implemented.
+
+```go
+// Server: applies to connections accepted after this call.
+srv := switcher.NewServer(password, nil, nil)
+srv.SetSchedulerConfig(switcher.SchedulerConfig{
+    Policy:         switcher.SchedulerPolicyCostBudget, // default
+    QuantumBytes:   32 * 1024,
+    MinChargeBytes: 1024,
+})
+
+// Session: applied to the Node rebuilt on every (re)connect.
+sess := node.NewSession(connector, cfg)
+sess.SetSchedulerConfig(node.SchedulerConfig{
+    Policy:         node.SchedulerPolicyCostBudget,
+    QuantumBytes:   32 * 1024,
+    MinChargeBytes: 1024,
+})
+```
+
+To restore the historical packet quantum:
+
+```go
+srv.SetSchedulerConfig(switcher.SchedulerConfig{
+    Policy:         switcher.SchedulerPolicyPackets,
+    QuantumPackets: 2,
+})
+```
+
+`SetSchedulerConfig` must be called before `Serve`; existing connections keep the policy they were created with. `SetEnableFairConn(false)` disables the wrapper entirely (not recommended for multiplexed connections). Control packets (Open/ACK/Ping/CloseAck, Presence) always use the high-priority control channel and are not charged against the data budget.
 
 ---
 

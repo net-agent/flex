@@ -53,8 +53,12 @@ func cloneBuffer(buf *packet.Buffer) *packet.Buffer {
 }
 
 type FairWriter struct {
-	writer  packet.Writer
-	quantum int
+	writer packet.Writer
+	cfg    SchedulerConfig
+
+	// scratch 只在 loop goroutine 内使用，复用以避免每次 visit 分配
+	// []*packet.Buffer（旧实现每次 processStream 都 make 一次）。
+	scratch []*packet.Buffer
 
 	controlCh  chan *packet.Buffer
 	streams    map[uint64]*StreamQueue
@@ -83,6 +87,10 @@ func (sq *StreamQueue) Push(buf *packet.Buffer) {
 }
 
 // Drain removes and returns up to n packets from the queue.
+//
+// The FairWriter no longer uses Drain: it calls drainInto/drainCostInto with a
+// reusable scratch slice. Drain is kept for callers/tests that need an owning
+// slice.
 func (sq *StreamQueue) Drain(n int) []*packet.Buffer {
 	sq.mu.Lock()
 	l := len(sq.queue)
@@ -101,6 +109,67 @@ func (sq *StreamQueue) Drain(n int) []*packet.Buffer {
 	return out
 }
 
+// drainInto removes up to limit packets into dst and returns the count.
+// dst is owned by the caller (the FairWriter scratch); the queue only copies
+// pointers into it. The caller must pass a dst with len(dst) >= limit.
+func (sq *StreamQueue) drainInto(dst []*packet.Buffer, limit int) int {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+
+	n := limit
+	if n > len(sq.queue) {
+		n = len(sq.queue)
+	}
+	if n > len(dst) {
+		n = len(dst)
+	}
+	if n <= 0 {
+		return 0
+	}
+
+	copy(dst[:n], sq.queue[:n])
+	copy(sq.queue, sq.queue[n:])
+	sq.queue = sq.queue[:len(sq.queue)-n]
+	return n
+}
+
+// drainCostInto removes the longest prefix of packets whose charged cost
+// max(payload, minCharge) fits budget. The first packet is always taken, so a
+// single packet larger than the budget is an allowed overshoot.
+//
+// 该函数是 B 方案（成本计费）的核心：预算以近似线缆成本计，
+// 每次 visit 的包数天然被 budget/minCharge 限制，1B 包无法独占链路。
+func (sq *StreamQueue) drainCostInto(dst []*packet.Buffer, budget, minCharge int) int {
+	sq.mu.Lock()
+	defer sq.mu.Unlock()
+
+	limit := len(dst)
+	if limit > len(sq.queue) {
+		limit = len(sq.queue)
+	}
+
+	n, spent := 0, 0
+	for n < limit {
+		charge := len(sq.queue[n].Payload)
+		if charge < minCharge {
+			charge = minCharge
+		}
+		if n > 0 && spent+charge > budget {
+			break
+		}
+		spent += charge
+		n++
+	}
+	if n == 0 {
+		return 0
+	}
+
+	copy(dst[:n], sq.queue[:n])
+	copy(sq.queue, sq.queue[n:])
+	sq.queue = sq.queue[:len(sq.queue)-n]
+	return n
+}
+
 func (sq *StreamQueue) Len() int {
 	sq.mu.Lock()
 	n := len(sq.queue)
@@ -108,20 +177,41 @@ func (sq *StreamQueue) Len() int {
 	return n
 }
 
+// NewFairWriter creates a writer with the default cost-budget policy.
+// Passing an explicit quantum selects the packet-quantum policy (compatibility
+// with the previous API); without it, the cost-budget default is used.
 func NewFairWriter(w packet.Writer, quantum ...int) *FairWriter {
-	q := DefaultQuantum
 	if len(quantum) > 0 && quantum[0] > 0 {
-		q = quantum[0]
+		return NewFairWriterWithConfig(w, SchedulerConfig{
+			Policy:         PolicyPacketQuantum,
+			QuantumPackets: quantum[0],
+		})
 	}
+	return NewFairWriterWithConfig(w, DefaultSchedulerConfig())
+}
+
+// NewFairWriterWithConfig creates a writer with an explicit scheduling policy.
+// The policy is immutable for the lifetime of the writer.
+func NewFairWriterWithConfig(w packet.Writer, cfg SchedulerConfig) *FairWriter {
+	return newFairWriter(w, cfg, true)
+}
+
+// newFairWriter optionally defers starting the loop, which lets tests enqueue a
+// deterministic backlog before the first scheduling decision.
+func newFairWriter(w packet.Writer, cfg SchedulerConfig, start bool) *FairWriter {
+	cfg = cfg.normalized()
 	fw := &FairWriter{
 		writer:     w,
-		quantum:    q,
+		cfg:        cfg,
+		scratch:    make([]*packet.Buffer, cfg.visitLimit()),
 		controlCh:  make(chan *packet.Buffer, DefaultControlQueueSize),
 		streams:    make(map[uint64]*StreamQueue),
 		readyQueue: make(chan uint64, ReadyQueueSize),
 		done:       make(chan struct{}),
 	}
-	go fw.loop()
+	if start {
+		go fw.loop()
+	}
 	return fw
 }
 
@@ -246,8 +336,9 @@ func (fw *FairWriter) processStream(sid uint64) {
 		return
 	}
 
-	bufs := sq.Drain(fw.quantum)
-	if len(bufs) > 0 {
+	n := fw.takePackets(sq)
+	if n > 0 {
+		bufs := fw.scratch[:n]
 		if bw, ok := fw.writer.(packet.BatchWriter); ok {
 			bw.WriteBufferBatch(bufs)
 		} else {
@@ -255,9 +346,11 @@ func (fw *FairWriter) processStream(sid uint64) {
 				fw.writer.WriteBuffer(buf)
 			}
 		}
-		// 内置 Writer 均为同步写、返回后不持有 buffer，此处统一归还
-		for _, buf := range bufs {
-			packet.PutBuffer(buf)
+		// 内置 Writer 均为同步写、返回后不持有 buffer，此处统一归还。
+		// 清空 scratch 中的指针，避免其延长 buffer 生命周期。
+		for i := 0; i < n; i++ {
+			packet.PutBuffer(bufs[i])
+			fw.scratch[i] = nil
 		}
 	}
 
@@ -282,6 +375,14 @@ func (fw *FairWriter) processStream(sid uint64) {
 	if sq.Len() > 0 && sq.active.CompareAndSwap(false, true) {
 		fw.requeue(sid)
 	}
+}
+
+// takePackets drains one visit worth of packets into the reusable scratch.
+func (fw *FairWriter) takePackets(sq *StreamQueue) int {
+	if fw.cfg.Policy == PolicyCostBudget {
+		return sq.drainCostInto(fw.scratch, fw.cfg.QuantumBytes, fw.cfg.MinChargeBytes)
+	}
+	return sq.drainInto(fw.scratch, fw.cfg.QuantumPackets)
 }
 
 // requeue 把 SID 放回就绪队列；队列满时退化为异步投递（done 后放弃，避免 goroutine 泄漏）

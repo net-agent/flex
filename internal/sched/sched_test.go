@@ -30,7 +30,7 @@ func (m *MockWriter) SetWriteTimeout(dur time.Duration) {}
 
 func TestPriority(t *testing.T) {
 	mock := &MockWriter{delay: time.Millisecond * 10}
-	fw := NewFairWriter(mock)
+	fw := NewFairWriter(mock, 2)
 	defer fw.Close()
 
 	// 1. Send Data (Low Priority) - will block/delay in mock
@@ -64,7 +64,7 @@ func TestPriority(t *testing.T) {
 
 func TestFairness(t *testing.T) {
 	mock := &MockWriter{delay: time.Microsecond * 10} // Small delay to allow lock interleaving
-	fw := NewFairWriter(mock)
+	fw := NewFairWriter(mock, 2)
 	defer fw.Close()
 
 	// Stream 1: Sends 100 packets

@@ -32,6 +32,10 @@ type Server struct {
 
 	enableFairConn atomic.Bool
 
+	// fairMu / fairCfg 保护新连接的 FairConn 调度策略（SetSchedulerConfig）。
+	fairMu  sync.RWMutex
+	fairCfg sched.SchedulerConfig
+
 	// limits 是准入与资源配额，必须在 Serve 之前通过 SetLimits 设置。
 	limits    Limits
 	connSem   chan struct{} // nil 表示不限连接数
@@ -99,6 +103,7 @@ func NewServer(password string, logger *slog.Logger, logCfg *LogConfig) *Server 
 		ctxLogger: newModuleLogger(logger, cfg.Context, "context"),
 	}
 	s.enableFairConn.Store(true)
+	s.fairCfg = sched.DefaultSchedulerConfig()
 	s.router = newPacketRouter(reg, newModuleLogger(logger, cfg.Router, "router"))
 	s.limits = DefaultLimits()
 	s.applyLimits()
@@ -218,12 +223,10 @@ func (s *Server) Serve(l net.Listener) error {
 			return err
 		}
 
-		pconn := packet.NewWithConn(conn)
-		if s.enableFairConn.Load() {
-			s.logger.Info("enabling fair connection scheduling")
-			pconn = sched.NewFairConn(pconn)
-		}
-		go s.ServeConn(pconn)
+		// FairConn 在 ServeConn 完成握手应答后启用（见第四步），
+		// 这样 TCP 与直接调用 ServeConn 的 WebSocket 路径行为一致，
+		// 且握手写失败仍能同步返回给调用方。
+		go s.ServeConn(packet.NewWithConn(conn))
 	}
 }
 
@@ -308,7 +311,16 @@ func (s *Server) ServeConn(pc packet.Conn) (err error) {
 		return fmt.Errorf("%w: %w", errHandlePCWriteFailed, err)
 	}
 
-	// 第四步：绑定底层连接
+	// 第四步：数据面启用 FairConn。
+	// 握手阶段保持裸连接：应答写失败必须同步暴露给调用方；
+	// 直接调用 ServeConn 的 WebSocket 场景也在此获得公平调度与限流配置。
+	if s.enableFairConn.Load() {
+		if _, ok := pc.(*sched.FairConn); !ok {
+			fc := sched.NewFairConnWithConfig(pc, s.schedulerConfig())
+			defer fc.Close()
+			pc = fc
+		}
+	}
 	ctx.setConn(pc)
 
 	// 记录服务时长

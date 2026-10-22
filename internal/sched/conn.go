@@ -19,6 +19,14 @@ func NewFairConn(conn packet.Conn, quantum ...int) *FairConn {
 	}
 }
 
+// NewFairConnWithConfig wraps conn with an explicit scheduling policy.
+func NewFairConnWithConfig(conn packet.Conn, cfg SchedulerConfig) *FairConn {
+	return &FairConn{
+		Conn:   conn,
+		writer: NewFairWriterWithConfig(conn, cfg),
+	}
+}
+
 func (fc *FairConn) WriteBuffer(buf *packet.Buffer) error {
 	return fc.writer.WriteBuffer(buf)
 }

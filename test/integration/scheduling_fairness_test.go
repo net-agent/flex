@@ -4,9 +4,11 @@
 // 在复用同一条 TCP 物理连接时，多条虚拟 Stream 的数据包是否被“均匀、公平”地发送。
 //
 // 为什么在 integration 层做这个测试：
-// 1. 单元测试只能验证调度器局部逻辑，无法覆盖 Session/Node/Switcher/Stream 的真实联动路径。
-// 2. 本测试在真实端到端链路上发压，记录发送侧写包顺序，用结果评估调度是否公平。
-// 3. 当前测试明确“不接入 FairConn”，用于先固化验收标准，再驱动后续实现。
+//  1. 单元测试只能验证调度器局部逻辑，无法覆盖 Session/Node/Switcher/Stream 的真实联动路径。
+//  2. 本测试在真实端到端链路上发压，记录发送侧写包顺序，用结果评估调度是否公平。
+//  3. 本测试固定使用 C2（packet quantum=2）作为回归基线；默认策略已是 B
+//     （cost budget），其成本公平性由 internal/sched 的单元测试与
+//     TestIntegration_CostBudgetScheduler 覆盖。
 //
 // 测试设计：
 // 1. 建立 sender/receiver 两个 Session，共享同一个 switcher。
@@ -387,7 +389,7 @@ func avgFloat64(values []float64) float64 {
 }
 
 // TDD (RED): 定义“同一 TCP 连接上多 stream 公平调度”的验收标准。
-// 当前不接入 FairConn，本测试用于先固化期望行为，再驱动后续实现。
+// 固定 C2 的包数公平回归；默认 B 的成本公平见 scheduler_cost_test.go。
 func TestIntegration_SchedulingFairness(t *testing.T) {
 	password := "test-password"
 	cfg := defaultFairnessTestProfile()
@@ -399,6 +401,10 @@ func TestIntegration_SchedulingFairness(t *testing.T) {
 		Context:  slog.LevelWarn,
 	}
 	srv := switcher.NewServer(password, nil, logCfg)
+	srv.SetSchedulerConfig(switcher.SchedulerConfig{
+		Policy:         switcher.SchedulerPolicyPackets,
+		QuantumPackets: 2,
+	})
 	defer srv.Close()
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -411,12 +417,20 @@ func TestIntegration_SchedulingFairness(t *testing.T) {
 		Domain:   "sender",
 		Password: password,
 	})
+	sender.SetSchedulerConfig(node.SchedulerConfig{
+		Policy:         node.SchedulerPolicyPackets,
+		QuantumPackets: 2,
+	})
 	defer sender.Close()
 	go sender.Serve()
 
 	receiver := node.NewSession(tcpConnector(addr), node.SessionConfig{
 		Domain:   "receiver",
 		Password: password,
+	})
+	receiver.SetSchedulerConfig(node.SchedulerConfig{
+		Policy:         node.SchedulerPolicyPackets,
+		QuantumPackets: 2,
 	})
 	defer receiver.Close()
 	go receiver.Serve()

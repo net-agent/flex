@@ -79,6 +79,10 @@ type Session struct {
 
 	enableFairConn atomic.Bool
 
+	// schedMu / schedCfg 保护 FairConn 调度策略（SetSchedulerConfig）。
+	schedMu  sync.RWMutex
+	schedCfg sched.SchedulerConfig
+
 	// connectTimeout 是冷启动阶段等待首次连接完成的最长时间（纳秒），
 	// 见 SetConnectTimeout。
 	connectTimeout atomic.Int64
@@ -133,6 +137,7 @@ func NewSession(connector ConnectFunc, cfg SessionConfig) *Session {
 		logger:     slog.Default(),
 	}
 	s.enableFairConn.Store(true)
+	s.schedCfg = sched.DefaultSchedulerConfig()
 	s.connectTimeout.Store(int64(defaultConnectTimeout))
 	return s
 }
@@ -598,8 +603,7 @@ func (s *Session) Serve() error {
 		}
 
 		if s.enableFairConn.Load() {
-			s.logger.Info("enabling fair connection scheduling")
-			conn = sched.NewFairConn(conn)
+			conn = sched.NewFairConnWithConfig(conn, s.schedulerConfig())
 		}
 
 		node := New(conn)

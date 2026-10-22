@@ -143,7 +143,7 @@ func runFairness(numStreams, packetsPerStream int) ScenarioResult {
 
 	// --- Fair ---
 	fairW := &RecordWriter{delay: delay}
-	fw := NewFairWriter(fairW)
+	fw := NewFairWriter(fairW, 2)
 	wg.Add(numStreams)
 	for s := 1; s <= numStreams; s++ {
 		go func(sid uint16) {
@@ -195,7 +195,7 @@ func runPriority(dataStreams, dataPerStream, controlCount int) ScenarioResult {
 
 	// --- Fair ---
 	fairW := &RecordWriter{delay: delay}
-	fw := NewFairWriter(fairW)
+	fw := NewFairWriter(fairW, 2)
 	wg.Add(dataStreams + 1)
 	for s := 1; s <= dataStreams; s++ {
 		go func(sid uint16) {
@@ -232,7 +232,7 @@ func runStarvation(lowStreams, highCount, lowCount int) ScenarioResult {
 		var write func(*packet.Buffer)
 		var fw *FairWriter
 		if useFair {
-			fw = NewFairWriter(rec)
+			fw = NewFairWriter(rec, 2)
 			write = func(buf *packet.Buffer) { fw.WriteBuffer(buf) }
 		} else {
 			write = func(buf *packet.Buffer) { rec.WriteBuffer(buf) }
@@ -306,7 +306,7 @@ func runThroughput(numStreams, total int) ThroughputResult {
 
 	// Fair
 	fairW := &RecordWriter{}
-	fw := NewFairWriter(fairW)
+	fw := NewFairWriter(fairW, 2)
 	start = time.Now()
 	wg.Add(numStreams)
 	for s := 1; s <= numStreams; s++ {
@@ -351,7 +351,7 @@ func runRealThroughput(numStreams, total int) ThroughputResult {
 		var writer packet.Writer = c1
 		var fw *FairWriter
 		if useFair {
-			fw = NewFairWriter(c1)
+			fw = NewFairWriter(c1, 2)
 			writer = nil
 			_ = writer
 		}
@@ -713,7 +713,7 @@ func BenchmarkTCP_FairConn(b *testing.B) {
 			done := make(chan struct{})
 			go drainReader(rconn, done)
 
-			fw := NewFairWriter(wconn)
+			fw := NewFairWriter(wconn, 2)
 			perStream := b.N / streams
 			b.ResetTimer()
 
@@ -787,7 +787,7 @@ func BenchmarkTCP_BatchVsNoBatch(b *testing.B) {
 // 流结束后（close 类包排空）SID 条目应被回收，未结束的流保留
 func TestFairWriterReapsClosedStreams(t *testing.T) {
 	rw := &RecordWriter{}
-	fw := NewFairWriter(rw)
+	fw := NewFairWriter(rw, 2)
 	defer fw.Close()
 
 	sid1 := makeBuf(packet.CmdPushStreamData, 1).SID()
@@ -848,7 +848,7 @@ func (discardWriter) SetWriteTimeout(time.Duration)    {}
 func BenchmarkFairWriterWriteBuffer(b *testing.B) {
 	for _, size := range []int{0, 1024, 32 * 1024} {
 		b.Run(fmt.Sprintf("payload=%d", size), func(b *testing.B) {
-			fw := NewFairWriter(discardWriter{})
+			fw := NewFairWriter(discardWriter{}, 2)
 			defer fw.Close()
 			buf := makeBuf(packet.CmdPushStreamData, 1)
 			if size > 0 {
@@ -873,7 +873,7 @@ func BenchmarkFairWriterWriteBuffer(b *testing.B) {
 // 此处不断言回收时机，pool 健康由 packet 包测试与 race 检测覆盖。
 func TestWriteBufferOwned(t *testing.T) {
 	rec := &RecordWriter{}
-	fw := NewFairWriter(rec)
+	fw := NewFairWriter(rec, 2)
 	defer fw.Close()
 
 	owned := makeBuf(packet.CmdPushStreamData, 7)
@@ -897,7 +897,7 @@ func TestWriteBufferOwned(t *testing.T) {
 	}
 
 	// writer 关闭后：所有权不转移，buffer 保持原样，由调用方负责回收
-	fw2 := NewFairWriter(&RecordWriter{})
+	fw2 := NewFairWriter(&RecordWriter{}, 2)
 	fw2.Close()
 	rejected := makeBuf(packet.CmdPushStreamData, 9)
 	if err := fw2.WriteBufferOwned(rejected); err != ErrWriterClosed {
@@ -912,7 +912,7 @@ func TestWriteBufferOwned(t *testing.T) {
 // TestWriteBufferKeepsCallerOwnership 对照验证：WriteBuffer（克隆语义）不动调用方的 buffer。
 func TestWriteBufferKeepsCallerOwnership(t *testing.T) {
 	rec := &RecordWriter{}
-	fw := NewFairWriter(rec)
+	fw := NewFairWriter(rec, 2)
 	defer fw.Close()
 
 	buf := makeBuf(packet.CmdPushStreamData, 3)

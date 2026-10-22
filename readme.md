@@ -12,7 +12,7 @@
     -   **Switcher**: Acts as a relay server. Routes traffic between Nodes using virtual domains and IPs.
 -   **Session with Auto-Reconnect**: `node.Session` wraps a Node with lazy connect, automatic reconnection with backoff, and listeners that survive reconnects.
 -   **Presence Subscription**: `Node.Watch()` subscribes to named nodes' online/offline states; the Switcher pushes change events in real time (the subscribe ACK carries a state snapshot, seamlessly stitched with later events), replacing `PingDomain` polling.
--   **Fair Scheduling**: Built-in **Fair Queuing** (DRR-based, see `internal/sched`) ensures that a single high-bandwidth stream cannot starve control signals (ACKs, Pings) or other small streams. Enabled by default on both `switcher.Server` and `node.Session`.
+-   **Fair Scheduling**: Built-in **Fair Queuing** (see `internal/sched`). The default **cost-budget** policy charges each packet `max(payload, 1KB)` against a 32KB per-visit budget, so a 1-byte stream cannot monopolize the link while ACKs/Pings keep flowing. The historical packet quantum (`quantum=2`) remains available via `SetSchedulerConfig`. Enabled by default on both `switcher.Server` and `node.Session`.
 -   **Inspection APIs**: `Node.GetInfo()` / `Node.GetListeners()`, `Switcher.GetStats()` / `Switcher.GetClients()`, and `Stream.GetState()` expose traffic counters, active streams, and RTT in real time.
 -   **Backpressure that fails loud**: the receive queue is bounded by bytes (matching the flow-control window), never blocks the dispatcher, and reports a protocol violation by actively closing the stream instead of silently dropping data.
 -   **Admission control**: connection/stream/subscription quotas, per-IP handshake rate limiting and source-address validation are enabled with generous defaults on `switcher.Server` (see `SetLimits`).
@@ -28,6 +28,27 @@ graph LR
     A -- "Virtual Stream (Dial)" --> B
     B -- "Virtual Stream (Accept)" --> A
 ```
+
+## Scheduling
+
+`switcher.Server` and `node.Session` wrap managed connections in a `FairConn`.
+The default is **cost-budget (B)**: each packet is charged
+`max(payload, MinChargeBytes)` against `QuantumBytes` (defaults: 32KB / 1KB),
+which caps a visit at 32 packets even for 1-byte payloads.
+
+```go
+// Default (B): cost-budget, 32KB per visit, 1KB minimum charge per packet.
+srv := switcher.NewServer(password, nil, nil)
+
+// Switch back to the historical packet quantum (C).
+srv.SetSchedulerConfig(switcher.SchedulerConfig{
+    Policy:         switcher.SchedulerPolicyPackets,
+    QuantumPackets: 2,
+})
+```
+
+Use `node.Session.SetSchedulerConfig` for the client side. See
+[Fairness & Scheduling](docs/manual.md#fairness--scheduling) for the trade-offs.
 
 ## Quick Start
 

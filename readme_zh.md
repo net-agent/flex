@@ -12,7 +12,7 @@
     -   **Switcher (交换机)**: 作为中继服务器。根据虚拟域名 (Domain) 和 IP 在节点间路由流量。
 -   **Session 自动重连**: `node.Session` 在 Node 之上提供懒连接、指数退避自动重连，监听器在重连后自动恢复。
 -   **Presence 状态订阅**: `Node.Watch()` 订阅一组 named node 的上下线状态，由 Switcher 实时推送变更事件（订阅应答携带状态快照，与后续事件无缝衔接），替代 `PingDomain` 轮询。
--   **公平调度**: 内置基于 DRR 的**公平队列**（见 `internal/sched`），确保单个高带宽流不会阻塞控制信号（ACK、Ping）或其他小流量流。`switcher.Server` 与 `node.Session` 默认启用。
+-   **公平调度**: 内置**公平队列**（见 `internal/sched`）。默认 **成本计费（B）**：每包按 `max(payload, 1KB)` 计入 32KB/轮的预算，1B 小包无法独占链路，ACK/Ping 等控制信号保持通畅；历史包数 quantum（默认 2）仍可通过 `SetSchedulerConfig` 切回。`switcher.Server` 与 `node.Session` 默认启用。
 -   **状态查询 API**: `Node.GetInfo()` / `Node.GetListeners()`、`Switcher.GetStats()` / `Switcher.GetClients()`、`Stream.GetState()` 可实时获取流量统计、活跃流与 RTT。
 -   **可靠性**: 健壮的连接管理，拥有心跳保活及完善的主动/被动关闭处理机制。
 
@@ -26,6 +26,26 @@ graph LR
     A -- "虚拟流 (Dial)" --> B
     B -- "虚拟流 (Accept)" --> A
 ```
+
+## 调度策略
+
+`switcher.Server` 与 `node.Session` 会把托管的连接包装成 `FairConn`。
+默认是 **成本计费（B）**：每包按 `max(payload, MinChargeBytes)` 计入
+`QuantumBytes`（默认 32KB / 1KB），因此即使是 1B 包，单轮也最多 32 个。
+
+```go
+// 默认（B）：成本计费，32KB/轮，每包最低计费 1KB。
+srv := switcher.NewServer(password, nil, nil)
+
+// 切回历史包数 quantum（C）。
+srv.SetSchedulerConfig(switcher.SchedulerConfig{
+    Policy:         switcher.SchedulerPolicyPackets,
+    QuantumPackets: 2,
+})
+```
+
+客户端侧使用 `node.Session.SetSchedulerConfig`。取舍与调参见
+[公平性与调度](docs/manual_zh.md#公平性与调度)。
 
 ## 快速开始
 
