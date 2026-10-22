@@ -39,6 +39,12 @@ type Context struct {
 	forwardDone chan struct{}
 	closeOnce   sync.Once
 
+	// connReady 在 setConn 首次绑定非 nil 连接时关闭。
+	// 握手应答写完到 setConn 之间，其他节点可能已经命中本 ctx 并转发数据包；
+	// 此时不能丢包，转发循环应等待连接就绪后再写出（保证应答先于任何转发）。
+	connReady     chan struct{}
+	connReadyOnce sync.Once
+
 	AttachTime time.Time
 	DetachTime time.Time
 
@@ -67,6 +73,7 @@ func NewContext(id int, conn packet.Conn, domain, mac string, logger *slog.Logge
 		conn:        conn,
 		forwardCh:   make(chan *packet.Buffer, 256),
 		forwardDone: make(chan struct{}),
+		connReady:   make(chan struct{}),
 		AttachTime:  time.Now(),
 	}
 	go ctx.runForwardLoop()
@@ -85,8 +92,15 @@ func (ctx *Context) getConn() packet.Conn {
 
 func (ctx *Context) setConn(c packet.Conn) {
 	ctx.mu.Lock()
-	defer ctx.mu.Unlock()
 	ctx.conn = c
+	if c != nil {
+		ctx.connReadyOnce.Do(func() {
+			if ctx.connReady != nil {
+				close(ctx.connReady)
+			}
+		})
+	}
+	ctx.mu.Unlock()
 }
 
 func (ctx *Context) isAttached() bool {
@@ -122,6 +136,20 @@ type ownedBufferWriter interface {
 // 裸连接同步写完后就地归还；失败时 buffer 未转移，也在此归还。
 func (ctx *Context) writeBuffer(buf *packet.Buffer) error {
 	c := ctx.getConn()
+	if c == nil {
+		// 连接尚未绑定（握手应答与 setConn 之间的窗口）：等待就绪而不是丢包。
+		if ctx.connReady == nil {
+			packet.PutBuffer(buf)
+			return errNilContextConn
+		}
+		select {
+		case <-ctx.connReady:
+			c = ctx.getConn()
+		case <-ctx.forwardDone:
+			packet.PutBuffer(buf)
+			return errContextClosed
+		}
+	}
 	if c == nil {
 		packet.PutBuffer(buf)
 		return errNilContextConn
