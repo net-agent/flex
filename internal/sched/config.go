@@ -28,6 +28,14 @@ const (
 	// MaxPacketsPerVisit bounds the scratch slice and the per-visit loop even
 	// when MinChargeBytes is configured very small.
 	MaxPacketsPerVisit = 1024
+
+	// DefaultQuantum is the historical packet-quantum visit size.
+	DefaultQuantum = 2
+
+	// DefaultControlQueueSize is the high-priority control queue capacity.
+	DefaultControlQueueSize = 128
+	// ReadyQueueSize is the number of SIDs that can be queued for scheduling.
+	ReadyQueueSize = 1024
 )
 
 func (p Policy) String() string {

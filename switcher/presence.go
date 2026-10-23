@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/net-agent/flex/v3/internal/admit"
+	domainpkg "github.com/net-agent/flex/v3/internal/domain"
 	"github.com/net-agent/flex/v3/packet"
 	"github.com/net-agent/flex/v3/wire"
 )
@@ -124,7 +124,7 @@ func (pc *presenceCenter) purgeSubscriber(ip uint16) {
 func (pc *presenceCenter) handleSubscribe(ctx *Context, req packet.SubscribeRequest, ackPort uint16) {
 	normalized := make([]string, 0, len(req.Domains))
 	for _, d := range req.Domains {
-		nd, err := admit.NormalizeDomain(d)
+		nd, err := domainpkg.Normalize(d)
 		if err != nil {
 			pc.replySubscribeACK(ctx, ackPort, packet.SubscribeACK{OK: false, Error: err.Error()})
 			return

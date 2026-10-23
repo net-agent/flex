@@ -43,7 +43,7 @@ func TestServerSchedulerConfigDefault(t *testing.T) {
 	}
 }
 
-// 直接调用 ServeConn（无 Serve 包装）时，数据面也必须按配置启用 FairConn。
+// 直接调用 ServeConn（无 Serve 包装）时，数据面也必须按配置启用 link 的 fair writer。
 func TestServerCostSchedulerWrapsDirectServeConn(t *testing.T) {
 	s := newLimitedServer(t, permissiveLimits())
 	s.SetSchedulerConfig(SchedulerConfig{

@@ -77,8 +77,6 @@ type Session struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	enableFairConn atomic.Bool
-
 	// schedMu / schedCfg 保护 link 写调度策略（SetSchedulerConfig）。
 	schedMu  sync.RWMutex
 	schedCfg sched.SchedulerConfig
@@ -138,7 +136,6 @@ func NewSession(connector ConnectFunc, cfg SessionConfig) *Session {
 		done:       make(chan struct{}),
 		logger:     slog.Default(),
 	}
-	s.enableFairConn.Store(true)
 	s.schedCfg = sched.DefaultSchedulerConfig()
 	s.dialer = link.NewDialer(link.DialConfig{
 		PSK:       cfg.Password,
@@ -173,12 +170,11 @@ func (s *Session) SetContextConnector(fn ConnectContextFunc) {
 	s.connectorCtx = fn
 }
 
-// SetEnableFairConn controls whether the Session wraps its connection with
-// sched.FairConn for fair stream scheduling. Default is true (enabled).
-// Must be called before Serve.
-func (s *Session) SetEnableFairConn(enable bool) {
-	s.enableFairConn.Store(enable)
-}
+// SetEnableFairConn is retained for API compatibility. Every link now uses the
+// fair writer; this method has no effect.
+//
+// Deprecated: fair scheduling is always enabled by link.Link.
+func (s *Session) SetEnableFairConn(enable bool) {}
 
 // SetConnectTimeout 设置冷启动阶段（首次连接尚未建立）Dial/Watch/PingDomain
 // 等待首次连接完成的最长时间，默认 15s。设为 0 表示不等待（冷启动也 fail-fast）。

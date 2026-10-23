@@ -37,8 +37,6 @@ type Server struct {
 	nextCtxID  atomic.Int32
 	startedAt  time.Time
 
-	enableFairConn atomic.Bool
-
 	// fairMu / fairCfg 保护新连接的 link 写调度策略（SetSchedulerConfig）。
 	fairMu   sync.RWMutex
 	fairCfg  sched.SchedulerConfig
@@ -110,7 +108,6 @@ func NewServer(password string, logger *slog.Logger, logCfg *LogConfig) *Server 
 		logger:    newModuleLogger(logger, cfg.Server, "server"),
 		ctxLogger: newModuleLogger(logger, cfg.Context, "context"),
 	}
-	s.enableFairConn.Store(true)
 	s.fairCfg = sched.DefaultSchedulerConfig()
 	s.acceptor = link.NewAcceptor(link.AcceptConfig{PSK: password, Scheduler: s.fairCfg})
 	s.router = newPacketRouter(reg, newModuleLogger(logger, cfg.Router, "router"))
@@ -169,11 +166,11 @@ func (s *Server) releaseConnSlot() {
 	}
 }
 
-// SetEnableFairConn controls whether incoming connections are wrapped with
-// sched.FairConn for fair stream scheduling. Default is true (enabled).
-func (s *Server) SetEnableFairConn(enable bool) {
-	s.enableFairConn.Store(enable)
-}
+// SetEnableFairConn is retained for API compatibility. Every link now uses the
+// fair writer; this method has no effect.
+//
+// Deprecated: fair scheduling is always enabled by link.Link.
+func (s *Server) SetEnableFairConn(enable bool) {}
 
 func (s *Server) GetStats() *StatsResponse {
 	ctxs := s.registry.activeContexts()
@@ -232,9 +229,8 @@ func (s *Server) Serve(l net.Listener) error {
 			return err
 		}
 
-		// FairConn 在 ServeConn 完成握手应答后启用（见第四步），
-		// 这样 TCP 与直接调用 ServeConn 的 WebSocket 路径行为一致，
-		// 且握手写失败仍能同步返回给调用方。
+		// ServeConn 内部完成 v4 握手并创建 link；TCP 与 WebSocket
+		// 路径行为一致。
 		go s.ServeConn(packet.NewWithConn(conn))
 	}
 }

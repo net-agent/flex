@@ -12,7 +12,7 @@ import (
 	"golang.org/x/crypto/chacha20"
 	"golang.org/x/crypto/chacha20poly1305"
 
-	"github.com/net-agent/flex/v3/internal/admit"
+	domainpkg "github.com/net-agent/flex/v3/internal/domain"
 	"github.com/net-agent/flex/v3/internal/sched"
 	"github.com/net-agent/flex/v3/wire"
 )
@@ -306,7 +306,7 @@ func (a *Acceptor) Accept(t Transport) (*Pending, *Handshake, error) {
 	if !a.replay.add(req.Nonce, time.Now()) {
 		return nil, nil, errHandshakeReplay
 	}
-	domain, err := admit.NormalizeDomain(req.Domain)
+	domain, err := domainpkg.Normalize(req.Domain)
 	if err != nil {
 		return nil, nil, err
 	}

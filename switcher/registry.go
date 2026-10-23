@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/net-agent/flex/v3/internal/admit"
+	domainpkg "github.com/net-agent/flex/v3/internal/domain"
 	"github.com/net-agent/flex/v3/internal/idpool"
 	"github.com/net-agent/flex/v3/packet"
 )
@@ -55,7 +55,7 @@ func newContextRegistry(ipm *idpool.Pool, logger *slog.Logger, presence *presenc
 }
 
 func (r *contextRegistry) attach(ctx *Context) error {
-	normalized, err := admit.NormalizeDomain(ctx.Domain)
+	normalized, err := domainpkg.Normalize(ctx.Domain)
 	if err != nil {
 		r.logger.Warn("attach failed: invalid domain", "ctx_id", ctx.id, "domain", ctx.Domain)
 		return err
@@ -164,7 +164,7 @@ func (r *contextRegistry) detach(ctx *Context) {
 }
 
 func (r *contextRegistry) lookupByDomain(domain string) (*Context, error) {
-	domain, err := admit.NormalizeDomain(domain)
+	domain, err := domainpkg.Normalize(domain)
 	if err != nil {
 		return nil, err
 	}

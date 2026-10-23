@@ -2,7 +2,7 @@
 //
 // 测试策略：
 //   - 使用 newTestConnector 创建可控的 connector，每次调用返回一对通过 packet.Pipe 互联的 packet.Conn
-//   - server 端在 goroutine 中完成 admit.Accept 握手并创建 Node
+//   - server 端在 goroutine 中完成 v4 握手并创建 Node
 //   - 使用 fakeListener 直接测试 bridge 内部的 select 分支（sl.done / s.done）
 //   - 通过关闭 server 端 Node 触发断线，验证自动重连和 Listener 重新注册
 //
