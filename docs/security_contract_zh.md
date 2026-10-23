@@ -151,3 +151,21 @@ PSK ──Argon2id(64MB,3,4) 或 HKDF──> K_boot
 | Node 帧处理 | `node/dispatcher.go`、`node/node.go`、`node/session.go` |
 | Switcher 帧路由 | `switcher/context.go`、`switcher/router.go`、`switcher/server.go` |
 | 契约测试 | `wire/contract_test.go`、`link/secure_test.go`、`link/fair_test.go` |
+
+## 11. 性能实测（v4，Apple M4 / Go 1.25.1）
+
+微基准（`go test ./link -bench . -benchmem`，不含内核 I/O）：
+
+| 场景 | 时间 | 分配 |
+|---|---|---|
+| 数据帧头加密（64B payload） | ~28 ns/帧 | 0 alloc |
+| 数据帧头加密（16KB payload） | ~28 ns/帧 | 0 alloc |
+| 控制帧 32B（padding+AEAD） | ~266 ns/帧 | 3 alloc |
+| 控制帧 1KB（padding+AEAD） | ~1.1 µs/帧 | 3 alloc |
+| 11B 头 encode+decode（无加密） | ~15.5 ns | 0 alloc |
+
+端到端对照（`node.TestStreamList`，10 条流 × 64MB，直连模式，同一台机器）：
+
+- v3 基线（main）：约 400 ms 完成全部发送。
+- v4 分支：约 310 ms（帧化 + 单一 fair writer + 池化接收缓冲）。
+- v4 安全路径只多出每包 11B 头加解密（~28ns），数据 payload 不参与加密；握手 Argon2id 每连接一次，可用 `link.KDFHKDF` 换成高熵 secret 的快速派生。
