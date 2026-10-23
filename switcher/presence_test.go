@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v3/internal/admit"
+	"github.com/net-agent/flex/v3/link"
 	"github.com/net-agent/flex/v3/node"
 	"github.com/net-agent/flex/v3/packet"
 )
@@ -41,11 +41,8 @@ func connectAndServe(t *testing.T, s *Server, domain string) *node.Node {
 	t.Helper()
 	pc1, pc2 := packet.Pipe()
 	go s.ServeConn(pc2)
-	ip, err := admit.Handshake(pc1, domain, "", "testpswd")
-	if err != nil {
-		t.Fatalf("handshake failed: %v", err)
-	}
-	n := node.New(pc1)
+	lnk, ip := testDialLink(t, pc1, domain, "testpswd")
+	n := node.NewFromLink(lnk)
 	n.SetIP(ip)
 	n.SetDomain(domain)
 	go n.Serve()
@@ -55,29 +52,26 @@ func connectAndServe(t *testing.T, s *Server, domain string) *node.Node {
 
 // handshakeOnly 只完成握手接入，后台持续读包但从不应答（模拟 ping 不通的节点）。
 // packet.Pipe 是同步管道，必须有 goroutine 持续排空，否则 switcher 的 ping 写入会阻塞。
-func handshakeOnly(t *testing.T, s *Server, domain string) (packet.Conn, uint16) {
+func handshakeOnly(t *testing.T, s *Server, domain string) (*link.Link, uint16) {
 	t.Helper()
 	pc1, pc2 := packet.Pipe()
 	go s.ServeConn(pc2)
-	ip, err := admit.Handshake(pc1, domain, "", "testpswd")
-	if err != nil {
-		t.Fatalf("handshake failed: %v", err)
-	}
+	lnk, ip := testDialLink(t, pc1, domain, "testpswd")
 	go func() {
 		for {
-			pbuf, err := pc1.ReadBuffer()
+			f, err := lnk.ReadFrame()
 			if err != nil {
 				return
 			}
-			packet.PutBuffer(pbuf)
+			f.Release()
 		}
 	}()
-	t.Cleanup(func() { pc1.Close() })
-	return pc1, ip
+	t.Cleanup(func() { lnk.Close() })
+	return lnk, ip
 }
 
 func TestPresenceWatchSnapshot(t *testing.T) {
-	s, node1, node2 := initTestEnv("test1", "test2")
+	s, node1, node2 := initTestEnv(t, "test1", "test2")
 	defer s.Close()
 	defer node1.Close()
 	defer node2.Close()
@@ -101,7 +95,7 @@ func TestPresenceWatchSnapshot(t *testing.T) {
 }
 
 func TestPresenceNotifyOnlineAndOffline(t *testing.T) {
-	s, node1, node2 := initTestEnv("test1", "test2")
+	s, node1, node2 := initTestEnv(t, "test1", "test2")
 	defer s.Close()
 	defer node1.Close()
 	defer node2.Close()
@@ -132,7 +126,7 @@ func TestPresenceNotifyOnlineAndOffline(t *testing.T) {
 }
 
 func TestPresenceUnwatch(t *testing.T) {
-	s, node1, node2 := initTestEnv("test1", "test2")
+	s, node1, node2 := initTestEnv(t, "test1", "test2")
 	defer s.Close()
 	defer node1.Close()
 
@@ -150,7 +144,7 @@ func TestPresenceUnwatch(t *testing.T) {
 }
 
 func TestPresenceDomainReplace(t *testing.T) {
-	s, node1, node2 := initTestEnv("test1", "test2")
+	s, node1, node2 := initTestEnv(t, "test1", "test2")
 	defer s.Close()
 	defer node1.Close()
 	defer node2.Close()
@@ -190,7 +184,7 @@ func TestPresenceDomainReplace(t *testing.T) {
 
 // TestPresenceVersionContinuity 验证同一域名多次上下线时 version 连续递增
 func TestPresenceVersionContinuity(t *testing.T) {
-	s, node1, node2 := initTestEnv("test1", "test2")
+	s, node1, node2 := initTestEnv(t, "test1", "test2")
 	defer s.Close()
 	defer node1.Close()
 	defer node2.Close()
@@ -258,7 +252,7 @@ func TestPresenceCenterVersionRules(t *testing.T) {
 }
 
 func TestPresenceSubscriberPurge(t *testing.T) {
-	s, node1, node2 := initTestEnv("test1", "test2")
+	s, node1, node2 := initTestEnv(t, "test1", "test2")
 	defer s.Close()
 	defer node2.Close()
 
@@ -295,7 +289,7 @@ func TestPresenceSubscriberPurge(t *testing.T) {
 }
 
 func TestPresenceWatchInvalidDomain(t *testing.T) {
-	s, node1, node2 := initTestEnv("test1", "test2")
+	s, node1, node2 := initTestEnv(t, "test1", "test2")
 	defer s.Close()
 	defer node1.Close()
 	defer node2.Close()

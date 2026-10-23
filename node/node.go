@@ -93,25 +93,35 @@ func NewWithOptions(conn packet.Conn, portMin, portMax uint16, heartbeatInterval
 	return newWithConfig(conn, portMin, portMax, heartbeatInterval, sched.DefaultSchedulerConfig())
 }
 
-// newWithConfig is the internal constructor used by Session, which carries a
-// scheduler configuration across reconnects.
+// newWithConfig is the internal constructor used by NewWithOptions (direct,
+// plaintext mode). Session and Connect build a secure link themselves and call
+// newNodeWithLink.
 func newWithConfig(conn packet.Conn, portMin, portMax uint16, heartbeatInterval time.Duration, cfg sched.SchedulerConfig) (*Node, error) {
+	var lnk *link.Link
+	if conn != nil {
+		lnk = link.NewDirectWithConfig(transportFor(conn), link.Config{
+			Scheduler:  cfg,
+			LegacyWire: true,
+		})
+	}
+	return newNodeWithLink(lnk, conn, portMin, portMax, heartbeatInterval)
+}
+
+// NewFromLink creates a Node around an already-established link (secure or
+// direct). It is primarily useful for tests and advanced integrations that
+// perform the handshake themselves.
+func NewFromLink(lnk *link.Link) *Node {
+	n, _ := newNodeWithLink(lnk, nil, 1000, 0xFFFF, DefaultHeartbeatInterval)
+	return n
+}
+
+func newNodeWithLink(lnk *link.Link, pconn packet.Conn, portMin, portMax uint16, heartbeatInterval time.Duration) (*Node, error) {
 	portm, err := idpool.New(portMin, portMax)
 	if err != nil {
 		return nil, err
 	}
-	var lnk *link.Link
-	if conn != nil {
-		var t link.Transport
-		if lt, ok := conn.(link.Transport); ok {
-			t = lt
-		} else {
-			t = link.NewPacketTransport(conn)
-		}
-		lnk = link.NewDirectWithConfig(t, link.Config{Scheduler: cfg, LegacyWire: true})
-	}
 	node := &Node{
-		pconn:     conn,
+		pconn:     pconn,
 		lnk:       lnk,
 		done:      make(chan struct{}),
 		logger:    slog.Default(),
@@ -137,6 +147,14 @@ func newWithConfig(conn packet.Conn, portMin, portMax uint16, heartbeatInterval 
 	return node, nil
 }
 
+// transportFor returns the shared framing view of a packet.Conn.
+func transportFor(conn packet.Conn) link.Transport {
+	if lt, ok := conn.(link.Transport); ok {
+		return lt
+	}
+	return link.NewPacketTransport(conn)
+}
+
 // SetNetwork 设置网络类型标识。仅应在 Serve 之前调用。
 func (node *Node) SetNetwork(n string) { node.network = n }
 func (node *Node) GetNetwork() string  { return node.network }
@@ -148,6 +166,9 @@ func (node *Node) GetDomain() string       { return node.domain }
 // SetIP 设置节点虚拟 IP。仅应在 Serve 之前调用，运行期间修改会破坏路由身份。
 func (node *Node) SetIP(ip uint16) { node.ip = ip }
 func (node *Node) GetIP() uint16   { return node.ip }
+
+// Link returns the node's link. Exposed for advanced integrations and tests.
+func (node *Node) Link() *link.Link { return node.lnk }
 
 // SetLogger 设置节点日志器。各组件经 host 指针惰性读取，调用后即对全组件生效。
 // 仅应在 Serve 之前调用。

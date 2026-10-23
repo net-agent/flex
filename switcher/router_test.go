@@ -10,7 +10,7 @@ import (
 )
 
 func TestRouterPingDomain(t *testing.T) {
-	_, node1, _ := initTestEnv("test1", "test2")
+	_, node1, _ := initTestEnv(t, "test1", "test2")
 
 	var err error
 
@@ -80,7 +80,7 @@ func TestRouterForwardClosedContext(t *testing.T) {
 }
 
 func TestRouterOpenStream(t *testing.T) {
-	_, node1, _ := initTestEnv("test1", "test2")
+	_, node1, _ := initTestEnv(t, "test1", "test2")
 
 	// 错误用例：直接dial一个未开放的端口，会返回错误
 	_, err := node1.Dial("test2:80")

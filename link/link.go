@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/net-agent/flex/v3/internal/sched"
@@ -17,6 +18,7 @@ type Link struct {
 	t      Transport
 	codec  wire.Codec
 	w      *fairWriter
+	sec    *secureState
 	legacy bool // omit/accept the class bit for old packet.Buffer peers
 
 	// out is writer-goroutine scratch for header encoding. It is never touched
@@ -25,6 +27,29 @@ type Link struct {
 
 	closeOnce sync.Once
 	closeErr  error
+
+	// tap, when set, observes plaintext frames at the link boundary. It is
+	// used by tests/observability and is nil in production.
+	tap atomic.Pointer[FrameTap]
+}
+
+// FrameTap observes a plaintext frame. write is true for outbound frames.
+// The callback must not retain or modify the frame.
+type FrameTap func(write bool, f *wire.Frame)
+
+// SetFrameTap installs an optional plaintext frame observer.
+func (l *Link) SetFrameTap(fn FrameTap) {
+	if fn == nil {
+		l.tap.Store(nil)
+		return
+	}
+	l.tap.Store(&fn)
+}
+
+func (l *Link) fireTap(write bool, f *wire.Frame) {
+	if p := l.tap.Load(); p != nil {
+		(*p)(write, f)
+	}
 }
 
 // NewDirect wraps a transport without a handshake or encryption. It is the
@@ -46,7 +71,21 @@ type Config struct {
 
 // NewDirectWithConfig wraps a transport without a handshake or encryption.
 func NewDirectWithConfig(t Transport, cfg Config) *Link {
-	l := &Link{t: t, legacy: cfg.LegacyWire}
+	return newLink(t, cfg, nil)
+}
+
+// NewSecure wraps a transport with the v4 link keys. initiator selects the
+// client (true) or server (false) direction of the header/control key pairs.
+func NewSecure(t Transport, linkKey []byte, initiator bool, cfg Config) (*Link, error) {
+	sec, err := newSecureState(linkKey, initiator)
+	if err != nil {
+		return nil, err
+	}
+	return newLink(t, cfg, sec), nil
+}
+
+func newLink(t Transport, cfg Config, sec *secureState) *Link {
+	l := &Link{t: t, sec: sec, legacy: cfg.LegacyWire && sec == nil}
 	l.w = newFairWriter(l.writeFrames, cfg.Scheduler, func(error) {
 		// A write failure is fatal for the connection. Close the transport so
 		// the read loop unblocks; the caller observes the error on ReadFrame.
@@ -64,6 +103,9 @@ func (l *Link) SchedulerConfig() sched.SchedulerConfig { return l.w.cfg }
 // ReadFrame reads one frame. The returned frame is owned by the caller and must
 // be released.
 func (l *Link) ReadFrame() (*wire.Frame, error) {
+	if l.sec != nil {
+		return l.readSecureFrame()
+	}
 	var hdr [wire.HeaderSize]byte
 	if err := l.t.ReadHeader(hdr[:]); err != nil {
 		return nil, err
@@ -88,6 +130,7 @@ func (l *Link) ReadFrame() (*wire.Frame, error) {
 	if err != nil {
 		return nil, fmt.Errorf("link: build frame: %w", err)
 	}
+	l.fireTap(false, f)
 	return f, nil
 }
 
@@ -149,12 +192,16 @@ func (l *Link) SendEmpty(cmd wire.EmptyCmd, src, dst wire.Addr) error {
 // writeFrames encodes headers and hands the batch to the transport. Only the
 // fair writer goroutine calls this.
 func (l *Link) writeFrames(frames []*wire.Frame) error {
+	if l.sec != nil {
+		return l.writeSecureFrames(frames)
+	}
 	if cap(l.out) < len(frames) {
 		l.out = make([]FrameBytes, len(frames))
 	} else {
 		l.out = l.out[:len(frames)]
 	}
 	for i, f := range frames {
+		l.fireTap(true, f)
 		var err error
 		if l.legacy {
 			err = l.codec.EncodeHeaderLegacy(f.Header(), l.out[i].Header[:])

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v3/internal/admit"
+	"github.com/net-agent/flex/v3/link"
 	"github.com/net-agent/flex/v3/packet"
 	"github.com/stretchr/testify/assert"
 )
@@ -13,12 +13,13 @@ func TestConnect(t *testing.T) {
 	c1, c2 := packet.Pipe()
 
 	go func() {
-		_, err := admit.Accept(c2, testPassword)
+		acceptor := link.NewAcceptor(link.AcceptConfig{PSK: testPassword})
+		pending, _, err := acceptor.Accept(transportFor(c2))
 		if err != nil {
 			c2.Close()
 			return
 		}
-		if err := admit.NewOKResponse(1).WriteTo(c2, testPassword); err != nil {
+		if _, err := pending.Respond(1); err != nil {
 			c2.Close()
 		}
 	}()
@@ -35,12 +36,13 @@ func TestConnectHandshakeFailed(t *testing.T) {
 
 	go func() {
 		// 密码不匹配时 Accept 失败，直接关闭连接
-		_, err := admit.Accept(c2, "wrong-password")
+		acceptor := link.NewAcceptor(link.AcceptConfig{PSK: "wrong-password"})
+		pending, _, err := acceptor.Accept(transportFor(c2))
 		if err != nil {
 			c2.Close()
 			return
 		}
-		admit.NewOKResponse(1).WriteTo(c2, "wrong-password")
+		_, _ = pending.Respond(1)
 	}()
 
 	n, err := Connect(c1, "testclient", "", testPassword)

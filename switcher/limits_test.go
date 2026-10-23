@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v3/internal/admit"
+	"github.com/net-agent/flex/v3/link"
 	"github.com/net-agent/flex/v3/node"
 	"github.com/net-agent/flex/v3/packet"
 	"github.com/net-agent/flex/v3/wire"
@@ -24,11 +24,8 @@ func connectTestNode(t *testing.T, s *Server, domain string) *node.Node {
 	client, server := packet.Pipe()
 	go s.ServeConn(server)
 
-	ip, err := admit.Handshake(client, domain, "", "testpswd")
-	if err != nil {
-		t.Fatalf("handshake %q failed: %v", domain, err)
-	}
-	n := node.New(client)
+	lnk, ip := testDialLink(t, client, domain, "testpswd")
+	n := node.NewFromLink(lnk)
 	n.SetDomain(domain)
 	n.SetIP(ip)
 	go n.Serve()
@@ -126,18 +123,15 @@ func TestServerConnectionLimit(t *testing.T) {
 
 	client1, server1 := packet.Pipe()
 	go s.ServeConn(server1)
-	if _, err := admit.Handshake(client1, "first", "", "testpswd"); err != nil {
-		t.Fatalf("first connection should be accepted: %v", err)
-	}
+	lnk1, _ := testDialLink(t, client1, "first", "testpswd")
+	defer lnk1.Close()
 
 	client2, server2 := packet.Pipe()
 	go s.ServeConn(server2)
-	if _, err := admit.Handshake(client2, "second", "", "testpswd"); err == nil {
+	dialer := link.NewDialer(link.DialConfig{PSK: "testpswd", Domain: "second"})
+	if _, _, err := dialer.Dial(linkTransport(client2)); err == nil {
 		t.Fatal("second connection must be rejected by connection limit")
 	}
-
-	client1.Close()
-	client2.Close()
 }
 
 func TestServerStreamQuota(t *testing.T) {

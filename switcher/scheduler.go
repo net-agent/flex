@@ -60,6 +60,9 @@ func (s *Server) SetSchedulerConfig(cfg SchedulerConfig) {
 	s.fairMu.Lock()
 	s.fairCfg = internal
 	s.fairMu.Unlock()
+	if s.acceptor != nil {
+		s.acceptor.SetSchedulerConfig(internal)
+	}
 }
 
 func (s *Server) schedulerConfig() sched.SchedulerConfig {

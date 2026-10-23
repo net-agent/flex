@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/net-agent/flex/v3/internal/admit"
 	"github.com/net-agent/flex/v3/internal/sched"
+	"github.com/net-agent/flex/v3/link"
 	"github.com/net-agent/flex/v3/packet"
 	"github.com/net-agent/flex/v3/stream"
 )
@@ -79,9 +79,11 @@ type Session struct {
 
 	enableFairConn atomic.Bool
 
-	// schedMu / schedCfg 保护 FairConn 调度策略（SetSchedulerConfig）。
+	// schedMu / schedCfg 保护 link 写调度策略（SetSchedulerConfig）。
 	schedMu  sync.RWMutex
 	schedCfg sched.SchedulerConfig
+	dialer   *link.Dialer
+	frameTap atomic.Pointer[link.FrameTap]
 
 	// connectTimeout 是冷启动阶段等待首次连接完成的最长时间（纳秒），
 	// 见 SetConnectTimeout。
@@ -138,8 +140,30 @@ func NewSession(connector ConnectFunc, cfg SessionConfig) *Session {
 	}
 	s.enableFairConn.Store(true)
 	s.schedCfg = sched.DefaultSchedulerConfig()
+	s.dialer = link.NewDialer(link.DialConfig{
+		PSK:       cfg.Password,
+		Domain:    cfg.Domain,
+		Mac:       cfg.Mac,
+		Scheduler: s.schedCfg,
+	})
 	s.connectTimeout.Store(int64(defaultConnectTimeout))
 	return s
+}
+
+// SetFrameTap installs an optional plaintext frame observer on every Node
+// rebuilt after a reconnect. It is intended for tests/observability.
+func (s *Session) SetFrameTap(fn link.FrameTap) {
+	if fn == nil {
+		s.frameTap.Store(nil)
+		return
+	}
+	s.frameTap.Store(&fn)
+	s.mu.RLock()
+	n := s.node
+	s.mu.RUnlock()
+	if n != nil {
+		n.Link().SetFrameTap(fn)
+	}
 }
 
 // SetContextConnector 设置支持取消的连接器，优先于 NewSession 传入的 ConnectFunc。
@@ -575,7 +599,7 @@ func (s *Session) Serve() error {
 		}
 
 		// 握手是可能阻塞 10s 的 IO：用 watcher 在 Close 时主动关连接，
-		// 使 Handshake 立即返回，而不是让 Serve 卡到握手超时。
+		// 使 Dial 立即返回，而不是让 Serve 卡到握手超时。
 		handshakeDone := make(chan struct{})
 		go func() {
 			select {
@@ -584,7 +608,7 @@ func (s *Session) Serve() error {
 			case <-handshakeDone:
 			}
 		}()
-		ip, err := admit.Handshake(conn, s.config.Domain, s.config.Mac, s.config.Password)
+		lnk, ip, err := s.dialer.Dial(transportFor(conn))
 		close(handshakeDone)
 		if err != nil {
 			conn.Close()
@@ -602,7 +626,7 @@ func (s *Session) Serve() error {
 			continue
 		}
 
-		node, err := newWithConfig(conn, 1000, 0xFFFF, DefaultHeartbeatInterval, s.schedulerConfig())
+		node, err := newNodeWithLink(lnk, conn, 1000, 0xFFFF, DefaultHeartbeatInterval)
 		if err != nil {
 			conn.Close()
 			s.logger.Warn("create node failed", "error", err)
@@ -613,6 +637,9 @@ func (s *Session) Serve() error {
 			}
 			backoff = min(backoff*2, 30*time.Second)
 			continue
+		}
+		if p := s.frameTap.Load(); p != nil {
+			node.Link().SetFrameTap(*p)
 		}
 		s.wireNode(node, ip)
 
@@ -658,7 +685,7 @@ func (s *Session) Serve() error {
 		s.reconnects.Add(1)
 		s.setState(SessionConnecting, serveErr) // ★ 触发回调：Online → Connecting
 
-		s.logger.Info("node disconnected, reconnecting...")
+		s.logger.Warn("node disconnected, reconnecting...", "error", serveErr)
 	}
 }
 

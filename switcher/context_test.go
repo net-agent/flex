@@ -3,18 +3,16 @@ package switcher
 import (
 	"errors"
 	"log"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v3/internal/admit"
 	"github.com/net-agent/flex/v3/node"
 	"github.com/net-agent/flex/v3/packet"
 	"github.com/net-agent/flex/v3/wire"
 )
 
 func TestContextPing(t *testing.T) {
-	s, node1, node2 := initTestEnv("test1", "test2")
+	s, node1, node2 := initTestEnv(t, "test1", "test2")
 
 	ctx1, err := s.registry.lookupByDomain("test1")
 	if err != nil {
@@ -60,40 +58,32 @@ func TestPingErr_Timeout(t *testing.T) {
 	go s.ServeConn(pc2)
 	go s.ServeConn(pc4)
 
-	var waitUpgradeReady sync.WaitGroup
-
-	waitUpgradeReady.Add(1)
+	lnk1, _ := testDialLink(t, pc1, "test1", pswd)
+	defer lnk1.Close()
+	// 只读取帧，不应答 ping，制造 ping timeout。
 	go func() {
-		admit.Handshake(pc1, "test1", "", pswd)
-		waitUpgradeReady.Done()
-
-		// 只读取buffer，不回复buffer。这样就会出现pingTimeout
 		for {
-			pc1.ReadBuffer()
+			f, err := lnk1.ReadFrame()
+			if err != nil {
+				return
+			}
+			f.Release()
 		}
 	}()
 
-	waitUpgradeReady.Add(1)
-	go func() {
-		ip, _ := admit.Handshake(pc3, "test2", "", pswd)
-		waitUpgradeReady.Done()
-		n := node.New(pc3)
-		n.SetIP(ip)
-		n.SetDomain("test2")
-		n.Serve()
-	}()
-
-	waitUpgradeReady.Wait()
+	lnk2, ip := testDialLink(t, pc3, "test2", pswd)
+	n := node.NewFromLink(lnk2)
+	n.SetIP(ip)
+	n.SetDomain("test2")
+	go n.Serve()
+	defer n.Close()
 
 	ctx1, err := s.registry.lookupByDomain("test1")
 	if err != nil {
-		t.Error(err)
-		return
+		t.Fatal(err)
 	}
-	_, err = ctx1.ping(time.Millisecond * 100)
-	if err != errPingTimeout {
-		t.Errorf("unexpected err=%v\n", err)
-		return
+	if _, err = ctx1.ping(100 * time.Millisecond); err != errPingTimeout {
+		t.Fatalf("unexpected err=%v", err)
 	}
 }
 

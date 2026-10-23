@@ -104,6 +104,18 @@ func newContext(id int, l *link.Link, domain, mac string, logger *slog.Logger) *
 
 func (ctx *Context) GetID() int { return ctx.id }
 
+func (ctx *Context) setLink(l *link.Link) {
+	ctx.mu.Lock()
+	ctx.link = l
+	ctx.mu.Unlock()
+}
+
+func (ctx *Context) getLink() *link.Link {
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	return ctx.link
+}
+
 // markReady allows forwarded frames to be written.
 func (ctx *Context) markReady() { ctx.readyOnce.Do(func() { close(ctx.ready) }) }
 
@@ -132,12 +144,13 @@ func (ctx *Context) SendFrame(f *wire.Frame) error {
 		f.Release()
 		return errContextClosed
 	}
-	if ctx.link == nil {
+	l := ctx.getLink()
+	if l == nil {
 		f.Release()
 		return errNilContextConn
 	}
 	atomic.AddInt64(&ctx.Stats.BytesSent, int64(f.PayloadSize()+wire.HeaderSize))
-	return ctx.link.SendFrame(f)
+	return l.SendFrame(f)
 }
 
 // SendControl builds a control frame and sends it. The payload is copied by the
@@ -153,10 +166,11 @@ func (ctx *Context) SendControl(cmd wire.ControlCmd, src, dst wire.Addr, payload
 
 // readFrame reads the next frame from the link.
 func (ctx *Context) readFrame() (*wire.Frame, error) {
-	if ctx.link == nil {
+	l := ctx.getLink()
+	if l == nil {
 		return nil, errNilContextConn
 	}
-	return ctx.link.ReadFrame()
+	return l.ReadFrame()
 }
 
 // recordIncoming updates receive stats for an incoming frame.
@@ -195,8 +209,8 @@ func (ctx *Context) release() {
 		close(ctx.done)
 		// Unblock any SendFrame waiting for the handshake window.
 		ctx.readyOnce.Do(func() { close(ctx.ready) })
-		if ctx.link != nil {
-			_ = ctx.link.Close()
+		if l := ctx.getLink(); l != nil {
+			_ = l.Close()
 		}
 		ctx.setAttached(false)
 		ctx.DetachTime = time.Now()

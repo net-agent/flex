@@ -10,7 +10,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/net-agent/flex/v3/internal/admit"
 	"github.com/net-agent/flex/v3/internal/idpool"
 	"github.com/net-agent/flex/v3/internal/sched"
 	"github.com/net-agent/flex/v3/link"
@@ -20,6 +19,13 @@ import (
 var (
 	errHandlePCWriteFailed = errors.New("write to packet.Conn failed")
 )
+
+func linkTransport(pc packet.Conn) link.Transport {
+	if lt, ok := pc.(link.Transport); ok {
+		return lt
+	}
+	return link.NewPacketTransport(pc)
+}
 
 type OnContextStartHandler func(ctx *Context)
 type OnContextStopHandler func(ctx *Context, duration time.Duration)
@@ -33,9 +39,10 @@ type Server struct {
 
 	enableFairConn atomic.Bool
 
-	// fairMu / fairCfg 保护新连接的 FairConn 调度策略（SetSchedulerConfig）。
-	fairMu  sync.RWMutex
-	fairCfg sched.SchedulerConfig
+	// fairMu / fairCfg 保护新连接的 link 写调度策略（SetSchedulerConfig）。
+	fairMu   sync.RWMutex
+	fairCfg  sched.SchedulerConfig
+	acceptor *link.Acceptor
 
 	// limits 是准入与资源配额，必须在 Serve 之前通过 SetLimits 设置。
 	limits    Limits
@@ -105,6 +112,7 @@ func NewServer(password string, logger *slog.Logger, logCfg *LogConfig) *Server 
 	}
 	s.enableFairConn.Store(true)
 	s.fairCfg = sched.DefaultSchedulerConfig()
+	s.acceptor = link.NewAcceptor(link.AcceptConfig{PSK: password, Scheduler: s.fairCfg})
 	s.router = newPacketRouter(reg, newModuleLogger(logger, cfg.Router, "router"))
 	s.limits = DefaultLimits()
 	s.applyLimits()
@@ -278,47 +286,33 @@ func (s *Server) ServeConn(pc packet.Conn) (err error) {
 	}
 	defer s.releaseConnSlot()
 
-	// 第一步：交换版本和签名信息，保证版本一致与认证安全
-	req, err := admit.Accept(pc, s.password)
+	// 第一步：v4 握手（密钥协商 + 认证 + 抗重放）。握手失败时直接关闭，
+	// 不返回错误响应，避免给探测者提供 oracle。
+	tr := linkTransport(pc)
+	pending, hs, err := s.acceptor.Accept(tr)
 	if err != nil {
-		resp := admit.NewErrResponse(-1, "handshake rejected")
-		resp.WriteTo(pc, s.password)
-		s.logger.Warn("handshake failed", "error", err)
+		s.logger.Warn("handshake failed", "ip", ip, "error", err)
 		return err
 	}
 
-	// 第二步：在裸连接之上建立 Link，再创建 Context。
-	// 握手阶段仍是裸连接，应答写失败可以同步返回；Link 的写协程在收到
-	// 第一帧前不会写任何字节。Context 的 ready 在应答写完后才关闭，
-	// 保证其他节点转发过来的包不会抢在握手应答之前。
-	var tr link.Transport
-	if lt, ok := pc.(link.Transport); ok {
-		tr = lt
-	} else {
-		tr = link.NewPacketTransport(pc)
-	}
-	lnk := link.NewDirectWithConfig(tr, link.Config{
-		Scheduler:  s.schedulerConfig(),
-		LegacyWire: true,
-	})
-	ctx := newContext(int(s.nextCtxID.Add(1)), lnk, req.Domain, req.Mac, s.ctxLogger)
+	// 第二步：注册 Context 并分配虚拟 IP。Context 尚未绑定 link/ready，
+	// 其他节点此时命中它时会等待握手的应答窗口。
+	ctx := newContext(int(s.nextCtxID.Add(1)), nil, hs.Domain, hs.Mac, s.ctxLogger)
 	defer ctx.release()
 
-	err = s.registry.attach(ctx)
-	if err != nil {
-		resp := admit.NewErrResponse(-2, "handshake rejected")
-		resp.WriteTo(pc, s.password)
-		s.logger.Warn("attach context failed", "domain", req.Domain, "error", err)
+	if err := s.registry.attach(ctx); err != nil {
+		s.logger.Warn("attach context failed", "domain", hs.Domain, "error", err)
 		return err
 	}
 	defer s.registry.detach(ctx)
 
-	// 第三步：应答客户端。必须在 markReady 之前写，保证转发不抢先。
-	resp := admit.NewOKResponse(ctx.IP)
-	if err := resp.WriteTo(pc, s.password); err != nil {
+	// 第三步：发送握手应答（含分配的 IP），然后切换到安全 Link。
+	lnk, err := pending.Respond(ctx.IP)
+	if err != nil {
 		s.logger.Warn("response client failed", "domain", ctx.Domain, "mac", ctx.Mac, "error", err)
 		return fmt.Errorf("%w: %w", errHandlePCWriteFailed, err)
 	}
+	ctx.setLink(lnk)
 	ctx.markReady()
 
 	// 记录服务时长

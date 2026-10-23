@@ -29,15 +29,17 @@ package node
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v3/internal/admit"
+	"github.com/net-agent/flex/v3/link"
 	"github.com/net-agent/flex/v3/packet"
 	"github.com/net-agent/flex/v3/stream"
+	"github.com/net-agent/flex/v3/wire"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -59,25 +61,26 @@ func newTestConnector() (connector func() (packet.Conn, error), getServers func(
 	var servers []*Node
 	var wg sync.WaitGroup
 
+	acceptor := link.NewAcceptor(link.AcceptConfig{PSK: testPassword})
 	connector = func() (packet.Conn, error) {
 		c1, c2 := packet.Pipe()
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			req, err := admit.Accept(c2, testPassword)
+			pending, hs, err := acceptor.Accept(transportFor(c2))
 			if err != nil {
 				c2.Close()
 				return
 			}
-			resp := admit.NewOKResponse(1)
-			if err := resp.WriteTo(c2, testPassword); err != nil {
+			lnk, err := pending.Respond(1)
+			if err != nil {
 				c2.Close()
 				return
 			}
 
-			server := New(c2)
+			server := NewFromLink(lnk)
 			server.SetIP(2)
-			server.SetDomain(req.Domain)
+			server.SetDomain(hs.Domain)
 			go server.Serve()
 
 			mu.Lock()
@@ -932,29 +935,31 @@ func TestSessionNoCallbackWithoutRegistration(t *testing.T) {
 
 // --- presence ---
 
-// newPresenceConnector 创建一个 connector，server 侧完成握手后把连接交给测试驱动（fake switcher）
-func newPresenceConnector(swCh chan packet.Conn) func() (packet.Conn, error) {
+// newPresenceConnector 创建一个 connector，server 侧完成 v4 握手后把安全
+// Link 交给测试驱动（fake switcher）。
+func newPresenceConnector(swCh chan *link.Link) func() (packet.Conn, error) {
+	acceptor := link.NewAcceptor(link.AcceptConfig{PSK: testPassword})
 	return func() (packet.Conn, error) {
 		c1, c2 := packet.Pipe()
 		go func() {
-			_, err := admit.Accept(c2, testPassword)
+			pending, _, err := acceptor.Accept(transportFor(c2))
 			if err != nil {
 				c2.Close()
 				return
 			}
-			resp := admit.NewOKResponse(1)
-			if err := resp.WriteTo(c2, testPassword); err != nil {
+			lnk, err := pending.Respond(1)
+			if err != nil {
 				c2.Close()
 				return
 			}
-			swCh <- c2
+			swCh <- lnk
 		}()
 		return c1, nil
 	}
 }
 
-// recvSwitcher 等待一条完成握手的新连接
-func recvSwitcher(t *testing.T, swCh chan packet.Conn) packet.Conn {
+// recvSwitcher 等待一条完成握手的新连接。
+func recvSwitcher(t *testing.T, swCh chan *link.Link) *link.Link {
 	t.Helper()
 	select {
 	case sw := <-swCh:
@@ -967,17 +972,17 @@ func recvSwitcher(t *testing.T, swCh chan packet.Conn) packet.Conn {
 
 // fakePresenceSwitcher 模拟 switcher 的 presence 行为：
 //   - serve 循环应答订阅请求（Add 回当前状态快照，Remove 回空 ACK），
-//     容忍建连时刻 resubscribe 与显式 Watch 并发产生的重复订阅（真实 switcher 侧订阅幂等）
+//     容忍建连时刻 resubscribe 与显式 Watch 并发产生的重复订阅(真实 switcher 侧订阅幂等)
 //   - 快照始终取当前状态，保证与已推送事件的 version 单调性一致
 type fakePresenceSwitcher struct {
 	t  *testing.T
-	sw packet.Conn
+	sw *link.Link
 
 	mu sync.Mutex
 	st packet.PresenceState
 }
 
-func newFakePresenceSwitcher(t *testing.T, sw packet.Conn, initial packet.PresenceState) *fakePresenceSwitcher {
+func newFakePresenceSwitcher(t *testing.T, sw *link.Link, initial packet.PresenceState) *fakePresenceSwitcher {
 	f := &fakePresenceSwitcher{t: t, sw: sw, st: initial}
 	go f.serve()
 	return f
@@ -985,32 +990,57 @@ func newFakePresenceSwitcher(t *testing.T, sw packet.Conn, initial packet.Presen
 
 func (f *fakePresenceSwitcher) serve() {
 	for {
-		pbuf, err := f.sw.ReadBuffer()
+		frame, err := f.sw.ReadFrame()
 		if err != nil {
 			return
 		}
-		if pbuf.Cmd() != packet.CmdSubscribePresence {
-			packet.PutBuffer(pbuf)
+		if frame.Cmd() != wire.Cmd(wire.CmdSubscribePresence) {
+			frame.Release()
 			continue
 		}
-		req := packet.DecodeSubscribeRequest(pbuf.Payload)
+		req := packet.DecodeSubscribeRequest(frame.Payload())
+		src := frame.Src()
+		frame.Release()
+
 		if req.Op == packet.SubscribeAdd {
 			f.mu.Lock()
 			states := []packet.PresenceState{f.st}
 			f.mu.Unlock()
-			writeSubscribeACK(f.t, f.sw, pbuf, packet.SubscribeACK{OK: true, States: states})
+			writeSubscribeACKLink(f.t, f.sw, src, packet.SubscribeACK{OK: true, States: states})
 		} else {
-			writeSubscribeACK(f.t, f.sw, pbuf, packet.SubscribeACK{OK: true})
+			writeSubscribeACKLink(f.t, f.sw, src, packet.SubscribeACK{OK: true})
 		}
 	}
 }
 
-// notify 更新 fake 当前状态并向对端推送事件（之后的订阅快照与事件保持一致）
+// notify 更新 fake 当前状态并向对端推送事件。
 func (f *fakePresenceSwitcher) notify(distIP uint16, ev packet.PresenceEvent) {
 	f.mu.Lock()
 	f.st = packet.PresenceState{Domain: ev.Domain, Online: ev.Online, IP: ev.IP, Mac: ev.Mac, Version: ev.Version}
 	f.mu.Unlock()
-	writePresenceNotify(f.t, f.sw, distIP, ev)
+	writePresenceNotifyLink(f.t, f.sw, distIP, ev)
+}
+
+func writeSubscribeACKLink(t *testing.T, sw *link.Link, dst wire.Addr, ack packet.SubscribeACK) {
+	t.Helper()
+	frame, err := wire.NewControl(wire.AckSubscribePresence, wire.SwitcherAddr, dst, ack.Encode())
+	if err != nil {
+		t.Fatalf("build ack: %v", err)
+	}
+	if err := sw.SendFrame(frame); err != nil && !errors.Is(err, io.ErrClosedPipe) && !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("write ack failed: %v", err)
+	}
+}
+
+func writePresenceNotifyLink(t *testing.T, sw *link.Link, distIP uint16, ev packet.PresenceEvent) {
+	t.Helper()
+	frame, err := wire.NewControl(wire.CmdNotifyPresence, wire.SwitcherAddr, wire.Addr{IP: distIP}, ev.Encode())
+	if err != nil {
+		t.Fatalf("build notify: %v", err)
+	}
+	if err := sw.SendFrame(frame); err != nil && !errors.Is(err, io.ErrClosedPipe) && !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("write notify failed: %v", err)
+	}
 }
 
 func waitSessionView(t *testing.T, s *Session, domain string, version uint64) packet.PresenceState {
@@ -1054,7 +1084,7 @@ func TestSessionWatchWhileOffline(t *testing.T) {
 
 // Watch 作为首个调用：触发懒连接，等待首次连接完成后返回真实快照
 func TestSessionWatchWaitsInitialConnect(t *testing.T) {
-	swCh := make(chan packet.Conn, 1)
+	swCh := make(chan *link.Link, 1)
 	s := NewSession(newPresenceConnector(swCh), testSessionConfig())
 	s.SetConnectTimeout(3 * time.Second)
 	go s.Serve()
@@ -1079,21 +1109,23 @@ func TestSessionWatchWaitsInitialConnect(t *testing.T) {
 			{Domain: "target", Online: true, IP: 7, Mac: "m1", Version: 1},
 		}}
 		for {
-			pbuf, err := sw.ReadBuffer()
+			frame, err := sw.ReadFrame()
 			if err != nil {
 				return
 			}
-			if pbuf.Cmd() != packet.CmdSubscribePresence {
-				packet.PutBuffer(pbuf)
+			if frame.Cmd() != wire.Cmd(wire.CmdSubscribePresence) {
+				frame.Release()
 				continue
 			}
-			resp := packet.NewBufferWithCmd(packet.AckSubscribePresence)
-			resp.SetSrc(packet.SwitcherIP, 0)
-			resp.SetDist(pbuf.SrcIP(), pbuf.SrcPort())
-			if err := resp.SetPayload(ack.Encode()); err == nil {
-				_ = sw.WriteBuffer(resp)
+			dst := frame.Src()
+			frame.Release()
+			resp, err := wire.NewControl(wire.AckSubscribePresence, wire.SwitcherAddr, dst, ack.Encode())
+			if err != nil {
+				return
 			}
-			packet.PutBuffer(pbuf)
+			if err := sw.SendFrame(resp); err != nil {
+				return
+			}
 		}
 	}()
 
@@ -1110,7 +1142,7 @@ func TestSessionWatchWaitsInitialConnect(t *testing.T) {
 }
 
 func TestSessionWatchAndNotify(t *testing.T) {
-	swCh := make(chan packet.Conn, 1)
+	swCh := make(chan *link.Link, 1)
 	s := NewSession(newPresenceConnector(swCh), testSessionConfig())
 
 	s.ensureServing()
@@ -1149,7 +1181,7 @@ func TestSessionWatchAndNotify(t *testing.T) {
 	assert.False(t, st.Online)
 
 	// stale 事件（node 级视图丢弃）：Session handler 不应收到（不更新 fake 状态，直接注入）
-	writePresenceNotify(t, sw, 1, packet.PresenceEvent{Version: 2, Domain: "target", Online: true, IP: 9})
+	writePresenceNotifyLink(t, sw, 1, packet.PresenceEvent{Version: 2, Domain: "target", Online: true, IP: 9})
 	select {
 	case ev := <-ch:
 		t.Fatalf("stale event should not be delivered: %+v", ev)
@@ -1167,7 +1199,7 @@ func TestSessionWatchAndNotify(t *testing.T) {
 
 // 断线重连后 Session 应自动重订阅，并用新快照 reconcile 视图
 func TestSessionPresenceAutoResubscribe(t *testing.T) {
-	swCh := make(chan packet.Conn, 4)
+	swCh := make(chan *link.Link, 4)
 	s := NewSession(newPresenceConnector(swCh), testSessionConfig())
 
 	s.ensureServing()

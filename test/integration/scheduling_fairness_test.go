@@ -14,7 +14,7 @@
 // 1. 建立 sender/receiver 两个 Session，共享同一个 switcher。
 // 2. sender 在同一条物理连接上并发建立 N 条 stream（N 由测试参数决定）。
 // 3. 每条 stream 发送相同数量、相同大小的数据包，排除业务负载差异干扰。
-// 4. 在 sender 侧包装 recordingPacketConn，拦截 WriteBuffer，记录每个包的 SID 与命令类型。
+// 4. 在 sender link 的写边界安装 frame tap，记录每个明文数据帧的 SID 与命令类型。
 // 5. receiver 侧仅做 io.Copy(io.Discard) 排空，确保写压主要反映发送调度行为。
 //
 // 公平性指标：
@@ -52,8 +52,8 @@ import (
 	"time"
 
 	"github.com/net-agent/flex/v3/node"
-	"github.com/net-agent/flex/v3/packet"
 	"github.com/net-agent/flex/v3/switcher"
+	"github.com/net-agent/flex/v3/wire"
 	"github.com/stretchr/testify/require"
 )
 
@@ -108,59 +108,30 @@ type packetWriteEvent struct {
 	Time time.Time
 }
 
-type recordingPacketConn struct {
-	packet.Conn
+// frameRecorder records plaintext data frames at the sender link's write
+// boundary. It replaces the old packet.Conn wrapper: with the v4 link the wire
+// headers are encrypted, so fairness must be observed before encryption.
+type frameRecorder struct {
 	mu     sync.Mutex
 	events []packetWriteEvent
 }
 
-func (c *recordingPacketConn) WriteBuffer(buf *packet.Buffer) error {
-	c.mu.Lock()
-	c.events = append(c.events, packetWriteEvent{
-		Cmd:  buf.Cmd(),
-		SID:  buf.SID(),
-		Time: time.Now(),
-	})
-	c.mu.Unlock()
-	return c.Conn.WriteBuffer(buf)
-}
-
-func (c *recordingPacketConn) Snapshot() []packetWriteEvent {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	out := make([]packetWriteEvent, len(c.events))
-	copy(out, c.events)
-	return out
-}
-
-type recorderHolder struct {
-	mu   sync.Mutex
-	conn *recordingPacketConn
-}
-
-func (h *recorderHolder) Set(c *recordingPacketConn) {
-	h.mu.Lock()
-	h.conn = c
-	h.mu.Unlock()
-}
-
-func (h *recorderHolder) Get() *recordingPacketConn {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.conn
-}
-
-func recordingTCPConnector(addr string, holder *recorderHolder) node.ConnectFunc {
-	return func() (packet.Conn, error) {
-		conn, err := net.Dial("tcp", addr)
-		if err != nil {
-			return nil, err
-		}
-		rec := &recordingPacketConn{Conn: packet.NewWithConn(conn)}
-		holder.Set(rec)
-		return rec, nil
+func (r *frameRecorder) tap(write bool, f *wire.Frame) {
+	if !write || f.Cmd() != wire.Cmd(wire.CmdPushStreamData) {
+		return
 	}
+	ev := packetWriteEvent{Cmd: byte(f.Cmd()), SID: f.SID().Uint64(), Time: time.Now()}
+	r.mu.Lock()
+	r.events = append(r.events, ev)
+	r.mu.Unlock()
+}
+
+func (r *frameRecorder) Snapshot() []packetWriteEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]packetWriteEvent, len(r.events))
+	copy(out, r.events)
+	return out
 }
 
 type drainCollector struct {
@@ -241,7 +212,7 @@ type fairnessMetrics struct {
 func analyzeFairness(events []packetWriteEvent, windowSize int) fairnessMetrics {
 	seq := make([]uint64, 0, len(events))
 	for _, ev := range events {
-		if ev.Cmd == packet.CmdPushStreamData {
+		if ev.Cmd == byte(wire.CmdPushStreamData) {
 			seq = append(seq, ev.SID)
 		}
 	}
@@ -412,11 +383,12 @@ func TestIntegration_SchedulingFairness(t *testing.T) {
 	addr := ln.Addr().String()
 	go srv.Serve(ln)
 
-	var recorder recorderHolder
-	sender := node.NewSession(recordingTCPConnector(addr, &recorder), node.SessionConfig{
+	recorder := &frameRecorder{}
+	sender := node.NewSession(tcpConnector(addr), node.SessionConfig{
 		Domain:   "sender",
 		Password: password,
 	})
+	sender.SetFrameTap(recorder.tap)
 	sender.SetSchedulerConfig(node.SchedulerConfig{
 		Policy:         node.SchedulerPolicyPackets,
 		QuantumPackets: 2,
@@ -448,7 +420,6 @@ func TestIntegration_SchedulingFairness(t *testing.T) {
 
 	require.NoError(t, sender.WaitReady(cfg.WaitReadyTimeout))
 	require.NoError(t, receiver.WaitReady(cfg.WaitReadyTimeout))
-	require.NotNil(t, recorder.Get(), "recorder not initialized")
 
 	streams := make([]net.Conn, 0, cfg.StreamCount)
 	for i := 0; i < cfg.StreamCount; i++ {
@@ -501,7 +472,7 @@ func TestIntegration_SchedulingFairness(t *testing.T) {
 	expectedBytes := int64(cfg.StreamCount * cfg.PacketsPerStream * cfg.PayloadSize)
 	require.Equal(t, expectedBytes, drain.Bytes(), "receiver drained bytes mismatch")
 
-	events := recorder.Get().Snapshot()
+	events := recorder.Snapshot()
 	metrics := analyzeFairness(events, cfg.WindowSize)
 	maybeExportFairnessReport(t, cfg, metrics, events)
 
@@ -709,7 +680,7 @@ func resolveReportPath(path string) (string, error) {
 func extractDataSequence(events []packetWriteEvent) []uint64 {
 	seq := make([]uint64, 0, len(events))
 	for _, ev := range events {
-		if ev.Cmd == packet.CmdPushStreamData {
+		if ev.Cmd == byte(wire.CmdPushStreamData) {
 			seq = append(seq, ev.SID)
 		}
 	}
@@ -746,7 +717,7 @@ func buildSequenceRows(seq []uint64, cols int) []fairnessSequenceRow {
 func buildTimelineRows(events []packetWriteEvent) ([]fairnessTimelineRow, time.Duration) {
 	dataEvents := make([]packetWriteEvent, 0, len(events))
 	for _, ev := range events {
-		if ev.Cmd == packet.CmdPushStreamData {
+		if ev.Cmd == byte(wire.CmdPushStreamData) {
 			dataEvents = append(dataEvents, ev)
 		}
 	}

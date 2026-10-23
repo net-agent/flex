@@ -56,6 +56,9 @@ func (s *Session) SetSchedulerConfig(cfg SchedulerConfig) {
 	s.schedMu.Lock()
 	s.schedCfg = internal
 	s.schedMu.Unlock()
+	if s.dialer != nil {
+		s.dialer.SetSchedulerConfig(internal)
+	}
 }
 
 func (s *Session) schedulerConfig() sched.SchedulerConfig {
