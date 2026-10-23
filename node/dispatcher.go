@@ -136,6 +136,20 @@ func (d *Dispatcher) processCmdChan() {
 	for f := range d.cmdChan {
 		cmd := f.Cmd()
 
+		// A custom legacy handler overrides the built-in frame handler.
+		if handler, ok := d.cmdHandlers[byte(cmd)]; ok {
+			b := frameToBuffer(f)
+			f.Release()
+			if b == nil {
+				d.host.logger.Warn("unexpected cmd", "cmd", cmd, "domain", d.host.domain)
+				continue
+			}
+			handler(b)
+			// 命令类处理器只做同步解析/就地应答，不保留 buffer 所有权。
+			packet.PutBuffer(b)
+			continue
+		}
+
 		if handler, ok := d.frameCmdHandlers[cmd]; ok {
 			if err := handler(f); err != nil {
 				d.host.logger.Warn("frame cmd handler failed", "cmd", cmd, "error", err)
@@ -145,25 +159,27 @@ func (d *Dispatcher) processCmdChan() {
 			continue
 		}
 
-		b := frameToBuffer(f)
+		d.host.logger.Warn("unknown cmd", "cmd", cmd, "domain", d.host.domain)
 		f.Release()
-		if b == nil {
-			d.host.logger.Warn("unexpected cmd", "cmd", cmd, "domain", d.host.domain)
-			continue
-		}
-		if handler, ok := d.cmdHandlers[byte(cmd)]; ok {
-			handler(b)
-		} else {
-			d.host.logger.Warn("unknown cmd", "cmd", cmd, "header", b.HeaderString(), "domain", d.host.domain)
-		}
-		// 命令类处理器只做同步解析/就地应答，不保留 buffer 所有权。
-		packet.PutBuffer(b)
 	}
 }
 
 func (d *Dispatcher) processDataChan() {
 	for f := range d.dataChan {
 		cmd := f.Cmd()
+
+		// A custom legacy handler overrides the built-in frame handler.
+		if handler, ok := d.dataHandlers[byte(cmd)]; ok {
+			b := frameToBuffer(f)
+			f.Release()
+			if b == nil {
+				d.host.logger.Warn("unexpected data cmd", "cmd", cmd, "domain", d.host.domain)
+				continue
+			}
+			handler(b)
+			packet.PutBuffer(b)
+			continue
+		}
 
 		if handler, ok := d.frameDataHandlers[cmd]; ok {
 			if err := handler(f); err != nil {
@@ -173,18 +189,8 @@ func (d *Dispatcher) processDataChan() {
 			continue
 		}
 
-		b := frameToBuffer(f)
+		d.host.logger.Warn("unknown cmd", "cmd", cmd, "domain", d.host.domain)
 		f.Release()
-		if b == nil {
-			d.host.logger.Warn("unexpected data cmd", "cmd", cmd, "domain", d.host.domain)
-			continue
-		}
-		if handler, ok := d.dataHandlers[byte(cmd)]; ok {
-			handler(b)
-		} else {
-			d.host.logger.Warn("unknown cmd", "cmd", cmd, "header", b.HeaderString(), "domain", d.host.domain)
-		}
-		packet.PutBuffer(b)
 	}
 }
 

@@ -109,7 +109,7 @@ go s.ServeConn(pconn)
 
 ## 公平性与调度
 
-Flex 会把托管的连接包装成 `FairConn`，避免单条流独占物理链路。`switcher.Server` 接受的连接与 `node.Session` 的连接默认启用；直接使用 `node.New` 时连接保持原样。
+`link.Link` 内置公平写调度（per-SID 队列 + 控制优先 + 成本计费/包数预算），避免单条流独占物理链路；`switcher.Server` 与 `node.Session` 始终使用它。直连 `node.New` 也走 `Link`，只是保持明文 legacy wire。
 
 当前实现两种策略：
 
@@ -147,7 +147,7 @@ srv.SetSchedulerConfig(switcher.SchedulerConfig{
 })
 ```
 
-`SetSchedulerConfig` 必须在 `Serve` 之前调用；已建立的连接保留创建时的策略。`SetEnableFairConn(false)` 可完全关闭包装（多路复用场景不推荐）。Open/ACK/Ping/CloseAck、Presence 等控制包始终走高优先级控制通道，不计入数据预算。
+`SetSchedulerConfig` 必须在 `Serve` 之前调用；已建立的连接保留创建时的策略。`SetEnableFairConn(false)` 仅为兼容保留，现已无效——公平调度由 `link` 始终启用。Open/ACK/Ping/CloseAck、Presence 等控制包走高优先级控制通道，不计入数据预算。
 
 ---
 
@@ -349,12 +349,24 @@ go http.ListenAndServe(":9091", nil)
 
 ### 机密性边界
 
-`flex` 只对**接入握手**做加密（AES-GCM，密钥由共享口令派生），口令不会明文过网。
-握手之后的流数据、控制包与 presence 事件都是明文。也就是说：
+`flex` v4 把一条连接分成三个信任域：
 
-> `flex` 是多路复用/中继层，不是 VPN。任何不可信网络都应在外层套 TLS
-> （`tls.Listener` + `tls.Dial`，或 `wss://`）。
+- **握手**：X25519 ECDHE + Argon2id（人设口令，默认）或 HKDF（高熵 secret）派生 bootstrap key；固定 512B 帧；timestamp + 16B nonce 抗重放。握手完成后双方得到 `K_link`，具备前向保密。
+- **控制面**：11B 头用 ChaCha20 逐包加密；Open/Ping/Presence 等控制 payload 用 ChaCha20-Poly1305 加密并填充到 64B 桶。Switcher 必须解密控制面才能按域名路由，因此它是控制面的可信点。
+- **数据面**：`CmdPushStreamData` 的 payload 对 flex 完全不透明——不加密、不检查、不修改，relay 只读加密头。应用要机密性/完整性，必须在 stream 上自行套 TLS/AEAD：
 
+```go
+st, err := n.Dial("server:443")
+if err != nil { ... }
+tc := tls.Client(st, &tls.Config{ServerName: "server"})
+if err := tc.Handshake(); err != nil { ... }
+// 之后读写 tc
+```
+
+> `flex` 是多路复用/中继层，不是 VPN。数据面默认不加密；包长和时序也未隐藏。
+> 完整契约见 [security_contract_zh.md](security_contract_zh.md)。
+
+### 资源限制（Switcher）
 ### 资源限制（Switcher）
 
 Switcher 对连接洪水、流洪水、订阅风暴与握手爆破做了配额，默认值宽松但有效：

@@ -187,14 +187,30 @@ Session exposes its connection lifecycle via `GetState()`, `GetLastErr()`, `GetR
 
 ## Security & Limits
 
-`flex` encrypts the admission handshake only; stream data is plain text. Treat it
-as a multiplexing/relay layer, not a VPN: wrap the transport with TLS
-(`tls.Listener` / `tls.Dial`, or `wss://`) on any untrusted network.
+`flex` v4 encrypts the **admission handshake** and the **control plane**; data
+payloads stay opaque:
+
+- Handshake: X25519 ECDHE plus an Argon2id/HKDF bootstrap key, fixed 512-byte
+  frames, timestamp + nonce replay protection.
+- Every 11-byte header is ChaCha20-encrypted; control payloads use
+  ChaCha20-Poly1305 and are padded to 64-byte buckets.
+- `CmdPushStreamData` payloads are **not encrypted, inspected or modified**.
+  Applications that need data confidentiality/integrity must wrap the stream
+  with TLS/AEAD (`stream.Stream` implements `net.Conn`, so `tls.Client(stream)`
+  works).
+- The Switcher can read control metadata (domains, presence, MAC) to route; it
+  cannot read application data that the application has encrypted.
+- Packet sizes and timing are **not hidden**; data-length padding is not
+  implemented yet.
+- v4 is not compatible with older versions. Direct mode (`node.New`) is still
+  plaintext/legacy.
+
+See the [security contract](docs/security_contract_zh.md) and
+[Deployment & Security](docs/manual.md#deployment--security).
 
 The Switcher rejects connections, streams and presence subscriptions beyond
 `switcher.Limits` (configurable via `SetLimits`), rate-limits handshakes per IP,
 and drops packets whose source address differs from the authenticated node.
-See [Deployment & Security](docs/manual.md#deployment--security) for details.
 
 ## License
 

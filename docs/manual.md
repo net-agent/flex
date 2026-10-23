@@ -110,7 +110,7 @@ When a Node connects to a Switcher, it becomes a `Context`. The Switcher maintai
 
 ## Fairness & Scheduling
 
-Flex wraps managed connections in a `FairConn` so one stream cannot monopolize the physical link. This is enabled by default for connections accepted by `switcher.Server` and for `node.Session` connections; a bare `node.New` uses the provided connection as-is.
+`link.Link` contains the fair writer (per-SID queues, control priority, cost-budget or packet-quantum visits) so one stream cannot monopolize the physical link. `switcher.Server` and `node.Session` always use it; a bare `node.New` also uses a Link, but keeps the plaintext legacy wire.
 
 Two policies are implemented:
 
@@ -148,7 +148,7 @@ srv.SetSchedulerConfig(switcher.SchedulerConfig{
 })
 ```
 
-`SetSchedulerConfig` must be called before `Serve`; existing connections keep the policy they were created with. `SetEnableFairConn(false)` disables the wrapper entirely (not recommended for multiplexed connections). Control packets (Open/ACK/Ping/CloseAck, Presence) always use the high-priority control channel and are not charged against the data budget.
+`SetSchedulerConfig` must be called before `Serve`; existing connections keep the policy they were created with. `SetEnableFairConn(false)` is retained for API compatibility and is now a no-op — the link always enables fair scheduling. Control packets (Open/ACK/Ping/CloseAck, Presence) use the high-priority control channel and are not charged against the data budget.
 
 ---
 
@@ -356,13 +356,34 @@ See `examples/ws-gate` for a working example exposing `GetStats()` and
 
 ### Confidentiality
 
-`flex` encrypts **only the admission handshake** (AES-GCM, password-derived key)
-so that the shared password never crosses the wire in clear text. Stream data,
-control packets and presence events are sent as plain text. In other words:
+`flex` v4 separates three trust domains:
 
-> `flex` is a multiplexing/relay layer, not a VPN. For any untrusted network,
-> wrap the physical connection with TLS (`tls.Listener` + `tls.Dial`, or `wss://`).
+- **Handshake**: X25519 ECDHE with an Argon2id (default, human passwords) or
+  HKDF (high-entropy secret) bootstrap key; fixed 512-byte frames; timestamp +
+  16-byte nonce replay protection. Both sides derive `K_link` with forward
+  secrecy.
+- **Control plane**: 11-byte headers are ChaCha20-encrypted; Open/Ping/Presence
+  payloads use ChaCha20-Poly1305 and 64-byte bucket padding. The Switcher must
+  decrypt control metadata to route by domain, so it is a trusted control-plane
+  endpoint.
+- **Data plane**: `CmdPushStreamData` payloads are opaque to flex — never
+  encrypted, inspected or modified by the relay (which only reads the encrypted
+  header). Applications that need confidentiality/integrity must wrap the
+  stream with TLS/AEAD:
 
+```go
+st, err := n.Dial("server:443")
+if err != nil { ... }
+tc := tls.Client(st, &tls.Config{ServerName: "server"})
+if err := tc.Handshake(); err != nil { ... }
+// read/write tc
+```
+
+> `flex` is a multiplexing/relay layer, not a VPN. Data is not encrypted by
+> default and packet sizes/timing are not hidden. See the
+> [security contract](security_contract_zh.md) for the full contract.
+
+### Resource limits (Switcher)
 ### Resource limits (Switcher)
 
 The Switcher bounds connection floods, stream floods, presence subscription
