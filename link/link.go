@@ -14,9 +14,10 @@ import (
 // scheduler and (once the handshake lands) the secure record layer. Callers
 // only see frames.
 type Link struct {
-	t     Transport
-	codec wire.Codec
-	w     *fairWriter
+	t      Transport
+	codec  wire.Codec
+	w      *fairWriter
+	legacy bool // omit/accept the class bit for old packet.Buffer peers
 
 	// out is writer-goroutine scratch for header encoding. It is never touched
 	// by readers, so no lock is needed.
@@ -34,8 +35,19 @@ func NewDirect(t Transport, cfg ...sched.SchedulerConfig) *Link {
 	if len(cfg) > 0 {
 		c = cfg[0]
 	}
-	l := &Link{t: t}
-	l.w = newFairWriter(l.writeFrames, c, func(error) {
+	return NewDirectWithConfig(t, Config{Scheduler: c})
+}
+
+// Config configures a Link.
+type Config struct {
+	Scheduler  sched.SchedulerConfig
+	LegacyWire bool // migration only: omit/accept the class bit for old peers
+}
+
+// NewDirectWithConfig wraps a transport without a handshake or encryption.
+func NewDirectWithConfig(t Transport, cfg Config) *Link {
+	l := &Link{t: t, legacy: cfg.LegacyWire}
+	l.w = newFairWriter(l.writeFrames, cfg.Scheduler, func(error) {
 		// A write failure is fatal for the connection. Close the transport so
 		// the read loop unblocks; the caller observes the error on ReadFrame.
 		_ = t.Close()
@@ -53,7 +65,15 @@ func (l *Link) ReadFrame() (*wire.Frame, error) {
 	if err := l.t.ReadHeader(hdr[:]); err != nil {
 		return nil, err
 	}
-	h, err := l.codec.DecodeHeader(hdr[:])
+	var (
+		h   wire.Header
+		err error
+	)
+	if l.legacy {
+		h, err = l.codec.DecodeHeaderLegacy(hdr[:])
+	} else {
+		h, err = l.codec.DecodeHeader(hdr[:])
+	}
 	if err != nil {
 		return nil, fmt.Errorf("link: decode header: %w", err)
 	}
@@ -75,6 +95,16 @@ func (l *Link) SendFrame(f *wire.Frame) error {
 		return nil
 	}
 	return l.w.Send(f)
+}
+
+// SendFrameSync transfers ownership of f and waits until the transport write
+// completes, returning the write error. Control packets use it so callers keep
+// the old synchronous writer error semantics.
+func (l *Link) SendFrameSync(f *wire.Frame) error {
+	if f == nil {
+		return nil
+	}
+	return l.w.SendSync(f)
 }
 
 // SendControl copies payload and queues a control frame. Copying keeps the
@@ -122,7 +152,13 @@ func (l *Link) writeFrames(frames []*wire.Frame) error {
 		l.out = l.out[:len(frames)]
 	}
 	for i, f := range frames {
-		if err := l.codec.EncodeHeader(f.Header(), l.out[i].Header[:]); err != nil {
+		var err error
+		if l.legacy {
+			err = l.codec.EncodeHeaderLegacy(f.Header(), l.out[i].Header[:])
+		} else {
+			err = l.codec.EncodeHeader(f.Header(), l.out[i].Header[:])
+		}
+		if err != nil {
 			return err
 		}
 		l.out[i].Payload = f.Payload()

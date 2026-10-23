@@ -107,6 +107,7 @@ type fairWriter struct {
 
 	scratch    []*wire.Frame
 	controlCh  chan *wire.Frame
+	syncCh     chan syncReq
 	readyQueue chan wire.SID
 
 	mu      sync.Mutex
@@ -125,6 +126,7 @@ func newFairWriter(send func([]*wire.Frame) error, cfg sched.SchedulerConfig, on
 		cfg:        cfg,
 		scratch:    make([]*wire.Frame, sched.MaxPacketsPerVisit),
 		controlCh:  make(chan *wire.Frame, sched.DefaultControlQueueSize),
+		syncCh:     make(chan syncReq, sched.DefaultControlQueueSize),
 		readyQueue: make(chan wire.SID, sched.ReadyQueueSize),
 		streams:    make(map[wire.SID]*streamQueue),
 		done:       make(chan struct{}),
@@ -189,11 +191,58 @@ func (w *fairWriter) Send(f *wire.Frame) error {
 	return nil
 }
 
+type syncReq struct {
+	f    *wire.Frame
+	done chan error
+}
+
+// SendSync writes f and waits for the transport result. Control packets use
+// this path so write errors are visible to the caller, matching the old
+// synchronous packet.Writer behavior. Data packets stay asynchronous.
+func (w *fairWriter) SendSync(f *wire.Frame) error {
+	if f == nil {
+		return nil
+	}
+	if w.closed.Load() {
+		f.Release()
+		return ErrWriterClosed
+	}
+	req := syncReq{f: f, done: make(chan error, 1)}
+	select {
+	case w.syncCh <- req:
+	case <-w.done:
+		f.Release()
+		return ErrWriterClosed
+	}
+	select {
+	case err := <-req.done:
+		return err
+	case <-w.done:
+		return ErrWriterClosed
+	}
+}
+
+func (w *fairWriter) writeSync(req syncReq) {
+	err := w.send([]*wire.Frame{req.f})
+	req.f.Release()
+	req.done <- err
+	if err != nil {
+		w.stop(err)
+	}
+}
+
 func (w *fairWriter) loop() {
 	for {
 		select {
 		case <-w.done:
 			return
+		case req := <-w.syncCh:
+			if w.closed.Load() {
+				req.f.Release()
+				req.done <- ErrWriterClosed
+				continue
+			}
+			w.writeSync(req)
 		case f := <-w.controlCh:
 			if w.closed.Load() {
 				f.Release()
@@ -319,6 +368,16 @@ func (w *fairWriter) drainAll() {
 		select {
 		case f := <-w.controlCh:
 			f.Release()
+		default:
+			goto sync
+		}
+	}
+sync:
+	for {
+		select {
+		case req := <-w.syncCh:
+			req.f.Release()
+			req.done <- ErrWriterClosed
 		default:
 			goto streams
 		}

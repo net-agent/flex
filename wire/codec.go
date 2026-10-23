@@ -49,11 +49,7 @@ func (h Header) String() string {
 // (1 = link-encrypted payload, 0 = opaque data).
 type Codec struct{}
 
-// EncodeHeader writes h into dst, which must be at least HeaderSize bytes.
-func (Codec) EncodeHeader(h Header, dst []byte) error {
-	if len(dst) < HeaderSize {
-		return ErrShortHeader
-	}
+func validateHeader(h Header) error {
 	if !h.Class.valid() {
 		return fmt.Errorf("%w: %d", ErrInvalidClass, uint8(h.Class))
 	}
@@ -70,6 +66,17 @@ func (Codec) EncodeHeader(h Header, dst []byte) error {
 	if noPayload(h.Cmd) && h.Cmd != Cmd(AckPushStreamData) && h.Size != 0 {
 		return fmt.Errorf("%w: %s size=%d", ErrPayloadNotAllowed, h.Cmd, h.Size)
 	}
+	return nil
+}
+
+// EncodeHeader writes h into dst, which must be at least HeaderSize bytes.
+func (Codec) EncodeHeader(h Header, dst []byte) error {
+	if len(dst) < HeaderSize {
+		return ErrShortHeader
+	}
+	if err := validateHeader(h); err != nil {
+		return err
+	}
 
 	b := byte(h.Cmd)
 	if h.Class.encrypted() {
@@ -82,6 +89,56 @@ func (Codec) EncodeHeader(h Header, dst []byte) error {
 	binary.BigEndian.PutUint16(dst[7:9], h.Src.Port)
 	binary.BigEndian.PutUint16(dst[9:11], h.Size)
 	return nil
+}
+
+// EncodeHeaderLegacy writes a header without the class bit. It exists only for
+// the migration window where one side is still an old packet.Buffer peer; the
+// secure link must use EncodeHeader.
+func (Codec) EncodeHeaderLegacy(h Header, dst []byte) error {
+	if len(dst) < HeaderSize {
+		return ErrShortHeader
+	}
+	if err := validateHeader(h); err != nil {
+		return err
+	}
+	dst[0] = byte(h.Cmd)
+	binary.BigEndian.PutUint16(dst[1:3], h.Dst.IP)
+	binary.BigEndian.PutUint16(dst[3:5], h.Dst.Port)
+	binary.BigEndian.PutUint16(dst[5:7], h.Src.IP)
+	binary.BigEndian.PutUint16(dst[7:9], h.Src.Port)
+	binary.BigEndian.PutUint16(dst[9:11], h.Size)
+	return nil
+}
+
+// DecodeHeaderLegacy accepts both legacy headers (no class bit) and new
+// headers. A control command without the class bit is treated as control, so
+// new links can talk to old packet.Buffer peers during the migration.
+func (Codec) DecodeHeaderLegacy(src []byte) (Header, error) {
+	if len(src) < HeaderSize {
+		return Header{}, ErrShortHeader
+	}
+	b := src[0]
+	classBit := b&classFlag != 0
+	cmd := Cmd(b &^ classFlag)
+
+	class, ok := ClassOf(cmd)
+	if !ok {
+		return Header{}, fmt.Errorf("%w: 0x%02x", ErrUnknownCommand, byte(cmd))
+	}
+	if classBit && class == ClassData {
+		return Header{}, fmt.Errorf("%w: data command %s has class bit", ErrClassMismatch, cmd)
+	}
+	h := Header{
+		Class: class,
+		Cmd:   cmd,
+		Dst:   Addr{IP: binary.BigEndian.Uint16(src[1:3]), Port: binary.BigEndian.Uint16(src[3:5])},
+		Src:   Addr{IP: binary.BigEndian.Uint16(src[5:7]), Port: binary.BigEndian.Uint16(src[7:9])},
+		Size:  binary.BigEndian.Uint16(src[9:11]),
+	}
+	if noPayload(cmd) && cmd != Cmd(AckPushStreamData) && h.Size != 0 {
+		return Header{}, fmt.Errorf("%w: %s size=%d", ErrPayloadNotAllowed, cmd, h.Size)
+	}
+	return h, nil
 }
 
 // DecodeHeader parses src into a Header. It validates the class bit against the

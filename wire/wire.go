@@ -142,6 +142,15 @@ type SID struct {
 // String formats the SID as "src->dst".
 func (s SID) String() string { return s.Src.String() + "->" + s.Dst.String() }
 
+// Uint64 returns the historical packed SID: dst ip/port followed by src
+// ip/port, matching packet.Buffer.SID. It is the key used by node.StreamHub so
+// legacy packet.Buffer handlers and new wire.Frame handlers address the same
+// stream during the migration.
+func (s SID) Uint64() uint64 {
+	return uint64(s.Dst.IP)<<48 | uint64(s.Dst.Port)<<32 |
+		uint64(s.Src.IP)<<16 | uint64(s.Src.Port)
+}
+
 type commandInfo struct {
 	cmd   Cmd
 	class Class
