@@ -51,6 +51,18 @@ func (impl *connImpl) ReadPayload(n int) ([]byte, error) {
 	return impl.ft.ReadPayload(n)
 }
 
+func (impl *connImpl) ReadPayloadInto(dst []byte) error {
+	if pr, ok := impl.ft.(framing.PayloadReader); ok {
+		return pr.ReadPayloadInto(dst)
+	}
+	p, err := impl.ft.ReadPayload(len(dst))
+	if err != nil {
+		return err
+	}
+	copy(dst, p)
+	return nil
+}
+
 func (impl *connImpl) WriteFrames(frames []framing.FrameBytes) error {
 	return impl.ft.WriteFrames(frames)
 }

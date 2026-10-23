@@ -55,6 +55,21 @@ func (t *packetTransport) ReadPayload(n int) ([]byte, error) {
 	return p, nil
 }
 
+func (t *packetTransport) ReadPayloadInto(dst []byte) error {
+	b := t.pending
+	t.pending = nil
+	if b == nil {
+		return ErrShortFrame
+	}
+	if len(b.Payload) != len(dst) {
+		packet.PutBuffer(b)
+		return ErrFrameSizeMismatch
+	}
+	copy(dst, b.Payload)
+	packet.PutBuffer(b)
+	return nil
+}
+
 func (t *packetTransport) WriteFrames(frames []FrameBytes) error {
 	for i := range frames {
 		b := &packet.Buffer{Head: frames[i].Header, Payload: frames[i].Payload}

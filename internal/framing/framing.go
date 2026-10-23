@@ -38,6 +38,13 @@ type FrameBytes struct {
 
 // Transport moves encoded frames over a byte stream or a message transport.
 //
+// PayloadReader is an optional zero-allocation extension of Transport: the
+// caller supplies the destination buffer. The link uses it when available and
+// falls back to ReadPayload (which allocates) for custom transports.
+type PayloadReader interface {
+	ReadPayloadInto(dst []byte) error
+}
+
 // ReadHeader/ReadPayload are deliberately two-phase: the secure link must
 // decrypt the header before it knows how many payload bytes to read.
 // Implementations must make the header slice valid until the next ReadHeader.
@@ -80,10 +87,22 @@ func (t *TCPTransport) ReadPayload(n int) ([]byte, error) {
 		return nil, fmt.Errorf("%w: payload=%d", ErrFrameSizeMismatch, n)
 	}
 	p := make([]byte, n)
-	if _, err := io.ReadFull(t.conn, p); err != nil {
+	if err := t.ReadPayloadInto(p); err != nil {
 		return nil, err
 	}
 	return p, nil
+}
+
+// ReadPayloadInto reads exactly len(dst) bytes into the caller's buffer.
+func (t *TCPTransport) ReadPayloadInto(dst []byte) error {
+	if len(dst) == 0 {
+		return nil
+	}
+	if len(dst) > wire.MaxPayloadSize {
+		return fmt.Errorf("%w: payload=%d", ErrFrameSizeMismatch, len(dst))
+	}
+	_, err := io.ReadFull(t.conn, dst)
+	return err
 }
 
 // WriteFrames writes all frames with as few syscalls as possible. On TCP this
@@ -167,6 +186,23 @@ func (t *WSTransport) ReadPayload(n int) ([]byte, error) {
 		return nil, fmt.Errorf("%w: frame=%d header=%d", ErrFrameSizeMismatch, len(rest), n)
 	}
 	return rest, nil
+}
+
+// ReadPayloadInto copies the cached message body into dst.
+func (t *WSTransport) ReadPayloadInto(dst []byte) error {
+	rest := t.rest
+	t.rest = nil
+	if len(dst) == 0 {
+		if len(rest) != 0 {
+			return fmt.Errorf("%w: frame=%d header=0", ErrFrameSizeMismatch, len(rest))
+		}
+		return nil
+	}
+	if len(rest) != len(dst) {
+		return fmt.Errorf("%w: frame=%d header=%d", ErrFrameSizeMismatch, len(rest), len(dst))
+	}
+	copy(dst, rest)
+	return nil
 }
 
 // WriteFrames writes one binary message per frame. A WebSocket message has a

@@ -35,6 +35,7 @@ type Frame struct {
 	dst     Addr
 	payload []byte
 	ackSize uint16 // only for AckPushStreamData
+	release func([]byte)
 	pooled  bool
 }
 
@@ -61,7 +62,13 @@ func (f *Frame) Release() {
 	f.src = Addr{}
 	f.dst = Addr{}
 	f.ackSize = 0
-	f.payload = f.payload[:0]
+	if f.release != nil {
+		f.release(f.payload)
+		f.release = nil
+		f.payload = nil
+	} else {
+		f.payload = f.payload[:0]
+	}
 	framePool.Put(f)
 }
 
@@ -69,6 +76,25 @@ func (f *Frame) Release() {
 // a wire header. It enforces the command/class table and the no-payload rules.
 // It takes ownership of payload.
 func NewFrame(class Class, cmd Cmd, src, dst Addr, payload []byte, ackSize uint16) (*Frame, error) {
+	return newFrame(class, cmd, src, dst, payload, ackSize, nil)
+}
+
+// NewFrameWithRelease is NewFrame plus a payload release callback. The link
+// uses it to return receive buffers to its per-link pool when the frame is
+// released. The callback takes ownership of the payload and must not retain it
+// after returning.
+func NewFrameWithRelease(class Class, cmd Cmd, src, dst Addr, payload []byte, ackSize uint16, release func([]byte)) (*Frame, error) {
+	f, err := newFrame(class, cmd, src, dst, payload, ackSize, release)
+	if err != nil {
+		if release != nil {
+			release(payload)
+		}
+		return nil, err
+	}
+	return f, nil
+}
+
+func newFrame(class Class, cmd Cmd, src, dst Addr, payload []byte, ackSize uint16, release func([]byte)) (*Frame, error) {
 	if !class.valid() {
 		return nil, fmt.Errorf("%w: %d", ErrInvalidClass, uint8(class))
 	}
@@ -105,6 +131,7 @@ func NewFrame(class Class, cmd Cmd, src, dst Addr, payload []byte, ackSize uint1
 	f.dst = dst
 	f.payload = payload
 	f.ackSize = ackSize
+	f.release = release
 	return f, nil
 }
 

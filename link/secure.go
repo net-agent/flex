@@ -29,6 +29,12 @@ type secureState struct {
 	recvHdr *chacha20.Cipher
 	sendCtl cipher.AEAD
 	recvCtl cipher.AEAD
+
+	// Control nonces are prefix||counter: no getrandom syscall per control
+	// packet, and uniqueness is guaranteed by the counter.
+	noncePrefix  [4]byte
+	nonceCounter uint64
+	sendPad      []byte
 }
 
 func newSecureState(linkKey []byte, initiator bool) (*secureState, error) {
@@ -61,7 +67,11 @@ func newSecureState(linkKey []byte, initiator bool) (*secureState, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &secureState{sendHdr: sendHdr, recvHdr: recvHdr, sendCtl: sendCtl, recvCtl: recvCtl}, nil
+	s := &secureState{sendHdr: sendHdr, recvHdr: recvHdr, sendCtl: sendCtl, recvCtl: recvCtl}
+	if _, err := rand.Read(s.noncePrefix[:]); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 // sealControl encrypts a control payload. The plaintext is framed as
@@ -81,18 +91,23 @@ func (s *secureState) sealControl(h wire.Header, plaintext []byte) (wire.Header,
 		return h, nil, err
 	}
 
-	buf := make([]byte, padded)
+	if cap(s.sendPad) < padded {
+		s.sendPad = make([]byte, padded)
+	} else {
+		s.sendPad = s.sendPad[:padded]
+	}
+	buf := s.sendPad
 	binary.BigEndian.PutUint16(buf[:2], uint16(len(plaintext)))
 	copy(buf[2:], plaintext)
 
-	nonce := make([]byte, controlNonceSz)
-	if _, err := rand.Read(nonce); err != nil {
-		return h, nil, err
-	}
-	ct := s.sendCtl.Seal(nil, nonce, buf, aad[:])
-	out := make([]byte, 0, controlNonceSz+len(ct))
-	out = append(out, nonce...)
-	out = append(out, ct...)
+	var nonce [controlNonceSz]byte
+	copy(nonce[:4], s.noncePrefix[:])
+	binary.BigEndian.PutUint64(nonce[4:], s.nonceCounter)
+	s.nonceCounter++
+
+	out := make([]byte, controlNonceSz, controlNonceSz+padded+controlTagSz)
+	copy(out, nonce[:])
+	out = s.sendCtl.Seal(out, nonce[:], buf, aad[:])
 	return h, out, nil
 }
 
@@ -137,17 +152,19 @@ func (l *Link) readSecureFrame() (*wire.Frame, error) {
 		return nil, fmt.Errorf("%w: unexpected handshake frame", errHandshakeRejected)
 	}
 
-	payload, err := l.t.ReadPayload(h.PayloadLen())
+	payload, err := l.readPayload(h.PayloadLen())
 	if err != nil {
 		return nil, fmt.Errorf("link: read secure payload: %w", err)
 	}
 	if len(payload) > 0 && h.Class != wire.ClassData {
-		payload, err = l.sec.openControl(h, payload)
-		if err != nil {
-			return nil, err
+		plain, decErr := l.sec.openControl(h, payload)
+		l.putPayload(payload)
+		if decErr != nil {
+			return nil, decErr
 		}
+		payload = plain
 	}
-	f, err := wire.NewFrame(h.Class, h.Cmd, h.Src, h.Dst, payload, h.AckSize())
+	f, err := wire.NewFrameWithRelease(h.Class, h.Cmd, h.Src, h.Dst, payload, h.AckSize(), l.putPayload)
 	if err != nil {
 		return nil, err
 	}

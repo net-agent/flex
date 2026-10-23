@@ -31,6 +31,10 @@ type Link struct {
 	// tap, when set, observes plaintext frames at the link boundary. It is
 	// used by tests/observability and is nil in production.
 	tap atomic.Pointer[FrameTap]
+
+	// payloadPool recycles receive buffers. A frame read by this link carries
+	// its buffer back here when the frame is released.
+	payloadPool sync.Pool
 }
 
 // FrameTap observes a plaintext frame. write is true for outbound frames.
@@ -86,6 +90,7 @@ func NewSecure(t Transport, linkKey []byte, initiator bool, cfg Config) (*Link, 
 
 func newLink(t Transport, cfg Config, sec *secureState) *Link {
 	l := &Link{t: t, sec: sec, legacy: cfg.LegacyWire && sec == nil}
+	l.payloadPool.New = func() any { return new([]byte) }
 	l.w = newFairWriter(l.writeFrames, cfg.Scheduler, func(error) {
 		// A write failure is fatal for the connection. Close the transport so
 		// the read loop unblocks; the caller observes the error on ReadFrame.
@@ -122,16 +127,57 @@ func (l *Link) ReadFrame() (*wire.Frame, error) {
 	if err != nil {
 		return nil, fmt.Errorf("link: decode header: %w", err)
 	}
-	payload, err := l.t.ReadPayload(h.PayloadLen())
+	payload, err := l.readPayload(h.PayloadLen())
 	if err != nil {
 		return nil, fmt.Errorf("link: read payload: %w", err)
 	}
-	f, err := wire.NewFrame(h.Class, h.Cmd, h.Src, h.Dst, payload, h.AckSize())
+	f, err := wire.NewFrameWithRelease(h.Class, h.Cmd, h.Src, h.Dst, payload, h.AckSize(), l.putPayload)
 	if err != nil {
 		return nil, fmt.Errorf("link: build frame: %w", err)
 	}
 	l.fireTap(false, f)
 	return f, nil
+}
+
+// readPayload reads exactly n bytes, preferring the caller-buffer extension to
+// avoid a per-packet allocation. The returned buffer is owned by the link pool
+// and must be released with putPayload (the frame release callback does it).
+func (l *Link) readPayload(n int) ([]byte, error) {
+	if n <= 0 {
+		return nil, nil
+	}
+	b := l.getPayload(n)
+	if pr, ok := l.t.(interface{ ReadPayloadInto([]byte) error }); ok {
+		if err := pr.ReadPayloadInto(b); err != nil {
+			l.putPayload(b)
+			return nil, err
+		}
+		return b, nil
+	}
+	p, err := l.t.ReadPayload(n)
+	if err != nil {
+		l.putPayload(b)
+		return nil, err
+	}
+	copy(b, p)
+	return b, nil
+}
+
+func (l *Link) getPayload(n int) []byte {
+	v := l.payloadPool.Get().(*[]byte)
+	b := *v
+	if cap(b) < n {
+		return make([]byte, n)
+	}
+	return b[:n]
+}
+
+func (l *Link) putPayload(b []byte) {
+	if b == nil {
+		return
+	}
+	b = b[:0]
+	l.payloadPool.Put(&b)
 }
 
 // SendFrame transfers ownership of f to the link's writer. The caller must not
