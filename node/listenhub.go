@@ -10,6 +10,7 @@ import (
 	"github.com/net-agent/flex/v3/internal/idpool"
 	"github.com/net-agent/flex/v3/packet"
 	"github.com/net-agent/flex/v3/stream"
+	"github.com/net-agent/flex/v3/wire"
 )
 
 var (
@@ -84,44 +85,45 @@ func (hub *ListenHub) getActiveListeners() []*Listener {
 	return list
 }
 
-// 处理对端发送过来的OpenStream请求
-func (hub *ListenHub) handleCmdOpenStream(pbuf *packet.Buffer) {
-	var negotiatedWindowSize int32
-	var ackMessage string
+// handleOpenFrame processes an OpenStream control frame. It is a control-lane
+// handler: the dispatcher releases f after it returns.
+func (hub *ListenHub) handleOpenFrame(f *wire.Frame) error {
+	var (
+		negotiatedWindowSize int32
+		ackMessage           string
+		s                    *stream.Stream
+	)
 
 	defer func() {
+		if s != nil {
+			s.Close()
+		}
 		var ack packet.OpenStreamACK
 		if ackMessage == "" {
 			ack = packet.OpenStreamACK{OK: true, WindowSize: uint32(negotiatedWindowSize)}
 		} else {
 			ack = packet.OpenStreamACK{Error: ackMessage}
 		}
-
-		_ = pbuf.SetPayload(ack.Encode())
-		pbuf.SetCmd(packet.AckOpenStream)
-
-		srcIP, srcPort := pbuf.SrcIP(), pbuf.SrcPort()
-		distIP, distPort := pbuf.DistIP(), pbuf.DistPort()
-		pbuf.SetSrc(distIP, distPort)
-		pbuf.SetDist(srcIP, srcPort)
-
-		err := hub.host.WriteBuffer(pbuf)
+		reply, err := wire.NewControl(wire.AckOpenStream, f.Dst(), f.Src(), ack.Encode())
 		if err != nil {
+			hub.host.logger.Warn("build ack-msg failed", "error", err)
+			return
+		}
+		if err := hub.host.SendFrame(reply); err != nil {
 			hub.host.logger.Warn("write ack-msg failed", "error", err)
 		}
 	}()
 
-	// 找到该端口是否存在listener，如果不存在，则说明此端口并未开放
-	l, err := hub.getListenerByPort(pbuf.DistPort())
+	// 找到该端口是否存在 listener；不存在说明端口未开放。
+	l, err := hub.getListenerByPort(f.Dst().Port)
 	if err != nil {
 		ackMessage = err.Error()
-		return
+		return nil
 	}
 
-	req := packet.DecodeOpenStreamRequest(pbuf.Payload)
+	req := packet.DecodeOpenStreamRequest(f.Payload())
 	remoteDomain := req.Domain
-
-	if remoteDomain == "" && pbuf.SrcIP() == hub.host.ip {
+	if remoteDomain == "" && f.Src().IP == hub.host.ip {
 		remoteDomain = hub.host.domain
 	}
 
@@ -139,27 +141,20 @@ func (hub *ListenHub) handleCmdOpenStream(pbuf *packet.Buffer) {
 		}
 	}
 
-	s := stream.NewAcceptStream(
+	s = stream.NewAcceptStreamWithEndpoint(
 		hub.host,
-		hub.host.domain, pbuf.DistIP(), pbuf.DistPort(),
-		remoteDomain, pbuf.SrcIP(), pbuf.SrcPort(),
+		hub.host.domain, f.Dst().IP, f.Dst().Port,
+		remoteDomain, f.Src().IP, f.Src().Port,
 		negotiatedWindowSize,
 	)
-	defer func() {
-		if s != nil {
-			s.Close()
-		}
-	}()
 
-	// ack发出后理论上就会马上有数据从对端发送过来
-	// 因此需要先完成stream和sid的绑定，然后再应答ack，避免因时序问题出现的数据包丢失
-	err = hub.host.streamHub.attachStream(s, pbuf.SID())
-	if err != nil {
+	// ack 发出后对端就会马上发数据，因此先完成 stream 和 sid 的绑定，
+	// 再应答 ack，避免时序问题导致数据包丢失。
+	if err := hub.host.streamHub.attachStream(s, f.SID().Uint64()); err != nil {
 		ackMessage = err.Error()
-		return
+		return nil
 	}
 
-	// todo: maybe error with push channel
 	timer := time.NewTimer(listenerEnqueueTimeout)
 	defer timer.Stop()
 
@@ -171,6 +166,17 @@ func (hub *ListenHub) handleCmdOpenStream(pbuf *packet.Buffer) {
 	case <-timer.C:
 		ackMessage = ErrListenerBacklogFull.Error()
 	}
+	return nil
+}
+
+// handleCmdOpenStream is the legacy packet.Buffer adapter.
+func (hub *ListenHub) handleCmdOpenStream(pbuf *packet.Buffer) {
+	f, err := bufferToFrame(pbuf)
+	if err != nil {
+		return
+	}
+	_ = hub.handleOpenFrame(f)
+	f.Release()
 }
 
 // Listener 实现 net.Listener 协议

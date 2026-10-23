@@ -8,6 +8,7 @@ import (
 	"github.com/net-agent/flex/v3/internal/idpool"
 	"github.com/net-agent/flex/v3/internal/pending"
 	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v3/wire"
 )
 
 var (
@@ -46,13 +47,16 @@ func (p *Pinger) PingDomain(domain string, timeout time.Duration) (time.Duration
 
 	pingStart := time.Now()
 
-	pbuf := packet.NewBuffer()
-	defer packet.PutBuffer(pbuf)
-	pbuf.SetCmd(packet.CmdPingDomain)
-	pbuf.SetSrc(p.host.GetIP(), port)
-	pbuf.SetDist(packet.SwitcherIP, 0) // 忽略
-	_ = pbuf.SetPayload([]byte(domain))
-	if err = p.host.WriteBuffer(pbuf); err != nil {
+	f, err := wire.NewControl(
+		wire.CmdPingDomain,
+		wire.Addr{IP: p.host.GetIP(), Port: port},
+		wire.SwitcherAddr,
+		[]byte(domain),
+	)
+	if err != nil {
+		return 0, err
+	}
+	if err = p.host.SendFrame(f); err != nil {
 		atomic.AddInt64(&p.host.failures.PingFailed, 1)
 		return 0, err
 	}
@@ -74,38 +78,61 @@ func (p *Pinger) PingDomain(domain string, timeout time.Duration) (time.Duration
 	}
 }
 
-// handleCmdPingDomain 处理远端的PingDomain请求。
-//
-// 空域名为通用存活探测（心跳使用）：任何节点都应应答 OK，
-// 而不是返回 "domain not match"。直连模式没有 switcher，心跳正是靠
-// 对端应答这一分支存活；旧实现在直连下会在首个心跳周期后误判断链。
-func (p *Pinger) handleCmdPingDomain(pbuf *packet.Buffer) {
+// handlePingFrame handles a PingDomain request. It is a control-lane handler:
+// the dispatcher releases f after it returns.
+func (p *Pinger) handlePingFrame(f *wire.Frame) error {
 	if p.ignorePing {
-		p.host.logger.Warn("ignore ping request", "srcip", pbuf.SrcIP())
-		return
+		p.host.logger.Warn("ignore ping request", "srcip", f.Src().IP)
+		return nil
 	}
-	probeDomain := string(pbuf.Payload)
+	probeDomain := string(f.Payload())
+	var payload []byte
 	if probeDomain != "" && probeDomain != p.host.domain {
-		_ = pbuf.SetPayload([]byte("domain not match"))
-	} else {
-		_ = pbuf.SetPayload(nil)
+		payload = []byte("domain not match")
 	}
-
-	pbuf.SetCmd(packet.AckPingDomain)
-	pbuf.SwapSrcDist()
-	pbuf.SetSrc(p.host.GetIP(), 0)
-	if err := p.host.WriteBuffer(pbuf); err != nil {
+	reply, err := wire.NewControl(
+		wire.AckPingDomain,
+		wire.Addr{IP: p.host.GetIP()},
+		f.Src(),
+		payload,
+	)
+	if err != nil {
+		return err
+	}
+	if err := p.host.SendFrame(reply); err != nil {
 		p.host.logger.Warn("write ping response failed", "error", err)
 	}
+	return nil
 }
 
-// handleAckPingDomain 处理远端的应答
-func (p *Pinger) handleAckPingDomain(pbuf *packet.Buffer) {
-	port := pbuf.DistPort()
-	msg := string(pbuf.Payload)
+// handleAckFrame handles a PingDomain response. It is a control-lane handler.
+func (p *Pinger) handleAckFrame(f *wire.Frame) error {
+	port := f.Dst().Port
+	msg := string(f.Payload())
 	if msg != "" {
-		p.pending.Complete(port, struct{}{}, errors.New(msg))
+		_ = p.pending.Complete(port, struct{}{}, errors.New(msg))
 	} else {
-		p.pending.Complete(port, struct{}{}, nil)
+		_ = p.pending.Complete(port, struct{}{}, nil)
 	}
+	return nil
+}
+
+// handleCmdPingDomain is the legacy packet.Buffer adapter.
+func (p *Pinger) handleCmdPingDomain(pbuf *packet.Buffer) {
+	f, err := bufferToFrame(pbuf)
+	if err != nil {
+		return
+	}
+	_ = p.handlePingFrame(f)
+	f.Release()
+}
+
+// handleAckPingDomain is the legacy packet.Buffer adapter.
+func (p *Pinger) handleAckPingDomain(pbuf *packet.Buffer) {
+	f, err := bufferToFrame(pbuf)
+	if err != nil {
+		return
+	}
+	_ = p.handleAckFrame(f)
+	f.Release()
 }

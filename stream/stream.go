@@ -113,6 +113,20 @@ func (s *Stream) String() string {
 var streamIndex int32 = 0
 
 func New(pwriter Writer, initialWindowSize int32) *Stream {
+	return newStream(initialWindowSize, func(counter *int32) *sender {
+		return newSender(pwriter, counter)
+	})
+}
+
+// NewWithEndpoint builds a Stream whose frames go to ep. The node uses this
+// constructor; New is the legacy packet.Writer compatibility path.
+func NewWithEndpoint(ep Endpoint, initialWindowSize int32) *Stream {
+	return newStream(initialWindowSize, func(counter *int32) *sender {
+		return newSenderWithEndpoint(ep, counter)
+	})
+}
+
+func newStream(initialWindowSize int32, mkSender func(*int32) *sender) *Stream {
 	if initialWindowSize <= 0 {
 		initialWindowSize = DefaultWindowSize
 	}
@@ -132,7 +146,7 @@ func New(pwriter Writer, initialWindowSize int32) *Stream {
 		closeAckTimeout: DefaultCloseAckTimeout,
 		logger:          slog.Default(),
 	}
-	s.sender = newSender(pwriter, &state.SentBufferCount)
+	s.sender = mkSender(&state.SentBufferCount)
 	s.acks = newAckTracker(s.sender.SendDataAck, func(n int64) {
 		atomic.AddInt64(&s.state.SentAckTotal, n)
 	}, s.logger)
@@ -143,9 +157,24 @@ func NewDialStream(w Writer,
 	localDomain string, localIP, localPort uint16,
 	remoteDomain string, remoteIP, remotePort uint16,
 	initialWindowSize int32) *Stream {
-	s := New(w, initialWindowSize)
+	return newDialStream(New(w, initialWindowSize),
+		localDomain, localIP, localPort, remoteDomain, remoteIP, remotePort)
+}
+
+// NewDialStreamWithEndpoint is the node's frame-native dial constructor.
+func NewDialStreamWithEndpoint(ep Endpoint,
+	localDomain string, localIP, localPort uint16,
+	remoteDomain string, remoteIP, remotePort uint16,
+	initialWindowSize int32) *Stream {
+	return newDialStream(NewWithEndpoint(ep, initialWindowSize),
+		localDomain, localIP, localPort, remoteDomain, remoteIP, remotePort)
+}
+
+func newDialStream(s *Stream,
+	localDomain string, localIP, localPort uint16,
+	remoteDomain string, remoteIP, remotePort uint16) *Stream {
 	s.setLocal(localIP, localPort)
-	s.setRemote(remoteIP, remotePort) // remoteIP有可能需要在接收到Ack时再补充调用
+	s.setRemote(remoteIP, remotePort) // remoteIP 可能在收到 Ack 后再补充
 	s.SetBoundPort(localPort)
 	s.state.Direction = DirectionOutbound
 	s.state.LocalDomain = localDomain
@@ -157,7 +186,22 @@ func NewAcceptStream(w Writer,
 	localDomain string, localIP, localPort uint16,
 	remoteDomain string, remoteIP, remotePort uint16,
 	initialWindowSize int32) *Stream {
-	s := New(w, initialWindowSize)
+	return newAcceptStream(New(w, initialWindowSize),
+		localDomain, localIP, localPort, remoteDomain, remoteIP, remotePort)
+}
+
+// NewAcceptStreamWithEndpoint is the node's frame-native accept constructor.
+func NewAcceptStreamWithEndpoint(ep Endpoint,
+	localDomain string, localIP, localPort uint16,
+	remoteDomain string, remoteIP, remotePort uint16,
+	initialWindowSize int32) *Stream {
+	return newAcceptStream(NewWithEndpoint(ep, initialWindowSize),
+		localDomain, localIP, localPort, remoteDomain, remoteIP, remotePort)
+}
+
+func newAcceptStream(s *Stream,
+	localDomain string, localIP, localPort uint16,
+	remoteDomain string, remoteIP, remotePort uint16) *Stream {
 	s.setLocal(localIP, localPort)
 	s.setRemote(remoteIP, remotePort)
 	s.state.Direction = DirectionInbound

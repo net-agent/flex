@@ -423,7 +423,14 @@ func (node *Node) sendFrameOwned(f *wire.Frame) error {
 	node.heartbeat.Touch()
 	node.writtenDataSize.Add(int64(f.PayloadSize()))
 	if f.Class() == wire.ClassControl || f.Class() == wire.ClassHandshake {
-		return node.lnk.SendFrameSync(f)
+		// Close/AckClose share the per-stream queue with data; sending them
+		// synchronously would let the close overtake queued data.
+		switch f.Cmd() {
+		case wire.Cmd(wire.CmdCloseStream), wire.Cmd(wire.AckCloseStream):
+			return node.lnk.SendFrame(f)
+		default:
+			return node.lnk.SendFrameSync(f)
+		}
 	}
 	return node.lnk.SendFrame(f)
 }

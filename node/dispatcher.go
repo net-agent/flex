@@ -31,23 +31,25 @@ type frameHandler func(*wire.Frame) error
 
 func (d *Dispatcher) init(host *Node) {
 	d.host = host
-	d.cmdHandlers = map[byte]func(*packet.Buffer){
-		byte(packet.AckPushStreamData):    host.streamHub.handleAckPushStreamData,
-		byte(packet.CmdOpenStream):        host.listenHub.handleCmdOpenStream,
-		byte(packet.CmdPingDomain):        host.pinger.handleCmdPingDomain,
-		byte(packet.AckPingDomain):        host.pinger.handleAckPingDomain,
-		byte(packet.AckSubscribePresence): host.watcher.handleAckSubscribePresence,
-		byte(packet.CmdNotifyPresence):    host.watcher.handleCmdNotifyPresence,
-	}
-	d.dataHandlers = map[byte]func(*packet.Buffer){
-		byte(packet.AckOpenStream):  host.dialer.handleAckOpenStream,
-		byte(packet.CmdCloseStream): host.streamHub.handleCmdCloseStream,
-		byte(packet.AckCloseStream): host.streamHub.handleAckCloseStream,
+	// Legacy maps are kept for RegisterCmdHandler/RegisterDataHandler users.
+	// Built-in commands are handled by the frame maps below.
+	d.cmdHandlers = make(map[byte]func(*packet.Buffer))
+	d.dataHandlers = make(map[byte]func(*packet.Buffer))
+
+	d.frameCmdHandlers = map[wire.Cmd]frameHandler{
+		wire.Cmd(wire.CmdOpenStream):        host.listenHub.handleOpenFrame,
+		wire.Cmd(wire.CmdPingDomain):        host.pinger.handlePingFrame,
+		wire.Cmd(wire.AckPingDomain):        host.pinger.handleAckFrame,
+		wire.Cmd(wire.AckSubscribePresence): host.watcher.handleAckFrame,
+		wire.Cmd(wire.CmdNotifyPresence):    host.watcher.handleNotifyFrame,
 	}
 	d.frameDataHandlers = map[wire.Cmd]frameHandler{
 		wire.Cmd(wire.CmdPushStreamData): host.streamHub.handleData,
+		wire.Cmd(wire.AckPushStreamData): host.streamHub.handleAckData,
+		wire.Cmd(wire.AckOpenStream):     host.dialer.handleAckOpenStreamFrame,
+		wire.Cmd(wire.CmdCloseStream):    host.streamHub.handleClose,
+		wire.Cmd(wire.AckCloseStream):    host.streamHub.handleCloseAck,
 	}
-	d.frameCmdHandlers = make(map[wire.Cmd]frameHandler)
 }
 
 // RegisterCmdHandler 注册控制包处理函数（兼容旧 API）。
@@ -115,10 +117,9 @@ func (d *Dispatcher) dispatchFrame(f *wire.Frame) error {
 	}
 
 	switch f.Cmd() {
-	case wire.Cmd(wire.CmdPushStreamData):
-		d.dataChan <- f // PushData 是最常见的，设置最短比较路径
+	case wire.Cmd(wire.CmdPushStreamData), wire.Cmd(wire.AckPushStreamData):
+		d.dataChan <- f // PushData is the hot path; ACKs own/release their frame
 	case wire.Cmd(wire.CmdOpenStream),
-		wire.Cmd(wire.AckPushStreamData),
 		wire.Cmd(wire.CmdPingDomain),
 		wire.Cmd(wire.AckPingDomain),
 		wire.Cmd(wire.AckSubscribePresence),

@@ -602,11 +602,18 @@ func (s *Session) Serve() error {
 			continue
 		}
 
-		if s.enableFairConn.Load() {
-			conn = sched.NewFairConnWithConfig(conn, s.schedulerConfig())
+		node, err := newWithConfig(conn, 1000, 0xFFFF, DefaultHeartbeatInterval, s.schedulerConfig())
+		if err != nil {
+			conn.Close()
+			s.logger.Warn("create node failed", "error", err)
+			select {
+			case <-s.done:
+				return nil
+			case <-time.After(backoff):
+			}
+			backoff = min(backoff*2, 30*time.Second)
+			continue
 		}
-
-		node := New(conn)
 		s.wireNode(node, ip)
 
 		backoff = time.Second // 连接成功，重置退避
