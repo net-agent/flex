@@ -13,6 +13,7 @@ import (
 	"github.com/net-agent/flex/v3/internal/admit"
 	"github.com/net-agent/flex/v3/internal/idpool"
 	"github.com/net-agent/flex/v3/internal/sched"
+	"github.com/net-agent/flex/v3/link"
 	"github.com/net-agent/flex/v3/packet"
 )
 
@@ -286,12 +287,21 @@ func (s *Server) ServeConn(pc packet.Conn) (err error) {
 		return err
 	}
 
-	// 第二步：将ctx映射到map中。
-	// NewContext 会启动 runForwardLoop，因此从这一刻起必须保证 release 一定执行，
-	// 否则 attach 失败或应答写失败都会泄漏一个 goroutine 与 Context。
-	// 握手应答必须先于任何转发写出：ctx 在 attach 后即可被其他节点按域名/IP 命中，
-	// 因此先以 nil conn 注册（转发会失败丢弃），应答写完后再绑定 conn。
-	ctx := NewContext(int(s.nextCtxID.Add(1)), nil, req.Domain, req.Mac, s.ctxLogger)
+	// 第二步：在裸连接之上建立 Link，再创建 Context。
+	// 握手阶段仍是裸连接，应答写失败可以同步返回；Link 的写协程在收到
+	// 第一帧前不会写任何字节。Context 的 ready 在应答写完后才关闭，
+	// 保证其他节点转发过来的包不会抢在握手应答之前。
+	var tr link.Transport
+	if lt, ok := pc.(link.Transport); ok {
+		tr = lt
+	} else {
+		tr = link.NewPacketTransport(pc)
+	}
+	lnk := link.NewDirectWithConfig(tr, link.Config{
+		Scheduler:  s.schedulerConfig(),
+		LegacyWire: true,
+	})
+	ctx := newContext(int(s.nextCtxID.Add(1)), lnk, req.Domain, req.Mac, s.ctxLogger)
 	defer ctx.release()
 
 	err = s.registry.attach(ctx)
@@ -303,25 +313,13 @@ func (s *Server) ServeConn(pc packet.Conn) (err error) {
 	}
 	defer s.registry.detach(ctx)
 
-	// 第三步：应答客户端
+	// 第三步：应答客户端。必须在 markReady 之前写，保证转发不抢先。
 	resp := admit.NewOKResponse(ctx.IP)
-	err = resp.WriteTo(pc, s.password)
-	if err != nil {
+	if err := resp.WriteTo(pc, s.password); err != nil {
 		s.logger.Warn("response client failed", "domain", ctx.Domain, "mac", ctx.Mac, "error", err)
 		return fmt.Errorf("%w: %w", errHandlePCWriteFailed, err)
 	}
-
-	// 第四步：数据面启用 FairConn。
-	// 握手阶段保持裸连接：应答写失败必须同步暴露给调用方；
-	// 直接调用 ServeConn 的 WebSocket 场景也在此获得公平调度与限流配置。
-	if s.enableFairConn.Load() {
-		if _, ok := pc.(*sched.FairConn); !ok {
-			fc := sched.NewFairConnWithConfig(pc, s.schedulerConfig())
-			defer fc.Close()
-			pc = fc
-		}
-	}
-	ctx.setConn(pc)
+	ctx.markReady()
 
 	// 记录服务时长
 	start := time.Now()

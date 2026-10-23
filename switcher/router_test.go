@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v3/wire"
 )
 
 func TestRouterPingDomain(t *testing.T) {
@@ -52,10 +53,12 @@ func TestRouterForwardNilConn(t *testing.T) {
 	s.registry.ipIndex[ctx.IP] = ctx
 	s.registry.ipMu.Unlock()
 
-	// 错误用例：因为ctx的pc是空，所以会触发dist.writeBuffer的错误
-	pbuf := packet.NewBuffer()
-	pbuf.SetDist(2, 100)
-	s.router.forward(pbuf)
+	// 错误用例：目标 ctx 没有 link，SendFrame 会失败并释放 frame。
+	f, err := wire.NewData(wire.Addr{}, wire.Addr{IP: 2, Port: 100}, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.router.forward(f)
 }
 
 func TestRouterForwardClosedContext(t *testing.T) {
@@ -66,12 +69,14 @@ func TestRouterForwardClosedContext(t *testing.T) {
 	s.registry.ipIndex[ctx.IP] = ctx
 	s.registry.ipMu.Unlock()
 
-	// 关闭context，使enqueueForward返回错误
+	// 关闭 context，使 SendFrame 返回错误。
 	ctx.release()
 
-	pbuf := packet.NewBuffer()
-	pbuf.SetDist(2, 100)
-	s.router.forward(pbuf)
+	f, err := wire.NewData(wire.Addr{}, wire.Addr{IP: 2, Port: 100}, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.router.forward(f)
 }
 
 func TestRouterOpenStream(t *testing.T) {
@@ -98,10 +103,18 @@ func TestRouterAckPingDomain(t *testing.T) {
 	s := NewServer("", nil, nil)
 	caller := NewContext(1, nil, "test", "", nil)
 
-	// 分支覆盖：找不到port
-	s.router.handleAckPingDomain(caller, packet.NewBuffer())
+	f1, err := wire.NewControl(wire.AckPingDomain, wire.Addr{IP: wire.MaxIP}, wire.Addr{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 分支覆盖：找不到 port
+	s.router.handleAckPingDomain(caller, f1)
 
 	// 分支覆盖：deliverPingResponse returns false for non-channel value
 	caller.pingBack.Store(uint16(0), 100)
-	s.router.handleAckPingDomain(caller, packet.NewBuffer())
+	f2, err := wire.NewControl(wire.AckPingDomain, wire.Addr{IP: wire.MaxIP}, wire.Addr{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.router.handleAckPingDomain(caller, f2)
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/net-agent/flex/v3/internal/admit"
 	"github.com/net-agent/flex/v3/node"
 	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v3/wire"
 )
 
 func newLimitedServer(t *testing.T, limits Limits) *Server {
@@ -98,21 +99,23 @@ func TestRouterCheckSource(t *testing.T) {
 	ctx := NewContext(1, nil, "node", "", nil)
 	ctx.IP = 7
 
-	pbuf := packet.NewBuffer()
-	pbuf.SetSrc(7, 1000)
-	if err := s.router.checkSource(ctx, pbuf); err != nil {
-		t.Fatalf("matching source should be accepted: %v", err)
-	}
-
-	pbuf.SetSrc(8, 1000)
-	if err := s.router.checkSource(ctx, pbuf); err == nil {
-		t.Fatal("spoofed source must be rejected")
-	}
-
-	// 伪造 SwitcherIP 的控制应答同样必须拒绝
-	pbuf.SetSrc(packet.SwitcherIP, 0)
-	if err := s.router.checkSource(ctx, pbuf); err == nil {
-		t.Fatal("spoofed switcher source must be rejected")
+	for _, tc := range []struct {
+		src     uint16
+		wantErr bool
+	}{
+		{7, false},
+		{8, true},
+		{wire.MaxIP, true},
+	} {
+		f, err := wire.NewControl(wire.CmdOpenStream, wire.Addr{IP: tc.src, Port: 1000}, wire.Addr{}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = s.router.checkSource(ctx, f)
+		f.Release()
+		if (err != nil) != tc.wantErr {
+			t.Fatalf("src=%d err=%v wantErr=%v", tc.src, err, tc.wantErr)
+		}
 	}
 }
 

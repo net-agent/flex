@@ -1,6 +1,7 @@
 package switcher
 
 import (
+	"errors"
 	"log"
 	"sync"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/net-agent/flex/v3/internal/admit"
 	"github.com/net-agent/flex/v3/node"
 	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v3/wire"
 )
 
 func TestContextPing(t *testing.T) {
@@ -107,25 +109,34 @@ func TestRecordIncoming(t *testing.T) {
 	ctx := NewContext(1, nil, "test", "", nil)
 
 	// CmdOpenStream 增加 StreamCount
-	pbuf := packet.NewBuffer()
-	pbuf.SetCmd(packet.CmdOpenStream)
-	ctx.recordIncoming(pbuf)
+	f1, err := wire.NewControl(wire.CmdOpenStream, wire.Addr{}, wire.Addr{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx.recordIncoming(f1)
+	f1.Release()
 	if ctx.Stats.StreamCount != 1 {
 		t.Errorf("expected StreamCount=1, got %v", ctx.Stats.StreamCount)
 	}
 
 	// CmdCloseStream 减少 StreamCount
-	pbuf2 := packet.NewBuffer()
-	pbuf2.SetCmd(packet.CmdCloseStream)
-	ctx.recordIncoming(pbuf2)
+	f2, err := wire.NewEmpty(wire.CmdCloseStream, wire.Addr{}, wire.Addr{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx.recordIncoming(f2)
+	f2.Release()
 	if ctx.Stats.StreamCount != 0 {
 		t.Errorf("expected StreamCount=0, got %v", ctx.Stats.StreamCount)
 	}
 
 	// 其他命令不影响 StreamCount
-	pbuf3 := packet.NewBuffer()
-	pbuf3.SetCmd(packet.CmdPingDomain)
-	ctx.recordIncoming(pbuf3)
+	f3, err := wire.NewControl(wire.CmdPingDomain, wire.Addr{}, wire.Addr{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx.recordIncoming(f3)
+	f3.Release()
 	if ctx.Stats.StreamCount != 0 {
 		t.Errorf("expected StreamCount=0, got %v", ctx.Stats.StreamCount)
 	}
@@ -136,111 +147,14 @@ func TestRecordIncoming(t *testing.T) {
 	}
 }
 
-func TestEnqueueForward_FastPathClosed(t *testing.T) {
-	ctx := &Context{
-		forwardCh:   make(chan *packet.Buffer, 1),
-		forwardDone: make(chan struct{}),
-	}
-	// 填满 channel，使 send case 不可用，只有 forwardDone 可选
-	ctx.forwardCh <- packet.NewBuffer()
-	close(ctx.forwardDone)
-
-	err := ctx.enqueueForward(packet.NewBuffer())
-	if err == nil {
-		t.Error("expected error for closed context")
-	}
-}
-
-func TestEnqueueForward_SlowPathSuccess(t *testing.T) {
-	ctx := &Context{
-		forwardCh:   make(chan *packet.Buffer, 1),
-		forwardDone: make(chan struct{}),
-	}
-	// 填满 channel，使快路径失败
-	ctx.forwardCh <- packet.NewBuffer()
-
-	// 延迟腾出空间
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		<-ctx.forwardCh
-	}()
-
-	err := ctx.enqueueForward(packet.NewBuffer())
+func TestContextSendFrameNoLink(t *testing.T) {
+	ctx := NewContext(1, nil, "test", "", nil)
+	f, err := wire.NewControl(wire.CmdPingDomain, wire.Addr{}, wire.Addr{}, nil)
 	if err != nil {
-		t.Errorf("expected nil error, got %v", err)
+		t.Fatal(err)
 	}
-}
-
-func TestEnqueueForward_SlowPathClosed(t *testing.T) {
-	ctx := &Context{
-		forwardCh:   make(chan *packet.Buffer, 1),
-		forwardDone: make(chan struct{}),
-	}
-	// 填满 channel，使快路径失败
-	ctx.forwardCh <- packet.NewBuffer()
-
-	// 延迟关闭 context
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		close(ctx.forwardDone)
-	}()
-
-	err := ctx.enqueueForward(packet.NewBuffer())
-	if err == nil {
-		t.Error("expected error for closed context")
-	}
-}
-
-func TestEnqueueForward_Timeout(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping slow enqueue timeout test")
-	}
-
-	ctx := &Context{
-		forwardCh:   make(chan *packet.Buffer, 1),
-		forwardDone: make(chan struct{}),
-	}
-	// 填满 channel，不消费，不关闭 — 触发 5s 超时
-	ctx.forwardCh <- packet.NewBuffer()
-
-	start := time.Now()
-	err := ctx.enqueueForward(packet.NewBuffer())
-	dur := time.Since(start)
-
-	if err != errForwardEnqueueTimeout {
-		t.Errorf("expected errForwardEnqueueTimeout, got %v", err)
-	}
-	if dur < 4*time.Second {
-		t.Errorf("expected ~5s timeout, got %v", dur)
-	}
-
-	// fail-loud：超时后 ctx 应被释放（forwardDone 关闭），而不是静默丢包
-	select {
-	case <-ctx.forwardDone:
-	default:
-		t.Error("expected context released after enqueue timeout")
-	}
-}
-
-func TestRunForwardLoopChannelClose(t *testing.T) {
-	ctx := &Context{
-		forwardCh:   make(chan *packet.Buffer, 1),
-		forwardDone: make(chan struct{}),
-	}
-
-	done := make(chan struct{})
-	go func() {
-		ctx.runForwardLoop()
-		close(done)
-	}()
-
-	// 关闭 channel 触发 !ok 分支
-	close(ctx.forwardCh)
-
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Error("runForwardLoop did not exit after channel close")
+	if err := ctx.SendFrame(f); !errors.Is(err, errNilContextConn) {
+		t.Fatalf("err=%v", err)
 	}
 }
 

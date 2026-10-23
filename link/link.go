@@ -58,6 +58,9 @@ func NewDirectWithConfig(t Transport, cfg Config) *Link {
 // Transport returns the underlying transport (handshake code uses it).
 func (l *Link) Transport() Transport { return l.t }
 
+// SchedulerConfig returns the effective fair-writer policy.
+func (l *Link) SchedulerConfig() sched.SchedulerConfig { return l.w.cfg }
+
 // ReadFrame reads one frame. The returned frame is owned by the caller and must
 // be released.
 func (l *Link) ReadFrame() (*wire.Frame, error) {

@@ -95,7 +95,11 @@ func TestServerCostSchedulerWrapsDirectServeConn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := ctx.getConn().(*sched.FairConn); !ok {
-		t.Fatalf("context conn should be *sched.FairConn, got %T", ctx.getConn())
+	if ctx.link == nil {
+		t.Fatal("context link is nil")
+	}
+	gotCfg := ctx.link.SchedulerConfig()
+	if gotCfg.Policy != sched.PolicyCostBudget || gotCfg.QuantumBytes != 8*1024 || gotCfg.MinChargeBytes != 1024 {
+		t.Fatalf("context link scheduler config=%+v", gotCfg)
 	}
 }
