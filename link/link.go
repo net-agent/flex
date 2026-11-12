@@ -32,9 +32,17 @@ type Link struct {
 	// used by tests/observability and is nil in production.
 	tap atomic.Pointer[FrameTap]
 
-	// payloadPool recycles receive buffers. A frame read by this link carries
-	// its buffer back here when the frame is released.
-	payloadPool sync.Pool
+	// payloadFree recycles receive buffers. A frame read by this link carries
+	// its buffer back here when the frame is released. A buffered channel of
+	// slice headers avoids the per-release heap allocation of sync.Pool's
+	// interface boxing.
+	payloadFree    chan []byte
+	releasePayload func([]byte)
+
+	// Reader scratch: ReadFrame is single-reader, so reusing these avoids a
+	// per-frame header array escaping through the Transport interface.
+	hdrWire  [wire.HeaderSize]byte
+	hdrPlain [wire.HeaderSize]byte
 }
 
 // FrameTap observes a plaintext frame. write is true for outbound frames.
@@ -90,7 +98,8 @@ func NewSecure(t Transport, linkKey []byte, initiator bool, cfg Config) (*Link, 
 
 func newLink(t Transport, cfg Config, sec *secureState) *Link {
 	l := &Link{t: t, sec: sec, legacy: cfg.LegacyWire && sec == nil}
-	l.payloadPool.New = func() any { return new([]byte) }
+	l.payloadFree = make(chan []byte, 256)
+	l.releasePayload = l.putPayload
 	l.w = newFairWriter(l.writeFrames, cfg.Scheduler, func(error) {
 		// A write failure is fatal for the connection. Close the transport so
 		// the read loop unblocks; the caller observes the error on ReadFrame.
@@ -131,7 +140,7 @@ func (l *Link) ReadFrame() (*wire.Frame, error) {
 	if err != nil {
 		return nil, fmt.Errorf("link: read payload: %w", err)
 	}
-	f, err := wire.NewFrameWithRelease(h.Class, h.Cmd, h.Src, h.Dst, payload, h.AckSize(), l.putPayload)
+	f, err := wire.NewFrameWithRelease(h.Class, h.Cmd, h.Src, h.Dst, payload, h.AckSize(), l.releasePayload)
 	if err != nil {
 		return nil, fmt.Errorf("link: build frame: %w", err)
 	}
@@ -164,20 +173,27 @@ func (l *Link) readPayload(n int) ([]byte, error) {
 }
 
 func (l *Link) getPayload(n int) []byte {
-	v := l.payloadPool.Get().(*[]byte)
-	b := *v
-	if cap(b) < n {
-		return make([]byte, n)
+	select {
+	case b := <-l.payloadFree:
+		if cap(b) >= n {
+			return b[:n]
+		}
+		// The buffer is too small for this frame. Drop it rather than
+		// retaining a pool entry that cannot serve the common data size.
+	default:
 	}
-	return b[:n]
+	return make([]byte, n)
 }
 
 func (l *Link) putPayload(b []byte) {
-	if b == nil {
+	if len(b) == 0 && cap(b) == 0 {
 		return
 	}
-	b = b[:0]
-	l.payloadPool.Put(&b)
+	select {
+	case l.payloadFree <- b[:0]:
+	default:
+		// Pool is full; let the buffer be collected.
+	}
 }
 
 // SendFrame transfers ownership of f to the link's writer. The caller must not

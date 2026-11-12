@@ -37,6 +37,10 @@ type recvChunk struct {
 	frame *wire.Frame
 }
 
+var recvChunkPool = sync.Pool{
+	New: func() any { return &recvChunk{data: make([]byte, 0, recvChunkSize)} },
+}
+
 // recvBuffer 是单条流的有界接收队列，容量以“字节”而不是“包数”计。
 //
 // 约束：
@@ -91,11 +95,17 @@ func (q *recvBuffer) append(f *wire.Frame) error {
 	}
 
 	queued := false
-	if n < coalesceThreshold {
+	// Only coalesce when the queue is already backed up. If the consumer has
+	// caught up, keep the small frame zero-copy: allocating a 16KB chunk for a
+	// 64B request/response is worse than one extra frame object.
+	if n < coalesceThreshold && q.bytes > 0 {
 		queued = q.coalesceLocked(f.Payload())
 	}
 	if !queued {
-		q.chunks = append(q.chunks, &recvChunk{data: f.Payload(), frame: f})
+		c := recvChunkPool.Get().(*recvChunk)
+		c.data = f.Payload()
+		c.frame = f
+		q.chunks = append(q.chunks, c)
 	}
 	q.bytes += n
 	q.mu.Unlock()
@@ -117,7 +127,13 @@ func (q *recvBuffer) coalesceLocked(p []byte) bool {
 		}
 	}
 
-	chunk := &recvChunk{data: make([]byte, 0, recvChunkSize)}
+	chunk := recvChunkPool.Get().(*recvChunk)
+	chunk.frame = nil
+	if cap(chunk.data) < recvChunkSize {
+		chunk.data = make([]byte, 0, recvChunkSize)
+	} else {
+		chunk.data = chunk.data[:0]
+	}
 	chunk.data = append(chunk.data, p...)
 	q.chunks = append(q.chunks, chunk)
 	return true
@@ -145,6 +161,9 @@ func (q *recvBuffer) read(p []byte) (int, error) {
 			if c.frame != nil {
 				c.frame.Release()
 			}
+			c.data = nil
+			c.frame = nil
+			recvChunkPool.Put(c)
 			q.chunks[q.head] = nil
 			q.head++
 		}
@@ -183,8 +202,13 @@ func (q *recvBuffer) discard() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	for i := q.head; i < len(q.chunks); i++ {
-		if c := q.chunks[i]; c != nil && c.frame != nil {
-			c.frame.Release()
+		if c := q.chunks[i]; c != nil {
+			if c.frame != nil {
+				c.frame.Release()
+			}
+			c.data = nil
+			c.frame = nil
+			recvChunkPool.Put(c)
 		}
 	}
 	q.chunks = nil

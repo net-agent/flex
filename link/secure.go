@@ -138,13 +138,11 @@ func (s *secureState) openControl(h wire.Header, payload []byte) ([]byte, error)
 
 // readSecureFrame reads one encrypted frame.
 func (l *Link) readSecureFrame() (*wire.Frame, error) {
-	var wireHdr [wire.HeaderSize]byte
-	if err := l.t.ReadHeader(wireHdr[:]); err != nil {
+	if err := l.t.ReadHeader(l.hdrWire[:]); err != nil {
 		return nil, err
 	}
-	var hdr [wire.HeaderSize]byte
-	l.sec.recvHdr.XORKeyStream(hdr[:], wireHdr[:])
-	h, err := (wire.Codec{}).DecodeHeader(hdr[:])
+	l.sec.recvHdr.XORKeyStream(l.hdrPlain[:], l.hdrWire[:])
+	h, err := (wire.Codec{}).DecodeHeader(l.hdrPlain[:])
 	if err != nil {
 		return nil, fmt.Errorf("link: decode secure header: %w", err)
 	}
@@ -164,7 +162,7 @@ func (l *Link) readSecureFrame() (*wire.Frame, error) {
 		}
 		payload = plain
 	}
-	f, err := wire.NewFrameWithRelease(h.Class, h.Cmd, h.Src, h.Dst, payload, h.AckSize(), l.putPayload)
+	f, err := wire.NewFrameWithRelease(h.Class, h.Cmd, h.Src, h.Dst, payload, h.AckSize(), l.releasePayload)
 	if err != nil {
 		return nil, err
 	}

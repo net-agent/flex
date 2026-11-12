@@ -90,3 +90,45 @@ func BenchmarkWireCodecHeader(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkHandshake(b *testing.B) {
+	dialer := NewDialer(DialConfig{PSK: "bench", Domain: "client", KDF: KDFHKDF})
+	acceptor := NewAcceptor(AcceptConfig{PSK: "bench", KDF: KDFHKDF})
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		c1, c2 := net.Pipe()
+		tr1, tr2 := NewTCP(c1), NewTCP(c2)
+		type result struct {
+			lnk *Link
+			err error
+		}
+		done := make(chan result, 1)
+		go func() {
+			pending, _, err := acceptor.Accept(tr2)
+			if err != nil {
+				done <- result{err: err}
+				return
+			}
+			lnk, err := pending.Respond(1)
+			done <- result{lnk: lnk, err: err}
+		}()
+		client, _, err := dialer.Dial(tr1)
+		if err != nil {
+			b.Fatal(err)
+		}
+		res := <-done
+		if res.err != nil {
+			b.Fatal(res.err)
+		}
+		client.Close()
+		res.lnk.Close()
+	}
+}
+
+func BenchmarkArgon2idBootKey(b *testing.B) {
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = deriveBootKey("bench-password", KDFArgon2id)
+	}
+}

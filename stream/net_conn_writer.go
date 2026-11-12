@@ -82,7 +82,11 @@ func (s *Stream) write(buf []byte) (int, error) {
 	}
 
 	stopInterruptWatch := s.startSendInterrupter()
-	defer close(stopInterruptWatch)
+	defer func() {
+		if stopInterruptWatch != nil {
+			close(stopInterruptWatch)
+		}
+	}()
 
 	err = s.sender.SendData(buf[:sliceSize])
 	if err != nil {
@@ -172,10 +176,10 @@ func (s *Stream) isWriteDeadlineExceeded() bool {
 // hook is currently inactive for connWriter and send-stage blocking is not
 // preempted per stream yet.
 func (s *Stream) startSendInterrupter() chan struct{} {
-	stop := make(chan struct{})
 	if !s.sender.CanInterruptWrite() {
-		return stop
+		return nil
 	}
+	stop := make(chan struct{})
 	go func() {
 		for {
 			select {
