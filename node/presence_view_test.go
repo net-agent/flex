@@ -3,7 +3,7 @@ package node
 import (
 	"testing"
 
-	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v4/packet"
 )
 
 func TestPresenceViewSnapshotAndQuery(t *testing.T) {

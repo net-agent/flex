@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v3/internal/sched"
-	"github.com/net-agent/flex/v3/wire"
+	"github.com/net-agent/flex/v4/internal/sched"
+	"github.com/net-agent/flex/v4/wire"
 )
 
 func runBatchLimit(t *testing.T, cfg sched.SchedulerConfig, count int) (total, max int) {

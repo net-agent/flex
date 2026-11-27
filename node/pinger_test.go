@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v3/internal/pending"
-	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v4/internal/pending"
+	"github.com/net-agent/flex/v4/packet"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

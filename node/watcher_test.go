@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v4/packet"
 )
 
 // initWatcherTestNode 启动一个 node，返回充当 fake switcher 的对端连接

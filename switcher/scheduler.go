@@ -1,6 +1,6 @@
 package switcher
 
-import "github.com/net-agent/flex/v3/internal/sched"
+import "github.com/net-agent/flex/v4/internal/sched"
 
 // SchedulerPolicy selects how the link fair writer bounds each per-stream visit.
 type SchedulerPolicy int

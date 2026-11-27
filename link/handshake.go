@@ -12,9 +12,9 @@ import (
 	"golang.org/x/crypto/chacha20"
 	"golang.org/x/crypto/chacha20poly1305"
 
-	domainpkg "github.com/net-agent/flex/v3/internal/domain"
-	"github.com/net-agent/flex/v3/internal/sched"
-	"github.com/net-agent/flex/v3/wire"
+	domainpkg "github.com/net-agent/flex/v4/internal/domain"
+	"github.com/net-agent/flex/v4/internal/sched"
+	"github.com/net-agent/flex/v4/wire"
 )
 
 const (

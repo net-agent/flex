@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/net-agent/flex/v3/packet/ws"
-	"github.com/net-agent/flex/v3/switcher"
+	"github.com/net-agent/flex/v4/packet/ws"
+	"github.com/net-agent/flex/v4/switcher"
 )
 
 var (

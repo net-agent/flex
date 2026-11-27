@@ -1,4 +1,4 @@
-module github.com/net-agent/flex/v3
+module github.com/net-agent/flex/v4
 
 go 1.25.0
 

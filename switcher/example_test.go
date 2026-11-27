@@ -3,9 +3,9 @@ package switcher_test
 import (
 	"fmt"
 
-	"github.com/net-agent/flex/v3/node"
-	"github.com/net-agent/flex/v3/packet"
-	"github.com/net-agent/flex/v3/switcher"
+	"github.com/net-agent/flex/v4/node"
+	"github.com/net-agent/flex/v4/packet"
+	"github.com/net-agent/flex/v4/switcher"
 )
 
 // 在内存连接上完成一次握手，Switcher 会为节点分配虚拟 IP。

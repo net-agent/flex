@@ -4,8 +4,8 @@ import (
 	"errors"
 	"sync/atomic"
 
-	"github.com/net-agent/flex/v3/packet"
-	"github.com/net-agent/flex/v3/wire"
+	"github.com/net-agent/flex/v4/packet"
+	"github.com/net-agent/flex/v4/wire"
 )
 
 // Handler 是协议路由层所需的旧接口。新代码应使用 Stream 的 HandleData /

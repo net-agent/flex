@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/net-agent/flex/v3/node"
-	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v4/node"
+	"github.com/net-agent/flex/v4/packet"
 )
 
 // 两个 Node 直连：一端 Listen，另一端 DialIP 后写入数据。

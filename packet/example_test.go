@@ -3,7 +3,7 @@ package packet_test
 import (
 	"fmt"
 
-	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v4/packet"
 )
 
 // 构造一个数据包并读取头部字段。

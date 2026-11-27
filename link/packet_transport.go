@@ -4,7 +4,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v4/packet"
 )
 
 // packetTransport adapts a custom packet.Conn that does not implement the

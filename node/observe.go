@@ -4,7 +4,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/net-agent/flex/v3/stream"
+	"github.com/net-agent/flex/v4/stream"
 )
 
 // Snapshot 是 Node 内部状态的一致性快照，全部字段通过只读方式收集。

@@ -5,7 +5,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/net-agent/flex/v3/wire"
+	"github.com/net-agent/flex/v4/wire"
 )
 
 // ErrRecvBufferFull 表示接收端缓冲已满，而对端仍在流控窗口之外继续推送数据。

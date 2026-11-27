@@ -6,9 +6,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	domainpkg "github.com/net-agent/flex/v3/internal/domain"
-	"github.com/net-agent/flex/v3/packet"
-	"github.com/net-agent/flex/v3/wire"
+	domainpkg "github.com/net-agent/flex/v4/internal/domain"
+	"github.com/net-agent/flex/v4/packet"
+	"github.com/net-agent/flex/v4/wire"
 )
 
 const presenceEventQueueSize = 1024

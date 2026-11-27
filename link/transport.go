@@ -4,7 +4,7 @@ import (
 	"net"
 
 	"github.com/gorilla/websocket"
-	"github.com/net-agent/flex/v3/internal/framing"
+	"github.com/net-agent/flex/v4/internal/framing"
 )
 
 // Transport and FrameBytes are aliases of the shared framing types. Keeping

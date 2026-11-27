@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v4/packet"
 )
 
 var (
