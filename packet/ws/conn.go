@@ -5,8 +5,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/net-agent/flex/v3/internal/framing"
-	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v4/internal/framing"
+	"github.com/net-agent/flex/v4/packet"
 )
 
 // connImpl is both the legacy packet.Conn and a framing.Transport. The two

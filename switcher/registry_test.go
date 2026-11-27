@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	domainpkg "github.com/net-agent/flex/v3/internal/domain"
-	"github.com/net-agent/flex/v3/internal/idpool"
-	"github.com/net-agent/flex/v3/packet"
+	domainpkg "github.com/net-agent/flex/v4/internal/domain"
+	"github.com/net-agent/flex/v4/internal/idpool"
+	"github.com/net-agent/flex/v4/packet"
 )
 
 func TestAttachCtx(t *testing.T) {

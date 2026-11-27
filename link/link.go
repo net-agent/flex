@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/net-agent/flex/v3/internal/sched"
-	"github.com/net-agent/flex/v3/wire"
+	"github.com/net-agent/flex/v4/internal/sched"
+	"github.com/net-agent/flex/v4/wire"
 )
 
 // Link is one established flex connection. It owns the transport, the write

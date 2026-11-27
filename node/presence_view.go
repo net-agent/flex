@@ -3,7 +3,7 @@ package node
 import (
 	"sync"
 
-	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v4/packet"
 )
 
 // PresenceView 是 presence 状态的本地副本，由订阅快照与后续事件增量维护。

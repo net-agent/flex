@@ -55,7 +55,7 @@ Use `node.Session.SetSchedulerConfig` for the client side. See
 ### Installation
 
 ```bash
-go get github.com/net-agent/flex/v3
+go get github.com/net-agent/flex/v4
 ```
 
 ### 1. Minimal Node-to-Node (Direct Mode)

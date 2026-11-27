@@ -10,12 +10,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/net-agent/flex/v3/internal/idpool"
-	"github.com/net-agent/flex/v3/internal/sched"
-	"github.com/net-agent/flex/v3/link"
-	"github.com/net-agent/flex/v3/packet"
-	"github.com/net-agent/flex/v3/stream"
-	"github.com/net-agent/flex/v3/wire"
+	"github.com/net-agent/flex/v4/internal/idpool"
+	"github.com/net-agent/flex/v4/internal/sched"
+	"github.com/net-agent/flex/v4/link"
+	"github.com/net-agent/flex/v4/packet"
+	"github.com/net-agent/flex/v4/stream"
+	"github.com/net-agent/flex/v4/wire"
 )
 
 var (

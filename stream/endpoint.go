@@ -3,8 +3,8 @@ package stream
 import (
 	"errors"
 
-	"github.com/net-agent/flex/v3/packet"
-	"github.com/net-agent/flex/v3/wire"
+	"github.com/net-agent/flex/v4/packet"
+	"github.com/net-agent/flex/v4/wire"
 )
 
 // ErrNilWriter is returned when a Stream has no packet sink.

@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"testing"
 
-	domainpkg "github.com/net-agent/flex/v3/internal/domain"
-	"github.com/net-agent/flex/v3/internal/idpool"
-	"github.com/net-agent/flex/v3/internal/sched"
+	domainpkg "github.com/net-agent/flex/v4/internal/domain"
+	"github.com/net-agent/flex/v4/internal/idpool"
+	"github.com/net-agent/flex/v4/internal/sched"
 	"github.com/stretchr/testify/require"
 )
 

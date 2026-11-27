@@ -9,9 +9,9 @@ import (
 	"testing/synctest"
 	"time"
 
-	"github.com/net-agent/flex/v3/link"
-	"github.com/net-agent/flex/v3/packet"
-	"github.com/net-agent/flex/v3/wire"
+	"github.com/net-agent/flex/v4/link"
+	"github.com/net-agent/flex/v4/packet"
+	"github.com/net-agent/flex/v4/wire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/net-agent/flex/v3/stream"
+	"github.com/net-agent/flex/v4/stream"
 )
 
 // 一对内存 Stream 的读写。Stream 实现 net.Conn。

@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v4/packet"
 )
 
 // mockWriter is a no-op packet.Writer for tests that don't need real I/O.

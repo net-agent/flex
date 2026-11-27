@@ -52,7 +52,7 @@ srv.SetSchedulerConfig(switcher.SchedulerConfig{
 ### 安装
 
 ```bash
-go get github.com/net-agent/flex/v3
+go get github.com/net-agent/flex/v4
 ```
 
 ### 1. 最小化 Node-to-Node（直连模式）

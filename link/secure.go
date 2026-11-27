@@ -10,7 +10,7 @@ import (
 	"golang.org/x/crypto/chacha20"
 	"golang.org/x/crypto/chacha20poly1305"
 
-	"github.com/net-agent/flex/v3/wire"
+	"github.com/net-agent/flex/v4/wire"
 )
 
 const (

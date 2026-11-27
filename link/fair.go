@@ -5,8 +5,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/net-agent/flex/v3/internal/sched"
-	"github.com/net-agent/flex/v3/wire"
+	"github.com/net-agent/flex/v4/internal/sched"
+	"github.com/net-agent/flex/v4/wire"
 )
 
 // ErrWriterClosed is returned when sending on a closed link.

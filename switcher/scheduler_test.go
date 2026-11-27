@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v3/internal/sched"
+	"github.com/net-agent/flex/v4/internal/sched"
 )
 
 func TestServerSchedulerConfigDefault(t *testing.T) {

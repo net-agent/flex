@@ -5,7 +5,7 @@ import (
 	"net"
 	"time"
 
-	"github.com/net-agent/flex/v3/internal/framing"
+	"github.com/net-agent/flex/v4/internal/framing"
 )
 
 type Conn interface {

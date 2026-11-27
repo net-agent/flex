@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v3/packet"
-	"github.com/net-agent/flex/v3/wire"
+	"github.com/net-agent/flex/v4/packet"
+	"github.com/net-agent/flex/v4/wire"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

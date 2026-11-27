@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/net-agent/flex/v3/packet"
-	"github.com/net-agent/flex/v3/wire"
+	"github.com/net-agent/flex/v4/packet"
+	"github.com/net-agent/flex/v4/wire"
 )
 
 // Dispatcher routes inbound frames to control/data lanes. Control handlers keep

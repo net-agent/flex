@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v3/wire"
+	"github.com/net-agent/flex/v4/wire"
 )
 
 // nopTransport discards writes and never returns data. It isolates the link's

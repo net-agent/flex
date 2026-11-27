@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v3/link"
-	"github.com/net-agent/flex/v3/packet"
-	"github.com/net-agent/flex/v3/wire"
+	"github.com/net-agent/flex/v4/link"
+	"github.com/net-agent/flex/v4/packet"
+	"github.com/net-agent/flex/v4/wire"
 )
 
 // tappedFrame is a plain-text copy of a frame observed at the link boundary.

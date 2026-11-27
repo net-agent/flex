@@ -39,8 +39,8 @@
 
 ```go
 import (
-    "github.com/net-agent/flex/v3/node"
-    "github.com/net-agent/flex/v3/packet"
+    "github.com/net-agent/flex/v4/node"
+    "github.com/net-agent/flex/v4/packet"
 )
 
 // 包装物理连接
@@ -90,7 +90,7 @@ conn, err := n.Dial("target-agent:8080")
 Switcher 本身不监听 TCP 端口；它处理你传递给它的 `packet.Conn` 对象。
 
 ```go
-import "github.com/net-agent/flex/v3/switcher"
+import "github.com/net-agent/flex/v4/switcher"
 
 s := switcher.NewServer("secret-password", nil, nil)
 

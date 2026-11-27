@@ -39,9 +39,9 @@ To create a node, you need an underlying `packet.Conn` (which wraps a `net.Conn`
 
 ```go
 import (
-    "github.com/net-agent/flex/v3/node"
-    "github.com/net-agent/flex/v3/packet"
-    "github.com/net-agent/flex/v3/packet/ws"
+    "github.com/net-agent/flex/v4/node"
+    "github.com/net-agent/flex/v4/packet"
+    "github.com/net-agent/flex/v4/packet/ws"
 )
 
 // Wrap your physical connection
@@ -91,7 +91,7 @@ The `switcher` package allows you to build a gateway server.
 The Switcher doesn't listen on a TCP port itself; it handles `packet.Conn` objects you hand to it.
 
 ```go
-import "github.com/net-agent/flex/v3/switcher"
+import "github.com/net-agent/flex/v4/switcher"
 
 s := switcher.NewServer("secret-password", nil, nil)
 

@@ -3,7 +3,7 @@ package node
 import (
 	"testing"
 
-	"github.com/net-agent/flex/v3/internal/sched"
+	"github.com/net-agent/flex/v4/internal/sched"
 )
 
 func TestSessionSchedulerConfig(t *testing.T) {
