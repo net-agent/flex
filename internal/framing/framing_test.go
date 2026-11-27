@@ -34,22 +34,6 @@ func headerWithSize(size uint16) [wire.HeaderSize]byte {
 	return h
 }
 
-// realHeader encodes a valid wire header for a data frame of payloadSize bytes.
-// It is used by the tests that need the header and payload to be inspected by a
-// real wire decoder.
-func realHeader(t *testing.T, payloadSize int) [wire.HeaderSize]byte {
-	t.Helper()
-
-	f, err := wire.NewData(wire.Addr{IP: 1, Port: 2}, wire.Addr{IP: 3, Port: 4}, make([]byte, payloadSize))
-	require.NoError(t, err)
-	defer f.Release()
-
-	var hdr [wire.HeaderSize]byte
-	require.NoError(t, (wire.Codec{}).EncodeHeader(f.Header(), hdr[:]))
-	require.Equal(t, uint16(payloadSize), binary.BigEndian.Uint16(hdr[wire.HeaderSize-2:]))
-	return hdr
-}
-
 func newTCPPair(t *testing.T) (*TCPTransport, net.Conn) {
 	t.Helper()
 

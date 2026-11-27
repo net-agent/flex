@@ -28,7 +28,6 @@ type tappedFrame struct {
 // accepted and dropped, inbound reads block until Close. It lets tests drive a
 // Node without a real peer while still exercising the link write path.
 type captureTransport struct {
-	mu     sync.Mutex
 	closed chan struct{}
 	once   sync.Once
 }
