@@ -218,7 +218,15 @@ func (w *fairWriter) SendSync(f *wire.Frame) error {
 	case err := <-req.done:
 		return err
 	case <-w.done:
-		return ErrWriterClosed
+		// The writer sends the transport error to req.done before calling
+		// stop(), so prefer it over the generic closed error when both are
+		// ready. Otherwise a send error can be masked by ErrWriterClosed.
+		select {
+		case err := <-req.done:
+			return err
+		default:
+			return ErrWriterClosed
+		}
 	}
 }
 
