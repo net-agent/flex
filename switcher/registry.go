@@ -141,18 +141,22 @@ func (r *contextRegistry) detach(ctx *Context) {
 	}
 	r.domainMu.Unlock()
 
-	// presence 事件入队可能阻塞（队列满时会等到 run() 消费），
-	// 必须放在锁外，避免拖住整个 registry。
-	if offline {
-		r.presence.emitOffline(ctx.Domain, ctx.IP, ctx.Mac)
-	}
-
+	// Purge the subscriber before emitting its offline event. An observer that
+	// receives the offline event and immediately re-subscribes must not be able
+	// to overtake the purge and observe the detached node's stale subscriptions.
+	// (presence events themselves are processed FIFO by the presence goroutine.)
 	r.ipMu.Lock()
 	if current, ok := r.ipIndex[ctx.IP]; ok && current == ctx {
 		delete(r.ipIndex, ctx.IP)
 		r.presence.purgeSubscriber(ctx.IP)
 	}
 	r.ipMu.Unlock()
+
+	// presence 事件入队可能阻塞（队列满时会等到 run() 消费），
+	// 必须放在锁外，避免拖住整个 registry。
+	if offline {
+		r.presence.emitOffline(ctx.Domain, ctx.IP, ctx.Mac)
+	}
 
 	ctx.release()
 	// 租约释放幂等：域名替换与连接断开两条路径都可能走到这里，

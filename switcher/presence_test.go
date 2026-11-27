@@ -270,8 +270,8 @@ func TestPresenceSubscriberPurge(t *testing.T) {
 	// 订阅者断连（switcher 侧 detach 是异步的）
 	node1.Close()
 
-	// 第一步同步：收到 offline(test1) 说明 detach 的两个事件
-	// [offline(test1), purge(node1IP)] 均已入队
+	// 第一步同步：detach 先入队 purge(node1IP) 再入队 offline(test1)；
+	// 收到 offline 说明 purge 已在队列中（或已处理）
 	ev := waitPresenceEvent(t, ch)
 	if ev.Online || ev.Domain != "test1" {
 		t.Fatalf("unexpected event: %+v", ev)
