@@ -6,10 +6,11 @@ import (
 	"time"
 
 	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v3/wire"
 )
 
 func TestRouterPingDomain(t *testing.T) {
-	_, node1, _ := initTestEnv("test1", "test2")
+	_, node1, _ := initTestEnv(t, "test1", "test2")
 
 	var err error
 
@@ -27,11 +28,12 @@ func TestRouterPingDomain(t *testing.T) {
 		return
 	}
 
-	// 测试用例：发送一个pbuf到未知的ip，触发route pbuf failed
-	pbuf := packet.NewBuffer()
-	pbuf.SetDist(100, 100)
-	err = node1.WriteBuffer(pbuf)
-	if err != nil {
+	// 测试用例：发送一个数据帧到未知虚拟 IP，触发 route failed。
+	// 注意：不能使用零值 packet.NewBuffer()，其 Cmd=0 即 CmdAdmit（握手类），
+	// 会被对端安全层当作非法握手帧并关闭链路。
+	pbuf := packet.NewBufferWithCmd(packet.CmdPushStreamData)
+	pbuf.SetHeader(packet.CmdPushStreamData, 100, 100, node1.GetIP(), 1000)
+	if err := node1.WriteBuffer(pbuf); err != nil {
 		t.Errorf("unexpected err=%v\n", err)
 		return
 	}
@@ -52,10 +54,12 @@ func TestRouterForwardNilConn(t *testing.T) {
 	s.registry.ipIndex[ctx.IP] = ctx
 	s.registry.ipMu.Unlock()
 
-	// 错误用例：因为ctx的pc是空，所以会触发dist.writeBuffer的错误
-	pbuf := packet.NewBuffer()
-	pbuf.SetDist(2, 100)
-	s.router.forward(pbuf)
+	// 错误用例：目标 ctx 没有 link，SendFrame 会失败并释放 frame。
+	f, err := wire.NewData(wire.Addr{}, wire.Addr{IP: 2, Port: 100}, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.router.forward(f)
 }
 
 func TestRouterForwardClosedContext(t *testing.T) {
@@ -66,16 +70,18 @@ func TestRouterForwardClosedContext(t *testing.T) {
 	s.registry.ipIndex[ctx.IP] = ctx
 	s.registry.ipMu.Unlock()
 
-	// 关闭context，使enqueueForward返回错误
+	// 关闭 context，使 SendFrame 返回错误。
 	ctx.release()
 
-	pbuf := packet.NewBuffer()
-	pbuf.SetDist(2, 100)
-	s.router.forward(pbuf)
+	f, err := wire.NewData(wire.Addr{}, wire.Addr{IP: 2, Port: 100}, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.router.forward(f)
 }
 
 func TestRouterOpenStream(t *testing.T) {
-	_, node1, _ := initTestEnv("test1", "test2")
+	_, node1, _ := initTestEnv(t, "test1", "test2")
 
 	// 错误用例：直接dial一个未开放的端口，会返回错误
 	_, err := node1.Dial("test2:80")
@@ -98,10 +104,18 @@ func TestRouterAckPingDomain(t *testing.T) {
 	s := NewServer("", nil, nil)
 	caller := NewContext(1, nil, "test", "", nil)
 
-	// 分支覆盖：找不到port
-	s.router.handleAckPingDomain(caller, packet.NewBuffer())
+	f1, err := wire.NewControl(wire.AckPingDomain, wire.Addr{IP: wire.MaxIP}, wire.Addr{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 分支覆盖：找不到 port
+	s.router.handleAckPingDomain(caller, f1)
 
 	// 分支覆盖：deliverPingResponse returns false for non-channel value
 	caller.pingBack.Store(uint16(0), 100)
-	s.router.handleAckPingDomain(caller, packet.NewBuffer())
+	f2, err := wire.NewControl(wire.AckPingDomain, wire.Addr{IP: wire.MaxIP}, wire.Addr{}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.router.handleAckPingDomain(caller, f2)
 }

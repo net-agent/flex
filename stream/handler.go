@@ -5,11 +5,11 @@ import (
 	"sync/atomic"
 
 	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v3/wire"
 )
 
-// Handler 是协议路由层所需的接口。
-// StreamHub 和 pipe 中的路由函数通过此接口与 Stream 交互，
-// 而不是依赖 *Stream 的全部方法集。
+// Handler 是协议路由层所需的旧接口。新代码应使用 Stream 的 HandleData /
+// HandleAck / HandleClose / HandleCloseAck，直接传递 wire.Frame。
 type Handler interface {
 	HandleCmdPushStreamData(pbuf *packet.Buffer)
 	HandleAckPushStreamData(pbuf *packet.Buffer)
@@ -17,34 +17,36 @@ type Handler interface {
 	HandleAckCloseStream(pbuf *packet.Buffer)
 }
 
-// HandleCmdPushStreamData 处理对端发送过来的数据包。
+// HandleData processes an inbound data frame.
 //
-// 所有权约定：本方法总是消费 pbuf（成功入队由流负责归还，
-// 失败在本方法内归还），调用方不得再访问 pbuf。
+// Ownership: the method always consumes f (successful enqueue transfers it to
+// the receive queue; on failure it is released here). The caller must not use f
+// afterwards.
 //
-// 入队永不阻塞，因此单条慢流的接收积压不会拖住 dispatcher goroutine，
-// 也就不会阻塞同一节点上的其他流（队头阻塞）。
-func (s *Stream) HandleCmdPushStreamData(pbuf *packet.Buffer) {
+// Enqueue never blocks, so one slow stream cannot stall the dispatcher
+// goroutine and head-of-line-block other streams on the same node.
+func (s *Stream) HandleData(f *wire.Frame) {
 	atomic.AddInt32(&s.state.RecvBufferCount, 1)
 
-	size := len(pbuf.Payload)
+	size := len(f.Payload())
 	if size == 0 {
-		s.logger.Debug("drop empty data packet", "sid", pbuf.SIDStr())
-		packet.PutBuffer(pbuf)
+		s.logger.Debug("drop empty data packet", "sid", f.SID().String())
+		f.Release()
 		return
 	}
 
-	if err := s.recv.append(pbuf); err != nil {
-		packet.PutBuffer(pbuf)
+	if err := s.recv.append(f); err != nil {
+		sid := f.SID().String()
+		f.Release()
 		switch {
 		case errors.Is(err, errRecvClosed):
 			// 读侧已关闭：对端很快会收到 Close/CloseAck，丢弃即可
-			s.logger.Debug("drop data packet on closed stream", "sid", pbuf.SIDStr())
+			s.logger.Debug("drop data packet on closed stream", "sid", sid)
 		case errors.Is(err, ErrRecvBufferFull):
 			// 对端在窗口之外继续发送（或本地对端实现有 bug）。
 			// 静默丢包会造成两端窗口记账永久不一致，必须主动关闭并通知对端。
 			s.logger.Error("recv buffer overflow, closing stream",
-				"sid", pbuf.SIDStr(), "buffered", s.recv.pending(), "limit", s.recv.limit)
+				"sid", sid, "buffered", s.recv.pending(), "limit", s.recv.limit)
 			s.failOnce.Do(func() { go s.failClose() })
 		}
 		return
@@ -66,38 +68,98 @@ func (s *Stream) failClose() {
 	s.recv.discard()
 }
 
-func (s *Stream) HandleAckPushStreamData(pbuf *packet.Buffer) {
+// HandleAck processes a data ACK frame. The acknowledged byte count lives in
+// the header; the frame has no payload.
+func (s *Stream) HandleAck(f *wire.Frame) {
 	atomic.AddInt32(&s.state.RecvBufferCount, 1)
-	size := pbuf.DataACKSize()
+	size := f.AckSize()
+	f.Release()
 	s.window.Release(int32(size))
 	atomic.AddInt64(&s.state.RecvAckTotal, int64(size))
 }
 
-// HandleCmdCloseStream 收到对端的close请求
-// * 说明对端已经不会再发送数据，可以安全关闭读状态
-// * 由于对端已经请求关闭，所以本地应该尽快关闭write状态，并告知对面
-func (s *Stream) HandleCmdCloseStream(pbuf *packet.Buffer) {
+// HandleClose 收到对端的 close 请求：
+//   - 对端不会再发送数据，可以安全关闭读状态；
+//   - 本地应尽快关闭 write 状态，并回复 CloseAck。
+func (s *Stream) HandleClose(f *wire.Frame) {
 	atomic.AddInt32(&s.state.RecvBufferCount, 1)
+	f.Release()
+
 	// 关闭由对端发起，预设原因（first-wins，不被后续 CloseRead/CloseWrite 的 "local" 覆盖）
 	s.SetCloseReason("remote")
 
-	// step1：响应对端的close请求，停止继续读数据。
-	// 注意：对端可能"先发数据、后发 Close"，此时缓冲区里的数据仍应可读，
-	// 因此这里不能丢弃未消费数据（discard=false）。
+	// step1：回复 CloseAck，让对端停止读取。
+	// 必须先于 closeRead/CloseWrite：对端可能已经先调用 Close()（写侧已关），
+	// 此时 closeRead 会立即触发 onDetach；测试/兼容层的 Pipe 可能在回调中
+	// 关闭底层连接，ack 尚未写出就会让对端等到 close-ack 超时。
+	_ = s.sender.SendCloseAck()
+
+	// step2：停止继续读数据。对端可能“先发数据、后发 Close”，
+	// 缓冲区里的数据仍应可读，故 discard=false。
 	_ = s.closeRead(false)
 
-	// step2：停止继续写入
+	// step3：停止继续写入
 	_ = s.CloseWrite()
-
-	// step3：回复closeAck，让对端停止读取
-	_ = s.sender.SendCloseAck()
 }
 
-func (s *Stream) HandleAckCloseStream(pbuf *packet.Buffer) {
+// HandleCloseAck processes the peer's acknowledgement of our Close.
+func (s *Stream) HandleCloseAck(f *wire.Frame) {
 	atomic.AddInt32(&s.state.RecvBufferCount, 1)
+	f.Release()
 	select {
 	case s.closeAckCh <- struct{}{}:
 	default:
 		// Already signaled or full, ignore duplicate ACKs
 	}
+}
+
+// --- legacy packet.Buffer adapters -----------------------------------------
+
+func bufferAddrs(pbuf *packet.Buffer) (src, dst wire.Addr) {
+	return wire.Addr{IP: pbuf.SrcIP(), Port: pbuf.SrcPort()},
+		wire.Addr{IP: pbuf.DistIP(), Port: pbuf.DistPort()}
+}
+
+func (s *Stream) HandleCmdPushStreamData(pbuf *packet.Buffer) {
+	if pbuf == nil {
+		return
+	}
+	p := append([]byte(nil), pbuf.Payload...)
+	src, dst := bufferAddrs(pbuf)
+	packet.PutBuffer(pbuf)
+	f, err := wire.NewData(src, dst, p)
+	if err != nil {
+		return
+	}
+	s.HandleData(f)
+}
+
+// HandleAckPushStreamData keeps the legacy ownership contract: the caller
+// (dispatcher / routeAck) puts pbuf after the handler returns.
+func (s *Stream) HandleAckPushStreamData(pbuf *packet.Buffer) {
+	if pbuf == nil {
+		return
+	}
+	size := pbuf.DataACKSize()
+	s.HandleAck(wire.NewAckData(size, wire.Addr{}, wire.Addr{}))
+}
+
+// HandleCmdCloseStream keeps the legacy ownership contract: the caller puts
+// pbuf after the handler returns.
+func (s *Stream) HandleCmdCloseStream(pbuf *packet.Buffer) {
+	f, err := wire.NewEmpty(wire.CmdCloseStream, wire.Addr{}, wire.Addr{})
+	if err != nil {
+		return
+	}
+	s.HandleClose(f)
+}
+
+// HandleAckCloseStream keeps the legacy ownership contract: the caller puts
+// pbuf after the handler returns.
+func (s *Stream) HandleAckCloseStream(pbuf *packet.Buffer) {
+	f, err := wire.NewEmpty(wire.AckCloseStream, wire.Addr{}, wire.Addr{})
+	if err != nil {
+		return
+	}
+	s.HandleCloseAck(f)
 }

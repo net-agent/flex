@@ -9,6 +9,7 @@ import (
 
 	"github.com/net-agent/flex/v3/packet"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestWriteFailed(t *testing.T) {
@@ -317,14 +318,18 @@ func TestWriteSerializesConcurrentCallsByInvocationOrder(t *testing.T) {
 
 	done1 := make(chan error, 1)
 	done2 := make(chan error, 1)
-	started1 := make(chan struct{})
 
 	go func() {
-		close(started1)
 		_, err := s.Write(payloadA)
 		done1 <- err
 	}()
-	<-started1
+
+	// Wait until the first Write has actually entered the serialized send path
+	// before starting the second. Starting both goroutines back-to-back lets the
+	// scheduler legitimately run B first, which is not an ordering violation.
+	require.Eventually(t, func() bool { return len(sw.getMarkers()) > 0 },
+		2*time.Second, time.Millisecond, "first write did not start")
+
 	go func() {
 		_, err := s.Write(payloadB)
 		done2 <- err

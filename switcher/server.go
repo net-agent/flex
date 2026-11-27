@@ -10,15 +10,22 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/net-agent/flex/v3/internal/admit"
 	"github.com/net-agent/flex/v3/internal/idpool"
 	"github.com/net-agent/flex/v3/internal/sched"
+	"github.com/net-agent/flex/v3/link"
 	"github.com/net-agent/flex/v3/packet"
 )
 
 var (
 	errHandlePCWriteFailed = errors.New("write to packet.Conn failed")
 )
+
+func linkTransport(pc packet.Conn) link.Transport {
+	if lt, ok := pc.(link.Transport); ok {
+		return lt
+	}
+	return link.NewPacketTransport(pc)
+}
 
 type OnContextStartHandler func(ctx *Context)
 type OnContextStopHandler func(ctx *Context, duration time.Duration)
@@ -30,11 +37,10 @@ type Server struct {
 	nextCtxID  atomic.Int32
 	startedAt  time.Time
 
-	enableFairConn atomic.Bool
-
-	// fairMu / fairCfg 保护新连接的 FairConn 调度策略（SetSchedulerConfig）。
-	fairMu  sync.RWMutex
-	fairCfg sched.SchedulerConfig
+	// fairMu / fairCfg 保护新连接的 link 写调度策略（SetSchedulerConfig）。
+	fairMu   sync.RWMutex
+	fairCfg  sched.SchedulerConfig
+	acceptor *link.Acceptor
 
 	// limits 是准入与资源配额，必须在 Serve 之前通过 SetLimits 设置。
 	limits    Limits
@@ -102,8 +108,8 @@ func NewServer(password string, logger *slog.Logger, logCfg *LogConfig) *Server 
 		logger:    newModuleLogger(logger, cfg.Server, "server"),
 		ctxLogger: newModuleLogger(logger, cfg.Context, "context"),
 	}
-	s.enableFairConn.Store(true)
 	s.fairCfg = sched.DefaultSchedulerConfig()
+	s.acceptor = link.NewAcceptor(link.AcceptConfig{PSK: password, Scheduler: s.fairCfg})
 	s.router = newPacketRouter(reg, newModuleLogger(logger, cfg.Router, "router"))
 	s.limits = DefaultLimits()
 	s.applyLimits()
@@ -160,11 +166,11 @@ func (s *Server) releaseConnSlot() {
 	}
 }
 
-// SetEnableFairConn controls whether incoming connections are wrapped with
-// sched.FairConn for fair stream scheduling. Default is true (enabled).
-func (s *Server) SetEnableFairConn(enable bool) {
-	s.enableFairConn.Store(enable)
-}
+// SetEnableFairConn is retained for API compatibility. Every link now uses the
+// fair writer; this method has no effect.
+//
+// Deprecated: fair scheduling is always enabled by link.Link.
+func (s *Server) SetEnableFairConn(enable bool) {}
 
 func (s *Server) GetStats() *StatsResponse {
 	ctxs := s.registry.activeContexts()
@@ -223,9 +229,8 @@ func (s *Server) Serve(l net.Listener) error {
 			return err
 		}
 
-		// FairConn 在 ServeConn 完成握手应答后启用（见第四步），
-		// 这样 TCP 与直接调用 ServeConn 的 WebSocket 路径行为一致，
-		// 且握手写失败仍能同步返回给调用方。
+		// ServeConn 内部完成 v4 握手并创建 link；TCP 与 WebSocket
+		// 路径行为一致。
 		go s.ServeConn(packet.NewWithConn(conn))
 	}
 }
@@ -277,51 +282,34 @@ func (s *Server) ServeConn(pc packet.Conn) (err error) {
 	}
 	defer s.releaseConnSlot()
 
-	// 第一步：交换版本和签名信息，保证版本一致与认证安全
-	req, err := admit.Accept(pc, s.password)
+	// 第一步：v4 握手（密钥协商 + 认证 + 抗重放）。握手失败时直接关闭，
+	// 不返回错误响应，避免给探测者提供 oracle。
+	tr := linkTransport(pc)
+	pending, hs, err := s.acceptor.Accept(tr)
 	if err != nil {
-		resp := admit.NewErrResponse(-1, "handshake rejected")
-		resp.WriteTo(pc, s.password)
-		s.logger.Warn("handshake failed", "error", err)
+		s.logger.Warn("handshake failed", "ip", ip, "error", err)
 		return err
 	}
 
-	// 第二步：将ctx映射到map中。
-	// NewContext 会启动 runForwardLoop，因此从这一刻起必须保证 release 一定执行，
-	// 否则 attach 失败或应答写失败都会泄漏一个 goroutine 与 Context。
-	// 握手应答必须先于任何转发写出：ctx 在 attach 后即可被其他节点按域名/IP 命中，
-	// 因此先以 nil conn 注册（转发会失败丢弃），应答写完后再绑定 conn。
-	ctx := NewContext(int(s.nextCtxID.Add(1)), nil, req.Domain, req.Mac, s.ctxLogger)
+	// 第二步：注册 Context 并分配虚拟 IP。Context 尚未绑定 link/ready，
+	// 其他节点此时命中它时会等待握手的应答窗口。
+	ctx := newContext(int(s.nextCtxID.Add(1)), nil, hs.Domain, hs.Mac, s.ctxLogger)
 	defer ctx.release()
 
-	err = s.registry.attach(ctx)
-	if err != nil {
-		resp := admit.NewErrResponse(-2, "handshake rejected")
-		resp.WriteTo(pc, s.password)
-		s.logger.Warn("attach context failed", "domain", req.Domain, "error", err)
+	if err := s.registry.attach(ctx); err != nil {
+		s.logger.Warn("attach context failed", "domain", hs.Domain, "error", err)
 		return err
 	}
 	defer s.registry.detach(ctx)
 
-	// 第三步：应答客户端
-	resp := admit.NewOKResponse(ctx.IP)
-	err = resp.WriteTo(pc, s.password)
+	// 第三步：发送握手应答（含分配的 IP），然后切换到安全 Link。
+	lnk, err := pending.Respond(ctx.IP)
 	if err != nil {
 		s.logger.Warn("response client failed", "domain", ctx.Domain, "mac", ctx.Mac, "error", err)
 		return fmt.Errorf("%w: %w", errHandlePCWriteFailed, err)
 	}
-
-	// 第四步：数据面启用 FairConn。
-	// 握手阶段保持裸连接：应答写失败必须同步暴露给调用方；
-	// 直接调用 ServeConn 的 WebSocket 场景也在此获得公平调度与限流配置。
-	if s.enableFairConn.Load() {
-		if _, ok := pc.(*sched.FairConn); !ok {
-			fc := sched.NewFairConnWithConfig(pc, s.schedulerConfig())
-			defer fc.Close()
-			pc = fc
-		}
-	}
-	ctx.setConn(pc)
+	ctx.setLink(lnk)
+	ctx.markReady()
 
 	// 记录服务时长
 	start := time.Now()

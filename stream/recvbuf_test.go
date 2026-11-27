@@ -6,14 +6,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v3/wire"
 	"github.com/stretchr/testify/assert"
 )
 
-func newTestBuf(payload []byte) *packet.Buffer {
-	b := packet.NewBufferWithCmd(packet.CmdPushStreamData)
-	_ = b.SetPayload(payload)
-	return b
+func newTestBuf(payload []byte) *wire.Frame {
+	f, err := wire.NewData(wire.Addr{}, wire.Addr{}, payload)
+	if err != nil {
+		panic(err)
+	}
+	return f
 }
 
 // 接收队列必须按字节计量：小包不会因为“包数”提前触发上限。
@@ -64,7 +66,7 @@ func TestRecvBufferCoalescesSmallPackets(t *testing.T) {
 	assert.Equal(t, want, out[:n])
 }
 
-// 大包按零拷贝入队，读完后 Buffer 归还池子（Head 被清零）。
+// 大包按零拷贝入队，读完后 Frame 归还池子（Payload 被清零）。
 func TestRecvBufferLargePacketZeroCopyAndRelease(t *testing.T) {
 	q := newRecvBuffer(DefaultSplitSize)
 
@@ -72,13 +74,13 @@ func TestRecvBufferLargePacketZeroCopyAndRelease(t *testing.T) {
 	assert.NoError(t, q.append(b))
 
 	q.mu.Lock()
-	assert.Same(t, b, q.chunks[q.head], "large packet should be queued without copy")
+	assert.Same(t, b, q.chunks[q.head].frame, "large packet should be queued without copy")
 	q.mu.Unlock()
 
 	out := make([]byte, 2*KB)
 	n, _ := q.read(out)
 	assert.Equal(t, 2*KB, n)
-	assert.Equal(t, packet.Header{}, b.Head, "buffer must be returned to the pool after consumption")
+	assert.Equal(t, 0, len(b.Payload()), "frame must be released after consumption")
 }
 
 // 队列满时必须立即返回错误，绝不能阻塞 dispatcher。
@@ -126,6 +128,6 @@ func TestRecvBufferDiscardReleasesAll(t *testing.T) {
 
 	q.discard()
 	assert.Equal(t, 0, q.pending())
-	assert.Equal(t, packet.Header{}, b1.Head)
-	assert.Equal(t, packet.Header{}, b2.Head)
+	assert.Equal(t, 0, len(b1.Payload()))
+	assert.Equal(t, 0, len(b2.Payload()))
 }

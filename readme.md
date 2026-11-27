@@ -12,7 +12,7 @@
     -   **Switcher**: Acts as a relay server. Routes traffic between Nodes using virtual domains and IPs.
 -   **Session with Auto-Reconnect**: `node.Session` wraps a Node with lazy connect, automatic reconnection with backoff, and listeners that survive reconnects.
 -   **Presence Subscription**: `Node.Watch()` subscribes to named nodes' online/offline states; the Switcher pushes change events in real time (the subscribe ACK carries a state snapshot, seamlessly stitched with later events), replacing `PingDomain` polling.
--   **Fair Scheduling**: Built-in **Fair Queuing** (see `internal/sched`). The default **cost-budget** policy charges each packet `max(payload, 1KB)` against a 32KB per-visit budget, so a 1-byte stream cannot monopolize the link while ACKs/Pings keep flowing. The historical packet quantum (`quantum=2`) remains available via `SetSchedulerConfig`. Enabled by default on both `switcher.Server` and `node.Session`.
+-   **Fair Scheduling**: Built-in **Fair Queuing** (the link fair writer; policy config in `internal/sched`). The default **cost-budget** policy charges each packet `max(payload, 1KB)` against a 32KB per-visit budget, so a 1-byte stream cannot monopolize the link while ACKs/Pings keep flowing. The historical packet quantum (`quantum=2`) remains available via `SetSchedulerConfig`. Enabled by default on both `switcher.Server` and `node.Session`.
 -   **Inspection APIs**: `Node.GetInfo()` / `Node.GetListeners()`, `Switcher.GetStats()` / `Switcher.GetClients()`, and `Stream.GetState()` expose traffic counters, active streams, and RTT in real time.
 -   **Backpressure that fails loud**: the receive queue is bounded by bytes (matching the flow-control window), never blocks the dispatcher, and reports a protocol violation by actively closing the stream instead of silently dropping data.
 -   **Admission control**: connection/stream/subscription quotas, per-IP handshake rate limiting and source-address validation are enabled with generous defaults on `switcher.Server` (see `SetLimits`).
@@ -31,7 +31,7 @@ graph LR
 
 ## Scheduling
 
-`switcher.Server` and `node.Session` wrap managed connections in a `FairConn`.
+`switcher.Server` and `node.Session` give every connection a `link.Link` whose fair writer schedules the write path.
 The default is **cost-budget (B)**: each packet is charged
 `max(payload, MinChargeBytes)` against `QuantumBytes` (defaults: 32KB / 1KB),
 which caps a visit at 32 packets even for 1-byte payloads.
@@ -187,14 +187,30 @@ Session exposes its connection lifecycle via `GetState()`, `GetLastErr()`, `GetR
 
 ## Security & Limits
 
-`flex` encrypts the admission handshake only; stream data is plain text. Treat it
-as a multiplexing/relay layer, not a VPN: wrap the transport with TLS
-(`tls.Listener` / `tls.Dial`, or `wss://`) on any untrusted network.
+`flex` v4 encrypts the **admission handshake** and the **control plane**; data
+payloads stay opaque:
+
+- Handshake: X25519 ECDHE plus an Argon2id/HKDF bootstrap key, fixed 512-byte
+  frames, timestamp + nonce replay protection.
+- Every 11-byte header is ChaCha20-encrypted; control payloads use
+  ChaCha20-Poly1305 and are padded to 64-byte buckets.
+- `CmdPushStreamData` payloads are **not encrypted, inspected or modified**.
+  Applications that need data confidentiality/integrity must wrap the stream
+  with TLS/AEAD (`stream.Stream` implements `net.Conn`, so `tls.Client(stream)`
+  works).
+- The Switcher can read control metadata (domains, presence, MAC) to route; it
+  cannot read application data that the application has encrypted.
+- Packet sizes and timing are **not hidden**; data-length padding is not
+  implemented yet.
+- v4 is not compatible with older versions. Direct mode (`node.New`) is still
+  plaintext/legacy.
+
+See the [security contract](docs/security_contract_zh.md) and
+[Deployment & Security](docs/manual.md#deployment--security).
 
 The Switcher rejects connections, streams and presence subscriptions beyond
 `switcher.Limits` (configurable via `SetLimits`), rate-limits handshakes per IP,
 and drops packets whose source address differs from the authenticated node.
-See [Deployment & Security](docs/manual.md#deployment--security) for details.
 
 ## License
 

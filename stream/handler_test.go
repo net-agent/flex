@@ -8,6 +8,7 @@ import (
 
 	"github.com/net-agent/flex/v3/packet"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestHandleCmdData(t *testing.T) {
@@ -19,14 +20,14 @@ func TestHandleCmdData(t *testing.T) {
 	})
 
 	t.Run("write to closed stream is ignored", func(t *testing.T) {
-		s1, s2 := Pipe()
-		err := s2.Close()
-		assert.Nil(t, err)
+		s := New(&mockWriter{}, 0)
+		require.NoError(t, s.CloseRead())
+		require.NoError(t, s.CloseWrite())
 
 		buf := packet.NewBufferWithCmd(packet.CmdPushStreamData)
 		_ = buf.SetPayload([]byte("late"))
-		s1.HandleCmdPushStreamData(buf)
-		assert.Equal(t, 0, s1.available())
+		s.HandleCmdPushStreamData(buf)
+		assert.Equal(t, 0, s.available())
 	})
 }
 

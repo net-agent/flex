@@ -43,7 +43,7 @@ func TestServerSchedulerConfigDefault(t *testing.T) {
 	}
 }
 
-// 直接调用 ServeConn（无 Serve 包装）时，数据面也必须按配置启用 FairConn。
+// 直接调用 ServeConn（无 Serve 包装）时，数据面也必须按配置启用 link 的 fair writer。
 func TestServerCostSchedulerWrapsDirectServeConn(t *testing.T) {
 	s := newLimitedServer(t, permissiveLimits())
 	s.SetSchedulerConfig(SchedulerConfig{
@@ -95,7 +95,11 @@ func TestServerCostSchedulerWrapsDirectServeConn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := ctx.getConn().(*sched.FairConn); !ok {
-		t.Fatalf("context conn should be *sched.FairConn, got %T", ctx.getConn())
+	if ctx.link == nil {
+		t.Fatal("context link is nil")
+	}
+	gotCfg := ctx.link.SchedulerConfig()
+	if gotCfg.Policy != sched.PolicyCostBudget || gotCfg.QuantumBytes != 8*1024 || gotCfg.MinChargeBytes != 1024 {
+		t.Fatalf("context link scheduler config=%+v", gotCfg)
 	}
 }

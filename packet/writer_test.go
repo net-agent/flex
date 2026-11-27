@@ -18,11 +18,11 @@ func TestWriter_WriteBuffer(t *testing.T) {
 
 	t.Run("header only", func(t *testing.T) {
 		pc1, pc2 := Pipe()
-		go func() {
-			require.NoError(t, pc1.WriteBuffer(NewBufferWithCmd(CmdPushStreamData)))
-		}()
+		errCh := make(chan error, 1)
+		go func() { errCh <- pc1.WriteBuffer(NewBufferWithCmd(CmdPushStreamData)) }()
 		recv, err := pc2.ReadBuffer()
 		require.NoError(t, err)
+		require.NoError(t, <-errCh)
 		assert.Equal(t, CmdPushStreamData, recv.Cmd())
 	})
 
@@ -31,11 +31,11 @@ func TestWriter_WriteBuffer(t *testing.T) {
 		buf := NewBufferWithCmd(CmdPushStreamData)
 		require.NoError(t, buf.SetPayload([]byte("hello")))
 
-		go func() {
-			require.NoError(t, pc1.WriteBuffer(buf))
-		}()
+		errCh := make(chan error, 1)
+		go func() { errCh <- pc1.WriteBuffer(buf) }()
 		recv, err := pc2.ReadBuffer()
 		require.NoError(t, err)
+		require.NoError(t, <-errCh)
 		assert.Equal(t, []byte("hello"), recv.Payload)
 	})
 }
@@ -101,10 +101,11 @@ func TestWriter_BatchWrite(t *testing.T) {
 			bufs[i].SetPayload([]byte("data"))
 		}
 
+		errCh := make(chan error, 1)
 		go func() {
 			w := NewConnWriter(pc1.GetRawConn())
 			bw := w.(*connWriter)
-			require.NoError(t, bw.WriteBufferBatch(bufs))
+			errCh <- bw.WriteBufferBatch(bufs)
 		}()
 
 		for i := range bufs {
@@ -113,6 +114,7 @@ func TestWriter_BatchWrite(t *testing.T) {
 			assert.Equal(t, uint16(i), recv.SrcPort(), "packet %d", i)
 			assert.Equal(t, []byte("data"), recv.Payload, "packet %d", i)
 		}
+		require.NoError(t, <-errCh)
 	})
 
 	t.Run("mixed payload", func(t *testing.T) {
@@ -125,10 +127,11 @@ func TestWriter_BatchWrite(t *testing.T) {
 			func() *Buffer { b := NewBufferWithCmd(CmdPushStreamData); b.SetPayload([]byte("bc")); return b }(), // 有 payload
 		}
 
+		errCh := make(chan error, 1)
 		go func() {
 			w := NewConnWriter(pc1.GetRawConn())
 			bw := w.(*connWriter)
-			require.NoError(t, bw.WriteBufferBatch(bufs))
+			errCh <- bw.WriteBufferBatch(bufs)
 		}()
 
 		for i, sent := range bufs {
@@ -137,6 +140,7 @@ func TestWriter_BatchWrite(t *testing.T) {
 			assert.Equal(t, sent.Cmd(), recv.Cmd(), "packet %d cmd", i)
 			assert.Equal(t, sent.Payload, recv.Payload, "packet %d payload", i)
 		}
+		require.NoError(t, <-errCh)
 	})
 }
 

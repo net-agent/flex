@@ -1,7 +1,8 @@
 package node
 
 import (
-	"github.com/net-agent/flex/v3/internal/admit"
+	"github.com/net-agent/flex/v3/internal/sched"
+	"github.com/net-agent/flex/v3/link"
 	"github.com/net-agent/flex/v3/packet"
 )
 
@@ -19,12 +20,24 @@ import (
 //
 // 握手失败时连接的所有权仍属于调用方，由调用方决定是否关闭。
 func Connect(conn packet.Conn, domain, mac, password string) (*Node, error) {
-	ip, err := admit.Handshake(conn, domain, mac, password)
+	if conn == nil {
+		return nil, ErrWriterIsNil
+	}
+	dialer := link.NewDialer(link.DialConfig{
+		PSK:       password,
+		Domain:    domain,
+		Mac:       mac,
+		Scheduler: sched.DefaultSchedulerConfig(),
+	})
+	lnk, ip, err := dialer.Dial(transportFor(conn))
 	if err != nil {
 		return nil, err
 	}
-
-	n := New(conn)
+	n, err := newNodeWithLink(lnk, conn, 1000, 0xFFFF, DefaultHeartbeatInterval)
+	if err != nil {
+		_ = lnk.Close()
+		return nil, err
+	}
 	n.SetDomain(domain)
 	n.SetIP(ip)
 	return n, nil

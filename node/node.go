@@ -11,8 +11,11 @@ import (
 	"time"
 
 	"github.com/net-agent/flex/v3/internal/idpool"
+	"github.com/net-agent/flex/v3/internal/sched"
+	"github.com/net-agent/flex/v3/link"
 	"github.com/net-agent/flex/v3/packet"
 	"github.com/net-agent/flex/v3/stream"
+	"github.com/net-agent/flex/v3/wire"
 )
 
 var (
@@ -33,7 +36,10 @@ type FlowConfig struct {
 }
 
 type Node struct {
+	// pconn is retained for compatibility/tests (the public constructors still
+	// accept packet.Conn). All I/O goes through lnk.
 	pconn packet.Conn
+	lnk   *link.Link
 
 	dispatcher Dispatcher
 	heartbeat  Heartbeat
@@ -84,12 +90,39 @@ func New(conn packet.Conn) *Node {
 // NewWithOptions 创建 Node，并允许自定义虚拟端口分配范围与心跳间隔。
 // 端口范围非法（portMin > portMax）时返回 idpool.ErrInvalidRange。
 func NewWithOptions(conn packet.Conn, portMin, portMax uint16, heartbeatInterval time.Duration) (*Node, error) {
+	return newWithConfig(conn, portMin, portMax, heartbeatInterval, sched.DefaultSchedulerConfig())
+}
+
+// newWithConfig is the internal constructor used by NewWithOptions (direct,
+// plaintext mode). Session and Connect build a secure link themselves and call
+// newNodeWithLink.
+func newWithConfig(conn packet.Conn, portMin, portMax uint16, heartbeatInterval time.Duration, cfg sched.SchedulerConfig) (*Node, error) {
+	var lnk *link.Link
+	if conn != nil {
+		lnk = link.NewDirectWithConfig(transportFor(conn), link.Config{
+			Scheduler:  cfg,
+			LegacyWire: true,
+		})
+	}
+	return newNodeWithLink(lnk, conn, portMin, portMax, heartbeatInterval)
+}
+
+// NewFromLink creates a Node around an already-established link (secure or
+// direct). It is primarily useful for tests and advanced integrations that
+// perform the handshake themselves.
+func NewFromLink(lnk *link.Link) *Node {
+	n, _ := newNodeWithLink(lnk, nil, 1000, 0xFFFF, DefaultHeartbeatInterval)
+	return n
+}
+
+func newNodeWithLink(lnk *link.Link, pconn packet.Conn, portMin, portMax uint16, heartbeatInterval time.Duration) (*Node, error) {
 	portm, err := idpool.New(portMin, portMax)
 	if err != nil {
 		return nil, err
 	}
 	node := &Node{
-		pconn:     conn,
+		pconn:     pconn,
+		lnk:       lnk,
 		done:      make(chan struct{}),
 		logger:    slog.Default(),
 		startedAt: time.Now(),
@@ -114,6 +147,14 @@ func NewWithOptions(conn packet.Conn, portMin, portMax uint16, heartbeatInterval
 	return node, nil
 }
 
+// transportFor returns the shared framing view of a packet.Conn.
+func transportFor(conn packet.Conn) link.Transport {
+	if lt, ok := conn.(link.Transport); ok {
+		return lt
+	}
+	return link.NewPacketTransport(conn)
+}
+
 // SetNetwork 设置网络类型标识。仅应在 Serve 之前调用。
 func (node *Node) SetNetwork(n string) { node.network = n }
 func (node *Node) GetNetwork() string  { return node.network }
@@ -125,6 +166,9 @@ func (node *Node) GetDomain() string       { return node.domain }
 // SetIP 设置节点虚拟 IP。仅应在 Serve 之前调用，运行期间修改会破坏路由身份。
 func (node *Node) SetIP(ip uint16) { node.ip = ip }
 func (node *Node) GetIP() uint16   { return node.ip }
+
+// Link returns the node's link. Exposed for advanced integrations and tests.
+func (node *Node) Link() *link.Link { return node.lnk }
 
 // SetLogger 设置节点日志器。各组件经 host 指针惰性读取，调用后即对全组件生效。
 // 仅应在 Serve 之前调用。
@@ -328,54 +372,104 @@ func (node *Node) Close() error {
 		node.streamHub.closeAllStreams()
 
 		// 5. 关闭底层连接，使 readLoop 退出
-		if node.pconn != nil {
-			node.pconn.Close()
+		if node.lnk != nil {
+			_ = node.lnk.Close()
+		} else if node.pconn != nil {
+			_ = node.pconn.Close()
 		}
 	})
 	return nil
 }
 
-// WriteBuffer 实现 packet.Writer，供 stream 层及包内组件写入协议包。
-// DistIP 为本机或未设置时包会被就地分发，否则写入底层连接。
-// 该方法属于协议内部实现，业务代码不应直接调用。
-//
-// 所有权约定：与 packet.Writer 一致——返回后调用方仍持有 pbuf，
-// 可立即归还池子。本地分发是异步的，因此在此处复制一份交给 dispatcher。
+// WriteBuffer implements packet.Writer for compatibility with existing
+// callers. New code should use SendFrame. It copies the payload, so the caller
+// may PutBuffer immediately after return.
 func (node *Node) WriteBuffer(pbuf *packet.Buffer) error {
-	if pbuf.DistIP() == 0 || pbuf.DistIP() == node.ip {
-		clone := packet.GetBuffer()
-		clone.Head = pbuf.Head
-		clone.Payload = append(clone.Payload[:0], pbuf.Payload...)
-		// 本地分发沿用既有的 fire-and-forget 语义：节点未运行时包被丢弃，
-		// 由调用方（Dial/Ping）各自的超时机制兜底；失败时自行归还克隆体。
-		if err := node.dispatcher.dispatch(clone); err != nil {
-			packet.PutBuffer(clone)
-			return nil
-		}
+	if pbuf == nil {
 		return nil
 	}
-	if node.pconn == nil {
+	cmd := wire.Cmd(pbuf.Cmd() &^ 0x80)
+	class, ok := wire.ClassOf(cmd)
+	if !ok {
+		return fmt.Errorf("node: unknown command 0x%02x", byte(cmd))
+	}
+	var payload []byte
+	var ackSize uint16
+	if cmd == wire.Cmd(wire.AckPushStreamData) {
+		ackSize = pbuf.DataACKSize()
+	} else {
+		payload = append([]byte(nil), pbuf.Payload...)
+	}
+	f, err := wire.NewFrame(
+		class, cmd,
+		wire.Addr{IP: pbuf.SrcIP(), Port: pbuf.SrcPort()},
+		wire.Addr{IP: pbuf.DistIP(), Port: pbuf.DistPort()},
+		payload, ackSize,
+	)
+	if err != nil {
+		return err
+	}
+	return node.sendFrameOwned(f)
+}
+
+// SendFrame consumes f and routes it: frames addressed to this node go to the
+// local dispatcher, everything else goes to the link. The payload is copied so
+// callers may reuse their buffer as soon as SendFrame returns. It is the
+// stream.Endpoint implementation.
+func (node *Node) SendFrame(f *wire.Frame) error {
+	if f == nil {
+		return nil
+	}
+	payload := append([]byte(nil), f.Payload()...)
+	nf, err := wire.NewFrame(f.Class(), f.Cmd(), f.Src(), f.Dst(), payload, f.AckSize())
+	f.Release()
+	if err != nil {
+		return err
+	}
+	return node.sendFrameOwned(nf)
+}
+
+// sendFrameOwned takes ownership of f and does not copy its payload.
+func (node *Node) sendFrameOwned(f *wire.Frame) error {
+	if f.Dst().IP == 0 || f.Dst().IP == node.ip {
+		// Local dispatch keeps the historical fire-and-forget semantics: a
+		// stopped node drops the frame; callers rely on their own timeouts.
+		_ = node.dispatcher.dispatchFrame(f)
+		return nil
+	}
+	if node.lnk == nil {
+		f.Release()
 		return ErrWriterIsNil
 	}
-
 	node.heartbeat.Touch()
-	node.writtenDataSize.Add(int64(pbuf.PayloadSize()))
-
-	return node.pconn.WriteBuffer(pbuf)
+	node.writtenDataSize.Add(int64(f.PayloadSize()))
+	if f.Class() == wire.ClassControl || f.Class() == wire.ClassHandshake {
+		// Close/AckClose share the per-stream queue with data; sending them
+		// synchronously would let the close overtake queued data.
+		switch f.Cmd() {
+		case wire.Cmd(wire.CmdCloseStream), wire.Cmd(wire.AckCloseStream):
+			return node.lnk.SendFrame(f)
+		default:
+			return node.lnk.SendFrameSync(f)
+		}
+	}
+	return node.lnk.SendFrame(f)
 }
 
 func (node *Node) readLoop() error {
+	if node.lnk == nil {
+		return ErrWriterIsNil
+	}
 	for {
-		node.pconn.SetReadTimeout(time.Minute * 15)
-		pbuf, err := node.pconn.ReadBuffer()
+		_ = node.lnk.SetReadTimeout(time.Minute * 15)
+		f, err := node.lnk.ReadFrame()
 		if err != nil {
 			return err
 		}
 
-		node.readDataSize.Add(int64(pbuf.PayloadSize()))
+		node.readDataSize.Add(int64(f.PayloadSize()))
 
-		err = node.dispatcher.dispatch(pbuf)
-		if err != nil {
+		if err := node.dispatcher.dispatchFrame(f); err != nil {
 			return err
 		}
 	}

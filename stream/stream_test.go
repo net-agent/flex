@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetReadWriteSize(t *testing.T) {
@@ -21,6 +22,17 @@ func TestGetReadWriteSize(t *testing.T) {
 	t.Run("stream.Pipe echo", func(t *testing.T) {
 		s1, s2 := Pipe()
 		testPipeConn(t, s1, s2)
+
+		// BytesWritten is updated after the frame is enqueued, so the peer can
+		// observe the last chunk before the writer goroutine bumps the counter.
+		// Wait for the counters to settle instead of assuming the echo write is
+		// visible at the instant io.ReadFull returns (slow CI runners exposed
+		// this as a one-chunk lag).
+		require.Eventually(t, func() bool {
+			s1Read, s1Write := s1.GetReadWriteSize()
+			s2Read, s2Write := s2.GetReadWriteSize()
+			return s1Read == s1Write && s2Read == s2Write && s1Read == s2Read
+		}, 2*time.Second, time.Millisecond)
 
 		s1Read, s1Write := s1.GetReadWriteSize()
 		s2Read, s2Write := s2.GetReadWriteSize()

@@ -9,6 +9,7 @@ import (
 
 	"github.com/net-agent/flex/v3/packet"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestCloseErr(t *testing.T) {
@@ -19,6 +20,13 @@ func TestCloseErr(t *testing.T) {
 
 		err = s1.Close()
 		assert.ErrorIs(t, err, net.ErrClosed, "second Close should return net.ErrClosed")
+
+		// s1's Close returns when s2 sends CloseAck; s2 may still be finishing
+		// its own close transitions. Wait for the passive side to converge
+		// instead of relying on goroutine scheduling.
+		require.Eventually(t, func() bool {
+			return isReadClosed(s2) && isWriteClosed(s2)
+		}, 2*time.Second, time.Millisecond, "passive side did not close")
 
 		err = s2.CloseRead()
 		assert.Equal(t, ErrReaderIsClosed, err)

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v3/internal/admit"
+	domainpkg "github.com/net-agent/flex/v3/internal/domain"
 	"github.com/net-agent/flex/v3/internal/idpool"
 	"github.com/net-agent/flex/v3/packet"
 )
@@ -94,7 +94,7 @@ func TestGetContextByDomain(t *testing.T) {
 
 	// 错误分支：domain不正确
 	_, err = s.registry.lookupByDomain("")
-	if err != admit.ErrInvalidDomain {
+	if err != domainpkg.ErrInvalidDomain {
 		t.Errorf("unexpected err=%v\n", err)
 		return
 	}

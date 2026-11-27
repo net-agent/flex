@@ -9,22 +9,22 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v3/internal/admit"
+	"github.com/net-agent/flex/v3/link"
 	"github.com/net-agent/flex/v3/node"
 	"github.com/net-agent/flex/v3/packet"
 )
 
 func TestServerRun(t *testing.T) {
-	addr := "localhost:39603"
 	pswd := "testpswd"
 	s := NewServer(pswd, nil, nil)
 	s.Close() // 提高代码覆盖度
 
-	l, err := net.Listen("tcp", addr)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Errorf("listen failed. err=%v\n", err)
 		return
 	}
+	addr := l.Addr().String()
 	go s.Serve(l)
 	go s.Serve(l) // 提高代码覆盖度
 
@@ -34,7 +34,8 @@ func TestServerRun(t *testing.T) {
 		return
 	}
 	pc := packet.NewWithConn(c)
-	admit.Handshake(pc, "test", "", pswd)
+	lnk, _ := testDialLink(t, pc, "test", pswd)
+	_ = lnk
 
 	s.Close()
 }
@@ -46,7 +47,8 @@ func TestServeConn(t *testing.T) {
 
 	// 模拟客户端请求
 	go func() {
-		admit.Handshake(pc1, "test", "", pswd)
+		d := link.NewDialer(link.DialConfig{PSK: pswd, Domain: "test"})
+		_, _, _ = d.Dial(linkTransport(pc1))
 		pc1.Close()
 	}()
 
@@ -65,36 +67,23 @@ func TestHandlePCErr_DomainExist(t *testing.T) {
 	}
 
 	pc1, pc2 := packet.Pipe()
-	pc3, pc4 := packet.Pipe()
-
 	go s.ServeConn(pc2)
+
+	// 先正常接入一个 domain=test 的连接。
+	lnk1, ip := testDialLink(t, pc1, "test", pswd)
+	n := node.NewFromLink(lnk1)
+	n.SetIP(ip)
+	n.SetDomain("test")
+	go n.Serve()
+	defer n.Close()
+
+	// 重复接入同一个 domain，attach 的存活探测会成功，随后服务端关闭连接。
+	pc3, pc4 := packet.Pipe()
 	go s.ServeConn(pc4)
-
-	// 先正常接入一个domain=test的连接
-	ip, err := admit.Handshake(pc1, "test", "", pswd)
-	if err != nil {
-		t.Errorf("unexpected err=%v\n", err)
-		return
+	dialer := link.NewDialer(link.DialConfig{PSK: pswd, Domain: "test"})
+	if _, _, err := dialer.Dial(linkTransport(pc3)); err == nil {
+		t.Error("unexpected nil err for duplicate domain")
 	}
-	node := node.New(pc1)
-	node.SetIP(ip)
-	node.SetDomain("test")
-	var waitNodeRun sync.WaitGroup
-	waitNodeRun.Add(1)
-	go func() {
-		node.Serve()
-		waitNodeRun.Done()
-	}()
-
-	// 模拟重复接入一个domain=test的连接
-	_, err = admit.Handshake(pc3, "test", "", pswd)
-	if err == nil {
-		t.Error("unexpected nil err")
-		return
-	}
-	log.Printf("expected err=%v\n", err)
-	pc1.Close()
-	waitNodeRun.Wait()
 }
 
 // 模拟密码错误的场景
@@ -103,22 +92,16 @@ func TestHandlePCErr_Password(t *testing.T) {
 	s := NewServer(pswd, nil, nil)
 	pc1, pc2 := packet.Pipe()
 
-	go func() {
-		var req admit.Request
-		req.Domain = "test"
-		req.Version = packet.VERSION
-		req.Timestamp = time.Now().UnixNano()
-		req.Sum = req.CalcSum(pswd + "_badpswd")
-		req.WriteTo(pc1, pswd+"_badpswd")
-		pc1.ReadBuffer() // drain error response
-	}()
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- s.ServeConn(pc2) }()
 
-	err := s.ServeConn(pc2)
-	if err == nil {
-		t.Error("expected error for bad password")
-		return
+	dialer := link.NewDialer(link.DialConfig{PSK: pswd + "_badpswd", Domain: "test"})
+	if _, _, err := dialer.Dial(linkTransport(pc1)); err == nil {
+		t.Error("expected dial error for bad password")
 	}
-	log.Printf("expected err=%v\n", err)
+	if err := <-serverErr; err == nil {
+		t.Error("expected server handshake error")
+	}
 }
 
 // 模拟服务端在应答之前连接断开的情况
@@ -127,22 +110,27 @@ func TestHandlePCErr_WriteResponse(t *testing.T) {
 	s := NewServer(pswd, nil, nil)
 	pc1, pc2 := packet.Pipe()
 
-	go func() {
-		var req admit.Request
-		req.Domain = "test"
-		req.Version = packet.VERSION
-		req.Timestamp = time.Now().UnixNano()
-		req.Sum = req.CalcSum(pswd)
-		req.WriteTo(pc1, pswd)
-		pc1.Close()
-	}()
+	serverErr := make(chan error, 1)
+	go func() { serverErr <- s.ServeConn(pc2) }()
 
-	err := s.ServeConn(pc2)
-	if !errors.Is(err, errHandlePCWriteFailed) {
-		t.Errorf("unexpected err=%v\n", err)
-		return
+	dialer := link.NewDialer(link.DialConfig{PSK: pswd, Domain: "test"})
+	tr := &closeAfterWriteTransport{Transport: linkTransport(pc1)}
+	_, _, _ = dialer.Dial(tr)
+
+	if err := <-serverErr; !errors.Is(err, errHandlePCWriteFailed) {
+		t.Fatalf("unexpected err=%v", err)
 	}
-	log.Printf("expected err=%v\n", err)
+}
+
+type closeAfterWriteTransport struct {
+	link.Transport
+	once sync.Once
+}
+
+func (c *closeAfterWriteTransport) WriteFrames(frames []link.FrameBytes) error {
+	err := c.Transport.WriteFrames(frames)
+	c.once.Do(func() { _ = c.Transport.Close() })
+	return err
 }
 
 func TestServerInfo(t *testing.T) {
@@ -169,7 +157,7 @@ func TestServerInfo(t *testing.T) {
 }
 
 func TestGetClientsWithData(t *testing.T) {
-	s, _, _ := initTestEnv("test1", "test2")
+	s, _, _ := initTestEnv(t, "test1", "test2")
 
 	clients := s.GetClients()
 	if len(clients) != 2 {
@@ -196,7 +184,7 @@ func TestGetClientsWithData(t *testing.T) {
 
 // Server.Close 应释放所有活跃连接，registry 随各 ServeConn 退出而清空
 func TestServerCloseReleasesClients(t *testing.T) {
-	s, node1, node2 := initTestEnv("test1", "test2")
+	s, node1, node2 := initTestEnv(t, "test1", "test2")
 	defer node1.Close()
 	defer node2.Close()
 
@@ -225,21 +213,14 @@ func TestServeConn_NoGoroutineLeakOnFailure(t *testing.T) {
 	s := NewServer(pswd, nil, nil)
 	defer s.Close()
 
+	dialer := link.NewDialer(link.DialConfig{PSK: pswd, Domain: "leak-probe"})
 	runOnce := func() {
 		pc1, pc2 := packet.Pipe()
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			var req admit.Request
-			req.Domain = "leak-probe"
-			req.Version = packet.VERSION
-			req.Timestamp = time.Now().UnixNano()
-			req.Sum = req.CalcSum(pswd)
-			if err := req.WriteTo(pc1, pswd); err != nil {
-				return
-			}
-			// 服务端应答前断开，触发 response 写失败路径
-			pc1.Close()
+			tr := &closeAfterWriteTransport{Transport: linkTransport(pc1)}
+			_, _, _ = dialer.Dial(tr)
 		}()
 		_ = s.ServeConn(pc2)
 		<-done

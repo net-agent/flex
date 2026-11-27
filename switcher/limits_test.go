@@ -4,9 +4,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v3/internal/admit"
+	"github.com/net-agent/flex/v3/link"
 	"github.com/net-agent/flex/v3/node"
 	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v3/wire"
 )
 
 func newLimitedServer(t *testing.T, limits Limits) *Server {
@@ -23,11 +24,8 @@ func connectTestNode(t *testing.T, s *Server, domain string) *node.Node {
 	client, server := packet.Pipe()
 	go s.ServeConn(server)
 
-	ip, err := admit.Handshake(client, domain, "", "testpswd")
-	if err != nil {
-		t.Fatalf("handshake %q failed: %v", domain, err)
-	}
-	n := node.New(client)
+	lnk, ip := testDialLink(t, client, domain, "testpswd")
+	n := node.NewFromLink(lnk)
 	n.SetDomain(domain)
 	n.SetIP(ip)
 	go n.Serve()
@@ -98,21 +96,23 @@ func TestRouterCheckSource(t *testing.T) {
 	ctx := NewContext(1, nil, "node", "", nil)
 	ctx.IP = 7
 
-	pbuf := packet.NewBuffer()
-	pbuf.SetSrc(7, 1000)
-	if err := s.router.checkSource(ctx, pbuf); err != nil {
-		t.Fatalf("matching source should be accepted: %v", err)
-	}
-
-	pbuf.SetSrc(8, 1000)
-	if err := s.router.checkSource(ctx, pbuf); err == nil {
-		t.Fatal("spoofed source must be rejected")
-	}
-
-	// 伪造 SwitcherIP 的控制应答同样必须拒绝
-	pbuf.SetSrc(packet.SwitcherIP, 0)
-	if err := s.router.checkSource(ctx, pbuf); err == nil {
-		t.Fatal("spoofed switcher source must be rejected")
+	for _, tc := range []struct {
+		src     uint16
+		wantErr bool
+	}{
+		{7, false},
+		{8, true},
+		{wire.MaxIP, true},
+	} {
+		f, err := wire.NewControl(wire.CmdOpenStream, wire.Addr{IP: tc.src, Port: 1000}, wire.Addr{}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = s.router.checkSource(ctx, f)
+		f.Release()
+		if (err != nil) != tc.wantErr {
+			t.Fatalf("src=%d err=%v wantErr=%v", tc.src, err, tc.wantErr)
+		}
 	}
 }
 
@@ -123,18 +123,15 @@ func TestServerConnectionLimit(t *testing.T) {
 
 	client1, server1 := packet.Pipe()
 	go s.ServeConn(server1)
-	if _, err := admit.Handshake(client1, "first", "", "testpswd"); err != nil {
-		t.Fatalf("first connection should be accepted: %v", err)
-	}
+	lnk1, _ := testDialLink(t, client1, "first", "testpswd")
+	defer lnk1.Close()
 
 	client2, server2 := packet.Pipe()
 	go s.ServeConn(server2)
-	if _, err := admit.Handshake(client2, "second", "", "testpswd"); err == nil {
+	dialer := link.NewDialer(link.DialConfig{PSK: "testpswd", Domain: "second"})
+	if _, _, err := dialer.Dial(linkTransport(client2)); err == nil {
 		t.Fatal("second connection must be rejected by connection limit")
 	}
-
-	client1.Close()
-	client2.Close()
 }
 
 func TestServerStreamQuota(t *testing.T) {

@@ -12,7 +12,7 @@
     -   **Switcher (交换机)**: 作为中继服务器。根据虚拟域名 (Domain) 和 IP 在节点间路由流量。
 -   **Session 自动重连**: `node.Session` 在 Node 之上提供懒连接、指数退避自动重连，监听器在重连后自动恢复。
 -   **Presence 状态订阅**: `Node.Watch()` 订阅一组 named node 的上下线状态，由 Switcher 实时推送变更事件（订阅应答携带状态快照，与后续事件无缝衔接），替代 `PingDomain` 轮询。
--   **公平调度**: 内置**公平队列**（见 `internal/sched`）。默认 **成本计费（B）**：每包按 `max(payload, 1KB)` 计入 32KB/轮的预算，1B 小包无法独占链路，ACK/Ping 等控制信号保持通畅；历史包数 quantum（默认 2）仍可通过 `SetSchedulerConfig` 切回。`switcher.Server` 与 `node.Session` 默认启用。
+-   **公平调度**: 内置**公平队列**（`link` 的 fair writer，策略配置见 `internal/sched`）。默认 **成本计费（B）**：每包按 `max(payload, 1KB)` 计入 32KB/轮的预算，1B 小包无法独占链路，ACK/Ping 等控制信号保持通畅；历史包数 quantum（默认 2）仍可通过 `SetSchedulerConfig` 切回。`switcher.Server` 与 `node.Session` 默认启用。
 -   **状态查询 API**: `Node.GetInfo()` / `Node.GetListeners()`、`Switcher.GetStats()` / `Switcher.GetClients()`、`Stream.GetState()` 可实时获取流量统计、活跃流与 RTT。
 -   **可靠性**: 健壮的连接管理，拥有心跳保活及完善的主动/被动关闭处理机制。
 
@@ -29,7 +29,7 @@ graph LR
 
 ## 调度策略
 
-`switcher.Server` 与 `node.Session` 会把托管的连接包装成 `FairConn`。
+`switcher.Server` 与 `node.Session` 的每条连接都是一个 `link.Link`，写路径由其中的 fair writer 调度。
 默认是 **成本计费（B）**：每包按 `max(payload, MinChargeBytes)` 计入
 `QuantumBytes`（默认 32KB / 1KB），因此即使是 1B 包，单轮也最多 32 个。
 
@@ -181,12 +181,19 @@ Session 通过 `GetState()`、`GetLastErr()`、`GetReconnectCount()` 和 `OnStat
 
 ## 安全与限制
 
-`flex` 只加密接入握手，流数据是明文。请把它当作多路复用/中继层而不是 VPN：
-在不可信网络上应在外层套 TLS（`tls.Listener` / `tls.Dial` 或 `wss://`）。
+`flex` v4 对**接入握手**和**控制面**做加密，数据面保持不透明：
+
+- 握手：X25519 ECDHE + Argon2id（或 HKDF）派生 bootstrap key，固定 512B 帧，timestamp+nonce 抗重放。
+- 每个包的 11B 头用 ChaCha20 加密；控制 payload 用 ChaCha20-Poly1305 并填充到 64B 桶。
+- `CmdPushStreamData` 的 payload **不加密、不检查、不修改**。需要数据机密性/完整性的应用必须在 stream 上自行套 TLS/AEAD（`stream.Stream` 实现 `net.Conn`，可直接 `tls.Client(stream)`）。
+- Switcher 仍能读控制面（域名、presence、MAC）以完成路由；不能读已加密的应用数据。
+- **不隐藏**包长和时序；数据长度 padding 尚未实现。
+- v4 与旧版本不兼容；直连模式 `node.New` 仍是明文 legacy 模式。
+
+详见[安全契约](docs/security_contract_zh.md)与[部署与安全](docs/manual_zh.md#部署与安全)。
 
 Switcher 按 `switcher.Limits` 拒绝超额的连接、流与 presence 订阅（可用 `SetLimits` 调整），
 按 IP 限制握手速率，并丢弃源地址与认证节点不一致的数据包。
-详见[部署与安全](docs/manual_zh.md#部署与安全)。
 
 ## 许可证
 

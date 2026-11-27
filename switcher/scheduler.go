@@ -2,7 +2,7 @@ package switcher
 
 import "github.com/net-agent/flex/v3/internal/sched"
 
-// SchedulerPolicy selects how a FairConn bounds each per-stream visit.
+// SchedulerPolicy selects how the link fair writer bounds each per-stream visit.
 type SchedulerPolicy int
 
 const (
@@ -17,7 +17,7 @@ const (
 	SchedulerPolicyPackets
 )
 
-// SchedulerConfig configures FairConn scheduling for newly accepted
+// SchedulerConfig configures link fair-writer scheduling for newly accepted
 // connections. The zero policy is SchedulerPolicyCostBudget, the default.
 //
 // The fields mirror node.SchedulerConfig; both map to the internal scheduler
@@ -60,6 +60,9 @@ func (s *Server) SetSchedulerConfig(cfg SchedulerConfig) {
 	s.fairMu.Lock()
 	s.fairCfg = internal
 	s.fairMu.Unlock()
+	if s.acceptor != nil {
+		s.acceptor.SetSchedulerConfig(internal)
+	}
 }
 
 func (s *Server) schedulerConfig() sched.SchedulerConfig {

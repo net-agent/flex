@@ -1,258 +1,127 @@
-# flex 架构文档
+# flex 架构文档（v4）
 
-flex 是一个基于单条 TCP/WebSocket 连接的虚拟网络多路复用库。它在一条物理连接上承载多个双向 Stream，提供类似 `net.Conn` 的编程接口，并内置域名路由、流控、节点状态订阅（Presence）和公平调度。
+`flex` 在单条 TCP/WebSocket 连接上多路复用大量逻辑 Stream，并提供域名路由、presence、流控和公平调度。v4 把“包”提升为不可变 IR，把“连接”收敛为一个组合根 `link.Link`，并给控制面加上逐跳加密。
 
-整体分层自底向上为：**Transport → Packet → Fair 调度 → Switcher → Node → Stream → Session**。
+> 安全边界、命令分类和密钥细节见 [security_contract_zh.md](security_contract_zh.md)。
 
-> 交互式可视化：[FairConn 调度可视化](fairconn_visualizer.html) —— 写路径架构、调度模拟，以及 C（包数）/ A（字节 DRR，候选）/ B（成本计费，默认）参数的同场对比，可直接离线打开。
+## 分层
 
-## 分层架构总览
-
-```
-┌─────────────────────────────────────┐
-│  Application  (Dial / Listen / Accept) │
-├─────────────────────────────────────┤
-│  Session 层     断线重连、持久监听       │
-├─────────────────────────────────────┤
-│  Node 层        多路复用管理            │
-│  ┌─Dispatcher─┬─StreamHub─┬─Dialer─┐ │
-│  │ ListenHub  │ Pinger    │Watcher │ │
-│  │ Heartbeat  │           │        │ │
-│  └────────────┴───────────┴────────┘ │
-├─────────────────────────────────────┤
-│  Stream 层      虚拟连接、流控          │
-├─────────────────────────────────────┤
-│  Switcher 层    路由转发、握手认证、Presence │
-├─────────────────────────────────────┤
-│  Fair 调度层   成本计费 / 包数（默认包装） │
-├─────────────────────────────────────┤
-│  Packet 层      11 字节二进制协议       │
-├─────────────────────────────────────┤
-│  Transport 层   TCP / WebSocket       │
-└─────────────────────────────────────┘
+```text
+net.Conn / websocket.Conn
+        │
+   Transport            internal/framing：11B 头 + payload 的两阶段读写
+        │
+   Link                 handshake v4 + secure codec + fair writer
+        │
+   Node / Context       流、路由、presence、统计
+        │
+   Stream               net.Conn
 ```
 
----
+- `wire`：不可变 `Frame`、11B codec、命令表、端点注册表。
+- `link`：唯一知道“握手、加密、调度如何组合”的地方；Node/Context 不接触 `net.Conn`、密钥或字节偏移。
+- `internal/framing`：TCP/WS 的字节/消息帧实现，`packet` 与 `link` 共用。
 
-## 第一层：Transport → Packet.Conn
+## wire：不可变包 IR
 
-### packet.Conn 接口
+### 头（11B）
+
+```text
+0        1        3        5        7        9        11
++--------+--------+--------+--------+--------+--------+
+| Cmd 1B | DstIP  | DstPort| SrcIP  | SrcPort| Size   |
++--------+--------+--------+--------+--------+--------+
+```
+
+- `Cmd` bit0 = ACK，bits1-6 = 命令类型，bit7 = 类别位（1=加密 control/handshake，0=data）。
+- `SID` 由 `Src/Dst` 组成；`SID.Uint64` 保留历史打包顺序，兼容旧的 `packet.Buffer` 查找。
+- `AckPushStreamData` 的 `Size` 是 ACK 字节数，不是 payload 长度。
+
+### Frame
+
+`wire.Frame` 字段全部不导出，构造后不可变：
 
 ```go
-type Conn interface {
-    io.Closer
-    Reader   // ReadBuffer() (*Buffer, error)
-    Writer   // WriteBuffer(buf *Buffer) error
-    GetRawConn() net.Conn
-}
+NewControl(cmd ControlCmd, src, dst Addr, payload []byte)
+NewData(src, dst Addr, payload []byte)
+NewEmpty(cmd EmptyCmd, src, dst Addr)
+NewAckData(size uint16, src, dst Addr)
 ```
 
-两种实现：
-- **TCP** — `NewWithConn(net.Conn)` → 内部使用 `connReader` / `connWriter`
-- **WebSocket** — `ws.NewConn(*websocket.Conn)` → 内部使用 `wsReader` / `wsWriter`
+- 回复 = 构造新 Frame，不改原 Frame；`SetCmd`/`SwapSrcDist` 这类可变 API 已从热路径移除。
+- `Codec.EncodeHeader/DecodeHeader` 是唯一知道字节布局的地方；`DecodeHeader` 用命令表校验类别位，类别不一致直接失败。
+- `wire.Registry` 把命令映射到 handler + lane；`RegisterControl/RegisterData/RegisterEmpty` 的参数类型强制选择类别。
+- `wire/contract_test.go` 解析源码，保证每个 `ControlCmd/DataCmd/EmptyCmd` 常量都在命令表里。
 
-TCP 写入支持 `WriteBufferBatch`，利用 `net.Buffers`（writev）减少系统调用。
+## link：唯一组合根
 
-### Header 二进制格式（11 字节）
-
-```
- 字节偏移:  0      1      3      5      7      9     11
-         ┌──────┬──────┬──────┬──────┬──────┬──────┐
-         │ Cmd  │DistIP│DistPt│SrcIP │SrcPt │Size  │
-         │ 1B   │ 2B   │ 2B   │ 2B   │ 2B   │ 2B   │
-         └──────┴──────┴──────┴──────┴──────┴──────┘
+```text
+Transport (bytes)
+  └─ secureCodec   头 ChaCha20、控制 payload AEAD、padding
+       └─ fairWriter   按 SID 排队、控制优先、批量 writev
+            └─ Link.ReadFrame / SendFrame
 ```
 
-- **Cmd**：命令字节。bit 0 为 ACK 标志，bit 1-7 为命令类型
-- **DistIP / DistPort**：目标虚拟 IP 和端口
-- **SrcIP / SrcPort**：源虚拟 IP 和端口
-- **Size**：union 字段 — 普通包表示 PayloadSize，`AckPushStreamData` 表示已确认数据量
+- `Link` 拥有 transport、握手、密钥、公平写协程和统计；Node/Context 只看到 `ReadFrame`/`SendFrame`。
+- `Link.SendFrame` 转移所有权；`SendControl`/`SendData`/`SendAck` 复制调用方 payload。写失败是致命的，连接关闭。
+- 控制帧用 `SendFrameSync`（dial/ping/open 等需要同步错误语义）；`Close/AckClose` 留在异步 per-SID 队列，避免 close 越过排队的数据。
 
-主要命令：
+### 握手 v4
 
-| 命令 | 值 | ACK | 说明 |
-|------|-----|-----|------|
-| CmdAdmit | 0x00 | — | 认证握手（每条物理连接的第一个包） |
-| CmdOpenStream | 0x02 | 0x03 | 打开 Stream |
-| CmdCloseStream | 0x04 | 0x05 | 关闭 Stream |
-| CmdPushStreamData | 0x06 | 0x07 | 推送数据 / DataACK |
-| CmdPushMessage | 0x08 | 0x09 | 推送消息（预留，未实现） |
-| CmdPingDomain | 0x0A | 0x0B | 域名 Ping |
-| CmdSubscribePresence | 0x0C | 0x0D | 订阅/退订节点上下线事件，ACK 携带状态快照 |
-| CmdNotifyPresence | 0x0E | — | Switcher 主动推送的上下线事件（无 ACK） |
+```text
+C→S: HDR(K_boot) | AEAD(K_boot, {version,domain,mac,ts,nonce,client_pub}) | pad   (11+512B)
+S→C: HDR(K_boot) | server_pub | AEAD(K_resp, {ip,version,caps,server_nonce}) | pad (11+512B)
 
-特殊 IP：`LocalIP = 0`，`SwitcherIP = DNSIP = 0xFFFF`。
-
----
-
-## 第二层：Fair 调度封装
-
-物理连接建立后，可选择用 `sched.NewFairConn` 包装 `packet.Conn`（`switcher.Server` 与 `node.Session` 默认启用）：
-
-```
-net.Conn → packet.Conn → FairConn
+Z       = X25519(client_priv, server_pub)
+K_resp  = HKDF(Z, "flex-resp", transcript0)
+K_link  = HKDF(Z, "flex-link", transcript1)
+K_boot  = Argon2id(PSK, salt, 64MB, 3, 4) 或 HKDF(PSK)
 ```
 
-FairConn 替换写路径为 `FairWriter`：
+- 固定 512B payload，请求/响应等长；domain 长度和成功/失败长度不可见。
+- timestamp ±5 分钟 + 16B nonce 缓存（TTL 5 分钟，上限 1M，满则 fail-closed）。
+- `Dialer.Dial` 返回 `(*Link, ip)`；`Acceptor.Accept` 返回 `Pending`，调用方分配 IP 后 `Respond(ip)` 写响应并得到 `*Link`。这保留“先分配 IP、再应答”的顺序，无需 `connReady` workaround。
 
-- **per-stream 有序包**（`CmdPushStreamData`、`CmdCloseStream`、`AckCloseStream`）→ 按 SID 分流到 `StreamQueue`，轮转调度。默认 **成本计费（B）**：每包计费 `max(payload, 1KB)`，预算 32KB/轮，单轮最多 32 个包；可用 `SetSchedulerConfig` 切回包数 quantum（C，默认 2）。
-- **其余所有命令**（OpenStream、ACK、Ping、SubscribePresence、NotifyPresence 等跨流控制包）→ 高优先级 `controlCh`，立即发送；不计入数据预算。
+### 头/控制加密
 
-调度循环：优先排空 `controlCh` → 取一个就绪 Stream → 按策略发送一轮（B：成本预算；C：quantum 个包）→ 若队列仍有数据则重新入队。
+- 每方向一条 ChaCha20 keystream；11B 头逐帧 XOR；TCP 有序，收发按帧数同步，无需每包 nonce。
+- 控制 payload：`nonce(12) || AEAD([2B len][payload][padding])`；padding 到 64B 桶；头作为 AAD。
+- 无 payload 的控制命令（Close/AckClose）只加密头；`AckPushStreamData` 的 ACK 数在头里。
+- 数据 payload 完全不碰；relay 只解密/重加密 11B 头。
 
-B 的取舍：1B 包在 `minCharge=1KB` 下每轮最多 32 个，无法用“包数”独占链路；代价是小包流的 payload 份额偏低，适合多租户/混合包长。C 的单轮占用更短，适合包长接近、延迟敏感的流量。A（按 payload 字节的 DRR）仍是设计候选，未实现。
+## Node
 
----
+- `Node` 持有 `*link.Link`；`SendFrame` 对本地目标走 dispatcher，对远程目标走 link。
+- `Dispatcher` 把帧分到 cmd/data lane；内置命令全部是 frame handler：
+  - data：`PushStreamData` → `StreamHub.handleData`；`AckPushStreamData` → `handleAckData`；`AckOpenStream` → Dialer；`Close/AckClose` → StreamHub。
+  - control：`OpenStream` → ListenHub；`Ping/AckPing` → Pinger；`Subscribe/Notify` → Watcher。
+- `Stream` 用 `stream.Endpoint` 发送 data/ack/close；接收队列持有 `*wire.Frame`，大包零拷贝、小包合并。
+- `Session` 负责懒连接/指数退避重连，每次重连用 `link.Dialer` 重新握手，并在新 Node 上恢复 listener/presence 意图。
 
-## 第三层：Switcher 路由
+## Switcher
 
-Switcher 是中心中继服务器，负责接受客户端连接、认证、分配虚拟 IP 并路由数据包。
+- `Server.ServeConn`：v4 `Accept` → 创建 Context → registry attach（分配 IP）→ `Pending.Respond(ip)` → 切到安全 Link → router。
+- `Context` 持有 `*link.Link`；握手应答写完前 `ready` 未关闭，转发帧会等待，保证应答先于数据。
+- `router`：`ReadFrame` → `checkSource`（源虚拟 IP）→ 目标不是 SwitcherIP 就 `dist.SendFrame` 转发；否则 `dispatch` 处理 Open/Ping/Presence。
+- `presenceCenter` 向订阅者发送 `CmdNotifyPresence` 控制帧；订阅配额和 presence 状态机不变。
+- 没有 per-context forward queue：link 的 fair writer 是唯一写队列，流的发送窗口天然提供背压。
 
-### 连接生命周期
+## 数据面
 
-```
-Client                          Server
-  │── TCP/WS connect ──────────→│
-  │── admit.Request ───────────→│  验证 version/password/domain/timestamp
-  │←── admit.Response (IP) ─────│  分配虚拟 IP
-  │                              │  启用 FairConn 公平调度
-  │←═══ 数据包路由 ═══════════→│
-```
+- `Stream.Write` 按 `DefaultSplitSize=16KB` 切片；`sender.SendData` 构造 data frame。
+- 接收队列按字节计量（默认窗口 2MB，硬上限 16MB），大包零拷贝、小包合并到 16KB chunk；ACK 按 64KB 或 10ms 合批。
+- 数据 payload 对 flex 不透明；需要 TLS 的应用直接 `tls.Client(stream)`。
 
-### 核心组件
+## 兼容层
 
-- **Server**：监听端口，对每个连接执行 `ServeConn`（握手 → 注册 → 路由循环）；`Close` 会 detach 所有活跃连接并停止事件中心
-- **Context**：表示一个已连接节点，持有 `packet.Conn`、Domain、IP、统计信息。所有写路径（数据转发、控制应答、Presence 扇出、替换探测）统一经 `forwardCh` 排队，由单一 forward goroutine 写出以保证包序；入队超时（5s）判定对端消费停滞，fail-loud 释放连接而不静默丢包
-- **contextRegistry**：按 Domain 和 IP 双索引管理 Context，支持域名抢占（先 ping 旧持有者，超时则替换）
-- **packetRouter**：读包循环 — `DistIP ≠ SwitcherIP` 时按 IP 转发；`DistIP == SwitcherIP` 时由 Switcher 自身处理（域名解析、Ping、Presence 订阅等）
-- **presenceCenter**：单 goroutine 事件中心。Registry 在状态突变点入队上下线事件，presenceCenter 维护含 per-domain version 的状态视图（订阅应答的快照数据源；version 每次迁移 +1），经 domain→订阅者倒排索引向对应节点逐一推送 `CmdNotifyPresence`，同一域名的状态迁移严格按因果序投递；订阅关系随订阅者断连自动清理；"offline 且无订阅者超过 1 小时"的条目由定时清扫回收，version 重新计数（客户端经重连后的权威重置快照对齐）
+- `packet.Conn`/`packet.Buffer`、`stream.New`/`NewDialStream`/`NewAcceptStream`、`Node.WriteBuffer`、`Dispatcher.RegisterCmdHandler` 保留为源码兼容 API；内置热路径已使用 `wire.Frame`。
+- `packet` 传输同时实现 `internal/framing.Transport`；内置 Node/Switcher 通过该视图读写，第三方 `packet.Conn` 走复制 fallback（`link.NewPacketTransport`）。
+- `node.New` 直连模式仍是明文 legacy wire（`Link.Config.LegacyWire`）；只有 `Connect`/`Session`/`Switcher` 使用 v4。
+- `SetEnableFairConn` 保留为 no-op；公平调度始终由 `link` 启用。
 
----
+## 测试与契约
 
-## 第四层：Node 多路复用
-
-Node 是客户端侧的核心，组合了以下子模块：
-
-```go
-type Node struct {
-    packet.Conn                // 底层连接
-    Dispatcher                 // 包分流
-    StreamHub                  // Stream 管理
-    ListenHub                  // 监听管理
-    Dialer                     // 拨号
-    Pinger                     // Ping
-    Watcher                    // Presence 订阅与通知
-    Heartbeat                  // 心跳保活
-}
-```
-
-### Dispatcher 分流
-
-读循环从 `packet.Conn` 读包，按命令类型分发到两个 channel：
-
-| Channel | 容量 | 路由的命令 | 特点 |
-|---------|------|-----------|------|
-| cmdChan | 4096 | OpenStream, AckPushStreamData, PingDomain±ACK, AckSubscribePresence, NotifyPresence | 无序处理 |
-| dataChan | 1024 | PushStreamData, AckOpenStream, CloseStream, AckCloseStream | 有序处理 |
-
-`PushStreamData` 走最短比较路径（switch 第一个 case），因为它是最高频命令。
-
----
-
-## 第五层：Stream 虚拟连接
-
-每个 Stream 实现 `net.Conn` 接口，由 SID（DistIP:DistPort:SrcIP:SrcPort 组成的 uint64）唯一标识。
-
-### 流控机制
-
-```
-发送端                                接收端
-  │                                    │
-  │  bucketSz > 0 ?                    │
-  │  是 → 发送 CmdPushStreamData ────→ │  append 到字节有界接收队列
-  │       bucketSz -= len(data)        │
-  │                                    │  应用层 Read() 消费数据
-  │  ←── AckPushStreamData(n) ─────────│  ACK 合批（64KB 或 10ms）
-  │  bucketSz += n                     │
-  │  bucketSz ≤ 0 ?                    │
-  │  是 → 阻塞等待 bucketEv 信号       │
-```
-
-- **窗口大小**：默认 `DefaultWindowSize = 2MB`，Dial/Accept 时双方显式协商取较小值，
-  并被 `MaxWindowSize = 16MB` 钳制（防止恶意对端指定超大窗口）。
-- **分片**：Write 自动按 `DefaultSplitSize = 16KB` 分片。
-- **接收队列**：容量按字节计（等于协商窗口），大包零拷贝、小包合并进 16KB chunk；
-  入队永不阻塞。队满只可能来自违反窗口约定的对端，此时主动发送 `CmdCloseStream`
-  并关闭两端（fail-loud），不会静默丢包。
-- **ACK 合批**：每条流最多一个 ACK 发送 goroutine，按 64KB 阈值或 10ms 窗口合并，
-  避免"一次 Read 一个 goroutine + 一个 ACK 包"的放大。
-
-### 关闭握手
-
-```
-主动端                    被动端
-  │── CloseWrite ──┐       │
-  │── CmdClose ────────→   │
-  │                    │── CmdCloseAck ──→│
-  │←── closeAckCh ─────│   │
-  │── CloseRead ───┘       │
-```
-
-超时（默认 2s）未收到 CloseAck 则强制 CloseRead。
-
----
-
-## 第六层：Session 断线重连
-
-Session 包装 Node，提供跨重连的持久 Listen/Dial 语义。
-
-### 重连循环
-
-```
-Session.Serve()
-  │
-  ├─ 等待首次 Listen/Dial 触发（懒连接）
-  │
-  └─ loop {
-       connector() → packet.Conn
-       admit.Handshake() → IP
-       node = New(sched.NewFairConn(conn))  // 默认成本计费（B）
-       重新注册所有持久 Listener
-       node.Serve()          // 阻塞直到断线
-       退避重连 (1s → 30s)
-     }
-```
-
-### SessionListener
-
-`SessionListener` 实现 `net.Listener`，跨 Node 重连存活。每次 Node 重建后，通过 `bridge` goroutine 将 Node 内部 Listener 的 Accept 结果转发到 SessionListener 的 channel。Node 断线时 bridge 自然退出，下一轮重连创建新的 bridge。
-
----
-
-## 端到端流程示例
-
-以 A 通过 Switcher 向 B 发起连接并传输数据为例：
-
-```
-  Node A                    Switcher                   Node B
-    │                          │                          │
-    │  Dial("B:80")            │                          │  Listen(80)
-    │                          │                          │
-    │─ CmdOpenStream ─────────→│                          │
-    │  (DistIP=SwitcherIP,     │─ CmdOpenStream ─────────→│
-    │   payload=domain+window) │  (解析域名→B的IP,转发)    │
-    │                          │                          │  创建 Stream
-    │                          │←─ AckOpenStream ─────────│  (先 attach 再回复)
-    │←─ AckOpenStream ─────────│                          │
-    │  创建 Stream              │                          │
-    │                          │                          │
-    │═ CmdPushStreamData ═════→│═════════════════════════→│  写入接收队列
-    │                          │                          │  Read() 消费
-    │←═ AckPushStreamData ═════│←═════════════════════════│  回复 DataACK
-    │  bucketSz += n           │                          │
-    │                          │                          │
-    │─ CmdCloseStream ────────→│─────────────────────────→│
-    │                          │←─ AckCloseStream ────────│
-    │←─ AckCloseStream ────────│                          │
-    │  关闭完成                 │                          │  关闭完成
-```
+- `wire/contract_test.go`：命令常量穷尽性。
+- `link/secure_test.go`：握手固定长度、控制 payload 不明文、数据 payload 原样、错误 PSK、重放拒绝。
+- `link/fair_test.go`：成本计费/包数策略的每轮批量上限。
+- `node`/`switcher`/`test/integration`：64MB 大流、调度公平性、presence、重连。

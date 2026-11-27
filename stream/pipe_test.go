@@ -100,8 +100,6 @@ func TestPipeCloseStateCleanup(t *testing.T) {
 	_, err = s2.Read(make([]byte, 10))
 	assert.Equal(t, io.EOF, err)
 
-	// NOTE: Pipe 内部的 demuxPackets/routeCmd/routeAck goroutine
-	// 在 Close 后不会退出，因为底层 packet.Pipe 没有被关闭。
-	// 这是一个已知的 goroutine 泄漏问题，仅影响测试场景。
-	// 生产环境中底层连接断开会触发 ReadBuffer 返回 error，goroutine 自然退出。
+	// Pipe 在两端都 detach 后会关闭底层 packet.Pipe，demuxPackets 的
+	// ReadBuffer 返回错误、route goroutine 随 channel 关闭退出。
 }

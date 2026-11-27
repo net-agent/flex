@@ -1,46 +1,63 @@
 package node
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v3/wire"
 )
 
+// Dispatcher routes inbound frames to control/data lanes. Control handlers keep
+// the legacy packet.Buffer signature for source compatibility; the data path
+// uses wire.Frame directly so bulk payloads are not copied or re-encoded.
 type Dispatcher struct {
-	cmdChan  chan *packet.Buffer
-	dataChan chan *packet.Buffer
+	cmdChan  chan *wire.Frame
+	dataChan chan *wire.Frame
 	running  bool
 	chanMut  sync.RWMutex
+
+	// frameDataHandlers is the new, zero-copy data path.
+	frameDataHandlers map[wire.Cmd]frameHandler
+	// frameCmdHandlers is reserved for control handlers migrated to frames.
+	frameCmdHandlers map[wire.Cmd]frameHandler
 
 	cmdHandlers  map[byte]func(*packet.Buffer)
 	dataHandlers map[byte]func(*packet.Buffer)
 	host         *Node
 }
 
+type frameHandler func(*wire.Frame) error
+
 func (d *Dispatcher) init(host *Node) {
 	d.host = host
-	d.cmdHandlers = map[byte]func(*packet.Buffer){
-		packet.AckPushStreamData:    host.streamHub.handleAckPushStreamData,
-		packet.CmdOpenStream:        host.listenHub.handleCmdOpenStream,
-		packet.CmdPingDomain:        host.pinger.handleCmdPingDomain,
-		packet.AckPingDomain:        host.pinger.handleAckPingDomain,
-		packet.AckSubscribePresence: host.watcher.handleAckSubscribePresence,
-		packet.CmdNotifyPresence:    host.watcher.handleCmdNotifyPresence,
+	// Legacy maps are kept for RegisterCmdHandler/RegisterDataHandler users.
+	// Built-in commands are handled by the frame maps below.
+	d.cmdHandlers = make(map[byte]func(*packet.Buffer))
+	d.dataHandlers = make(map[byte]func(*packet.Buffer))
+
+	d.frameCmdHandlers = map[wire.Cmd]frameHandler{
+		wire.Cmd(wire.CmdOpenStream):        host.listenHub.handleOpenFrame,
+		wire.Cmd(wire.CmdPingDomain):        host.pinger.handlePingFrame,
+		wire.Cmd(wire.AckPingDomain):        host.pinger.handleAckFrame,
+		wire.Cmd(wire.AckSubscribePresence): host.watcher.handleAckFrame,
+		wire.Cmd(wire.CmdNotifyPresence):    host.watcher.handleNotifyFrame,
 	}
-	d.dataHandlers = map[byte]func(*packet.Buffer){
-		packet.CmdPushStreamData: host.streamHub.handleCmdPushStreamData,
-		packet.AckOpenStream:     host.dialer.handleAckOpenStream,
-		packet.CmdCloseStream:    host.streamHub.handleCmdCloseStream,
-		packet.AckCloseStream:    host.streamHub.handleAckCloseStream,
+	d.frameDataHandlers = map[wire.Cmd]frameHandler{
+		wire.Cmd(wire.CmdPushStreamData): host.streamHub.handleData,
+		wire.Cmd(wire.AckPushStreamData): host.streamHub.handleAckData,
+		wire.Cmd(wire.AckOpenStream):     host.dialer.handleAckOpenStreamFrame,
+		wire.Cmd(wire.CmdCloseStream):    host.streamHub.handleClose,
+		wire.Cmd(wire.AckCloseStream):    host.streamHub.handleCloseAck,
 	}
 }
 
-// RegisterCmdHandler 注册命令通道的处理函数
+// RegisterCmdHandler 注册控制包处理函数（兼容旧 API）。
 func (d *Dispatcher) RegisterCmdHandler(cmd byte, handler func(*packet.Buffer)) {
 	d.cmdHandlers[cmd] = handler
 }
 
-// RegisterDataHandler 注册数据通道的处理函数
+// RegisterDataHandler 注册有序数据包处理函数（兼容旧 API）。
 func (d *Dispatcher) RegisterDataHandler(cmd byte, handler func(*packet.Buffer)) {
 	d.dataHandlers[cmd] = handler
 }
@@ -55,9 +72,9 @@ func (d *Dispatcher) start() error {
 	d.running = true
 
 	// 创建不同的缓存队列，避免不同功能的数据包相互影响
-	// 根据是否需要有序分为：Cmd和Data两种类型
-	d.cmdChan = make(chan *packet.Buffer, 4096)  // 用于缓存OpenStream、PushDataAck的队列，这两个无需保证顺序
-	d.dataChan = make(chan *packet.Buffer, 1024) // 与数据传输有关的包，OpenStreamAck、PushData、Close、CloseAck，需要保证顺序
+	// 根据是否需要有序分为：Cmd 和 Data 两种类型
+	d.cmdChan = make(chan *wire.Frame, 4096)  // OpenStream、PushDataAck 等无需保序
+	d.dataChan = make(chan *wire.Frame, 1024) // PushData、OpenAck、Close 需要保序
 
 	return nil
 }
@@ -78,63 +95,142 @@ func (d *Dispatcher) isRunning() bool {
 	return d.running
 }
 
+// dispatch converts a legacy packet.Buffer and routes it. The buffer is not
+// consumed; its payload is copied into the frame.
 func (d *Dispatcher) dispatch(pbuf *packet.Buffer) error {
+	f, err := bufferToFrame(pbuf)
+	if err != nil {
+		return err
+	}
+	return d.dispatchFrame(f)
+}
+
+// dispatchFrame always consumes f, including on error.
+func (d *Dispatcher) dispatchFrame(f *wire.Frame) error {
 	d.chanMut.RLock()
 	defer d.chanMut.RUnlock()
 
 	if !d.running {
-		d.host.logger.Warn("dispatch buffer on stopped node", "cmd", pbuf.Cmd(), "header", pbuf.HeaderString(), "domain", d.host.domain)
+		d.host.logger.Warn("dispatch buffer on stopped node", "cmd", f.Cmd(), "header", f, "domain", d.host.domain)
+		f.Release()
 		return ErrNodeIsStopped
 	}
 
-	switch pbuf.Cmd() {
-	case packet.CmdPushStreamData:
-		d.dataChan <- pbuf // PushData是最常见的，设置最短比较路径
-	case packet.CmdOpenStream,
-		packet.AckPushStreamData,
-		packet.CmdPingDomain,
-		packet.AckPingDomain,
-		packet.AckSubscribePresence,
-		packet.CmdNotifyPresence:
-		d.cmdChan <- pbuf
+	switch f.Cmd() {
+	case wire.Cmd(wire.CmdPushStreamData), wire.Cmd(wire.AckPushStreamData):
+		d.dataChan <- f // PushData is the hot path; ACKs own/release their frame
+	case wire.Cmd(wire.CmdOpenStream),
+		wire.Cmd(wire.CmdPingDomain),
+		wire.Cmd(wire.AckPingDomain),
+		wire.Cmd(wire.AckSubscribePresence),
+		wire.Cmd(wire.CmdNotifyPresence):
+		d.cmdChan <- f
 	default:
-		d.dataChan <- pbuf
+		d.dataChan <- f
 	}
 
 	return nil
 }
 
 func (d *Dispatcher) processCmdChan() {
-	for pbuf := range d.cmdChan {
-		if handler, ok := d.cmdHandlers[pbuf.Cmd()]; ok {
-			handler(pbuf)
-		} else {
-			d.host.logger.Warn("unknown cmd", "cmd", pbuf.Cmd(), "header", pbuf.HeaderString(), "domain", d.host.domain)
+	for f := range d.cmdChan {
+		cmd := f.Cmd()
+
+		// A custom legacy handler overrides the built-in frame handler.
+		if handler, ok := d.cmdHandlers[byte(cmd)]; ok {
+			b := frameToBuffer(f)
+			f.Release()
+			if b == nil {
+				d.host.logger.Warn("unexpected cmd", "cmd", cmd, "domain", d.host.domain)
+				continue
+			}
+			handler(b)
+			// 命令类处理器只做同步解析/就地应答，不保留 buffer 所有权。
+			packet.PutBuffer(b)
+			continue
 		}
-		// 命令类处理器只做同步解析/就地应答，不保留 buffer 所有权。
-		// 统一在此归还，使读路径的 payload 数组可以在池中复用。
-		packet.PutBuffer(pbuf)
+
+		if handler, ok := d.frameCmdHandlers[cmd]; ok {
+			if err := handler(f); err != nil {
+				d.host.logger.Warn("frame cmd handler failed", "cmd", cmd, "error", err)
+			}
+			// Control frame handlers must not retain f.
+			f.Release()
+			continue
+		}
+
+		d.host.logger.Warn("unknown cmd", "cmd", cmd, "domain", d.host.domain)
+		f.Release()
 	}
 }
 
 func (d *Dispatcher) processDataChan() {
-	for pbuf := range d.dataChan {
-		// 必须在调用 handler 前捕获命令字：
-		// handler 可能消费 buffer（数据包入队/合并后就地归还，Head 被清零），
-		// 若在返回后再读 pbuf.Cmd() 会读到 0，导致同一 buffer 被二次归还，
-		// 池中出现重复所有权、并发读写同一 Buffer。
-		cmd := pbuf.Cmd()
+	for f := range d.dataChan {
+		cmd := f.Cmd()
 
-		if handler, ok := d.dataHandlers[cmd]; ok {
-			handler(pbuf)
-		} else {
-			d.host.logger.Warn("unknown cmd", "cmd", cmd, "header", pbuf.HeaderString(), "domain", d.host.domain)
+		// A custom legacy handler overrides the built-in frame handler.
+		if handler, ok := d.dataHandlers[byte(cmd)]; ok {
+			b := frameToBuffer(f)
+			f.Release()
+			if b == nil {
+				d.host.logger.Warn("unexpected data cmd", "cmd", cmd, "domain", d.host.domain)
+				continue
+			}
+			handler(b)
+			packet.PutBuffer(b)
+			continue
 		}
 
-		// CmdPushStreamData 的所有权已转移给接收队列（由流在消费后归还），
-		// 其余数据命令（OpenAck/Close/CloseAck）在处理器内同步消费完毕，在此归还。
-		if cmd != packet.CmdPushStreamData {
-			packet.PutBuffer(pbuf)
+		if handler, ok := d.frameDataHandlers[cmd]; ok {
+			if err := handler(f); err != nil {
+				d.host.logger.Warn("frame data handler failed", "cmd", cmd, "error", err)
+			}
+			// Data frame handlers take ownership of f.
+			continue
 		}
+
+		d.host.logger.Warn("unknown cmd", "cmd", cmd, "domain", d.host.domain)
+		f.Release()
 	}
+}
+
+// frameToBuffer converts a frame to the legacy packet.Buffer view. The payload
+// is copied because the legacy handlers treat the buffer as owned and the
+// frame is released immediately afterwards.
+// bufferToFrame converts a legacy packet.Buffer into a frame. It copies the
+// payload so the caller keeps ownership of pbuf.
+func bufferToFrame(pbuf *packet.Buffer) (*wire.Frame, error) {
+	if pbuf == nil {
+		return nil, nil
+	}
+	cmd := wire.Cmd(pbuf.Cmd() &^ 0x80)
+	class, ok := wire.ClassOf(cmd)
+	if !ok {
+		return nil, fmt.Errorf("node: unknown command 0x%02x", byte(cmd))
+	}
+	var payload []byte
+	var ackSize uint16
+	if cmd == wire.Cmd(wire.AckPushStreamData) {
+		ackSize = pbuf.DataACKSize()
+	} else {
+		payload = append([]byte(nil), pbuf.Payload...)
+	}
+	return wire.NewFrame(
+		class, cmd,
+		wire.Addr{IP: pbuf.SrcIP(), Port: pbuf.SrcPort()},
+		wire.Addr{IP: pbuf.DistIP(), Port: pbuf.DistPort()},
+		payload, ackSize,
+	)
+}
+
+func frameToBuffer(f *wire.Frame) *packet.Buffer {
+	b := packet.GetBuffer()
+	if err := (wire.Codec{}).EncodeHeader(f.Header(), b.Head[:]); err != nil {
+		packet.PutBuffer(b)
+		return nil
+	}
+	// The legacy path predates the class bit; its switches use packet.Cmd*.
+	b.Head[0] &^= 0x80
+	b.Payload = append(b.Payload[:0], f.Payload()...)
+	return b
 }

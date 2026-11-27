@@ -14,7 +14,7 @@
 // 1. 建立 sender/receiver 两个 Session，共享同一个 switcher。
 // 2. sender 在同一条物理连接上并发建立 N 条 stream（N 由测试参数决定）。
 // 3. 每条 stream 发送相同数量、相同大小的数据包，排除业务负载差异干扰。
-// 4. 在 sender 侧包装 recordingPacketConn，拦截 WriteBuffer，记录每个包的 SID 与命令类型。
+// 4. 在 sender link 的写边界安装 frame tap，记录每个明文数据帧的 SID 与命令类型。
 // 5. receiver 侧仅做 io.Copy(io.Discard) 排空，确保写压主要反映发送调度行为。
 //
 // 公平性指标：
@@ -52,8 +52,8 @@ import (
 	"time"
 
 	"github.com/net-agent/flex/v3/node"
-	"github.com/net-agent/flex/v3/packet"
 	"github.com/net-agent/flex/v3/switcher"
+	"github.com/net-agent/flex/v3/wire"
 	"github.com/stretchr/testify/require"
 )
 
@@ -108,59 +108,30 @@ type packetWriteEvent struct {
 	Time time.Time
 }
 
-type recordingPacketConn struct {
-	packet.Conn
+// frameRecorder records plaintext data frames at the sender link's write
+// boundary. It replaces the old packet.Conn wrapper: with the v4 link the wire
+// headers are encrypted, so fairness must be observed before encryption.
+type frameRecorder struct {
 	mu     sync.Mutex
 	events []packetWriteEvent
 }
 
-func (c *recordingPacketConn) WriteBuffer(buf *packet.Buffer) error {
-	c.mu.Lock()
-	c.events = append(c.events, packetWriteEvent{
-		Cmd:  buf.Cmd(),
-		SID:  buf.SID(),
-		Time: time.Now(),
-	})
-	c.mu.Unlock()
-	return c.Conn.WriteBuffer(buf)
-}
-
-func (c *recordingPacketConn) Snapshot() []packetWriteEvent {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	out := make([]packetWriteEvent, len(c.events))
-	copy(out, c.events)
-	return out
-}
-
-type recorderHolder struct {
-	mu   sync.Mutex
-	conn *recordingPacketConn
-}
-
-func (h *recorderHolder) Set(c *recordingPacketConn) {
-	h.mu.Lock()
-	h.conn = c
-	h.mu.Unlock()
-}
-
-func (h *recorderHolder) Get() *recordingPacketConn {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return h.conn
-}
-
-func recordingTCPConnector(addr string, holder *recorderHolder) node.ConnectFunc {
-	return func() (packet.Conn, error) {
-		conn, err := net.Dial("tcp", addr)
-		if err != nil {
-			return nil, err
-		}
-		rec := &recordingPacketConn{Conn: packet.NewWithConn(conn)}
-		holder.Set(rec)
-		return rec, nil
+func (r *frameRecorder) tap(write bool, f *wire.Frame) {
+	if !write || f.Cmd() != wire.Cmd(wire.CmdPushStreamData) {
+		return
 	}
+	ev := packetWriteEvent{Cmd: byte(f.Cmd()), SID: f.SID().Uint64(), Time: time.Now()}
+	r.mu.Lock()
+	r.events = append(r.events, ev)
+	r.mu.Unlock()
+}
+
+func (r *frameRecorder) Snapshot() []packetWriteEvent {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]packetWriteEvent, len(r.events))
+	copy(out, r.events)
+	return out
 }
 
 type drainCollector struct {
@@ -241,7 +212,7 @@ type fairnessMetrics struct {
 func analyzeFairness(events []packetWriteEvent, windowSize int) fairnessMetrics {
 	seq := make([]uint64, 0, len(events))
 	for _, ev := range events {
-		if ev.Cmd == packet.CmdPushStreamData {
+		if ev.Cmd == byte(wire.CmdPushStreamData) {
 			seq = append(seq, ev.SID)
 		}
 	}
@@ -251,13 +222,16 @@ func analyzeFairness(events []packetWriteEvent, windowSize int) fairnessMetrics 
 		packetCountBySID[sid]++
 	}
 
+	// 所有指标必须在同一条“稳态”序列上计算：启动/收尾的短暂突发不应
+	// 只影响 maxRun 而不影响 Jain，否则两个指标会互相矛盾。
+	steady := trimMiddle(seq)
 	metrics := fairnessMetrics{
 		TotalDataPackets: len(seq),
 		PacketCountBySID: packetCountBySID,
-		MaxRunLength:     maxRunLength(seq),
+		MaxRunLength:     maxRunLength(steady),
 	}
 
-	windowJains := windowJainIndexes(trimMiddle(seq), windowSize)
+	windowJains := windowJainIndexes(steady, windowSize)
 	metrics.WindowJains = windowJains
 	metrics.MinWindowJain = minFloat64(windowJains)
 	metrics.AvgWindowJain = avgFloat64(windowJains)
@@ -412,11 +386,12 @@ func TestIntegration_SchedulingFairness(t *testing.T) {
 	addr := ln.Addr().String()
 	go srv.Serve(ln)
 
-	var recorder recorderHolder
-	sender := node.NewSession(recordingTCPConnector(addr, &recorder), node.SessionConfig{
+	recorder := &frameRecorder{}
+	sender := node.NewSession(tcpConnector(addr), node.SessionConfig{
 		Domain:   "sender",
 		Password: password,
 	})
+	sender.SetFrameTap(recorder.tap)
 	sender.SetSchedulerConfig(node.SchedulerConfig{
 		Policy:         node.SchedulerPolicyPackets,
 		QuantumPackets: 2,
@@ -448,7 +423,6 @@ func TestIntegration_SchedulingFairness(t *testing.T) {
 
 	require.NoError(t, sender.WaitReady(cfg.WaitReadyTimeout))
 	require.NoError(t, receiver.WaitReady(cfg.WaitReadyTimeout))
-	require.NotNil(t, recorder.Get(), "recorder not initialized")
 
 	streams := make([]net.Conn, 0, cfg.StreamCount)
 	for i := 0; i < cfg.StreamCount; i++ {
@@ -457,36 +431,47 @@ func TestIntegration_SchedulingFairness(t *testing.T) {
 		streams = append(streams, st)
 	}
 
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(len(streams))
-	for i, conn := range streams {
-		go func(idx int, c net.Conn) {
-			defer wg.Done()
-			defer c.Close()
+	// 每一轮让所有 stream 同时各写一个包，再进入下一轮。这样调度的输入
+	// 始终是“N 条流同时有数据”，不会因为某个 producer goroutine 先跑完
+	// 而把“应用层启动顺序”误判成“调度不公平”。
+	payloads := make([][]byte, len(streams))
+	for i := range payloads {
+		payload := make([]byte, cfg.PayloadSize)
+		for j := range payload {
+			payload[j] = byte((i + j) % 251)
+		}
+		payloads[i] = payload
+	}
 
-			payload := make([]byte, cfg.PayloadSize)
-			for j := range payload {
-				payload[j] = byte((idx + j) % 251)
-			}
-
-			<-start
-			for n := 0; n < cfg.PacketsPerStream; n++ {
-				written, err := c.Write(payload)
+	for n := 0; n < cfg.PacketsPerStream; n++ {
+		var round sync.WaitGroup
+		round.Add(len(streams))
+		for i, conn := range streams {
+			go func(idx int, c net.Conn) {
+				defer round.Done()
+				written, err := c.Write(payloads[idx])
 				if err != nil {
 					t.Errorf("stream[%d] write failed: %v", idx, err)
 					return
 				}
-				if written != len(payload) {
-					t.Errorf("stream[%d] short write: got=%d want=%d", idx, written, len(payload))
-					return
+				if written != len(payloads[idx]) {
+					t.Errorf("stream[%d] short write: got=%d want=%d", idx, written, len(payloads[idx]))
 				}
-			}
-		}(i, conn)
+			}(i, conn)
+		}
+		round.Wait()
 	}
 
-	close(start)
-	wg.Wait()
+	// 并发关闭，避免 12 条流逐个等待 close ack 把测试拖成 12×2s。
+	var closeWG sync.WaitGroup
+	for _, conn := range streams {
+		closeWG.Add(1)
+		go func(c net.Conn) {
+			defer closeWG.Done()
+			_ = c.Close()
+		}(conn)
+	}
+	closeWG.Wait()
 
 	select {
 	case <-drain.done:
@@ -501,7 +486,7 @@ func TestIntegration_SchedulingFairness(t *testing.T) {
 	expectedBytes := int64(cfg.StreamCount * cfg.PacketsPerStream * cfg.PayloadSize)
 	require.Equal(t, expectedBytes, drain.Bytes(), "receiver drained bytes mismatch")
 
-	events := recorder.Get().Snapshot()
+	events := recorder.Snapshot()
 	metrics := analyzeFairness(events, cfg.WindowSize)
 	maybeExportFairnessReport(t, cfg, metrics, events)
 
@@ -709,7 +694,7 @@ func resolveReportPath(path string) (string, error) {
 func extractDataSequence(events []packetWriteEvent) []uint64 {
 	seq := make([]uint64, 0, len(events))
 	for _, ev := range events {
-		if ev.Cmd == packet.CmdPushStreamData {
+		if ev.Cmd == byte(wire.CmdPushStreamData) {
 			seq = append(seq, ev.SID)
 		}
 	}
@@ -746,7 +731,7 @@ func buildSequenceRows(seq []uint64, cols int) []fairnessSequenceRow {
 func buildTimelineRows(events []packetWriteEvent) ([]fairnessTimelineRow, time.Duration) {
 	dataEvents := make([]packetWriteEvent, 0, len(events))
 	for _, ev := range events {
-		if ev.Cmd == packet.CmdPushStreamData {
+		if ev.Cmd == byte(wire.CmdPushStreamData) {
 			dataEvents = append(dataEvents, ev)
 		}
 	}

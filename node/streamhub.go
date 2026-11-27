@@ -8,6 +8,7 @@ import (
 	"github.com/net-agent/flex/v3/internal/idpool"
 	"github.com/net-agent/flex/v3/packet"
 	"github.com/net-agent/flex/v3/stream"
+	"github.com/net-agent/flex/v3/wire"
 )
 
 const (
@@ -195,6 +196,65 @@ func (hub *StreamHub) GetClosedStates(pos int64) ([]*stream.State, int64) {
 
 // 处理数据包。所有权总是被消费：找到流则交给流（消费后归还），
 // 找不到则在本地归还，避免读路径的 payload 数组泄漏给 GC。
+// handleData is the frame-native push path. It takes ownership of f.
+func (hub *StreamHub) handleData(f *wire.Frame) error {
+	c, err := hub.getStream(f.SID().Uint64())
+	if err != nil {
+		if hub.host != nil {
+			hub.host.logger.Warn("push data: stream not found, possibly closed", "sid", f.SID().String())
+		}
+		f.Release()
+		return nil
+	}
+	c.HandleData(f)
+	return nil
+}
+
+// handleAckData is the frame-native ACK path. It takes ownership of f.
+func (hub *StreamHub) handleAckData(f *wire.Frame) error {
+	c, err := hub.getStream(f.SID().Uint64())
+	if err != nil {
+		if hub.host != nil {
+			hub.host.logger.Warn("push data ack: stream not found, possibly closed", "sid", f.SID().String())
+		}
+		f.Release()
+		return nil
+	}
+	c.HandleAck(f)
+	return nil
+}
+
+// handleClose and handleCloseAck are the frame-native close paths.
+func (hub *StreamHub) handleClose(f *wire.Frame) error {
+	c, err := hub.getStream(f.SID().Uint64())
+	if err != nil {
+		// The stream may have detached (both directions closed) just before the
+		// peer's Close arrives. Reply AckClose anyway, otherwise the peer waits
+		// for its full close-ack timeout. This mirrors the legacy
+		// handleCmdCloseStream path.
+		if hub.host != nil {
+			ack, ackErr := wire.NewEmpty(wire.AckCloseStream, f.Dst(), f.Src())
+			if ackErr == nil {
+				_ = hub.host.SendFrame(ack)
+			}
+		}
+		f.Release()
+		return nil
+	}
+	c.HandleClose(f)
+	return nil
+}
+
+func (hub *StreamHub) handleCloseAck(f *wire.Frame) error {
+	c, err := hub.getStream(f.SID().Uint64())
+	if err != nil {
+		f.Release()
+		return nil
+	}
+	c.HandleCloseAck(f)
+	return nil
+}
+
 func (hub *StreamHub) handleCmdPushStreamData(pbuf *packet.Buffer) {
 	c, err := hub.getStream(pbuf.SID())
 	if err != nil {

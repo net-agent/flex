@@ -5,7 +5,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v3/wire"
 )
 
 // ErrRecvBufferFull 表示接收端缓冲已满，而对端仍在流控窗口之外继续推送数据。
@@ -21,7 +21,7 @@ var errEmptyPayload = errors.New("empty payload")
 
 const (
 	// coalesceThreshold 以下的 payload 会被合并进尾部 chunk。
-	// 海量小包（交互式协议常见）若各自占用一个 Buffer，会把内存放大
+	// 海量小包（交互式协议常见）若各自占用一个 Frame，会把内存放大
 	// 数十倍；合并后队列对象数只与总字节数有关。
 	coalesceThreshold = 1024
 
@@ -29,19 +29,27 @@ const (
 	recvChunkSize = 16 * KB
 )
 
+// recvChunk is either a zero-copy view of a Frame payload (frame != nil) or a
+// coalesced []byte owned by the queue. A Frame payload is immutable, so small
+// packets are copied into a coalesced chunk rather than appended to a frame.
+type recvChunk struct {
+	data  []byte
+	frame *wire.Frame
+}
+
+var recvChunkPool = sync.Pool{
+	New: func() any { return &recvChunk{data: make([]byte, 0, recvChunkSize)} },
+}
+
 // recvBuffer 是单条流的有界接收队列，容量以“字节”而不是“包数”计。
 //
-// 旧实现用 chan []byte（容量 = window/split*4 = 512 个包）承载接收数据，
-// 与基于字节的流控窗口是两套计量单位：1 字节的小包只需 512 字节就会占满
-// 队列，导致一条只传了几百字节的流被误判为拥塞并被关闭。
-//
-// 新实现的约束：
+// 约束：
 //   - 以字节数为上限，与发送端窗口同量纲，合法对端永远不会溢出；
-//   - append 永不阻塞，避免单条慢流把 dispatcher goroutine 拖住（跨流队头阻塞）；
-//   - 大包零拷贝入队，小包合并，出队消费后 Buffer 归还 packet 池。
+//   - append 永不阻塞，避免单条慢流把 dispatcher goroutine 拖住；
+//   - 大包零拷贝入队，小包合并，出队消费后 Frame 归还池子。
 type recvBuffer struct {
 	mu     sync.Mutex
-	chunks []*packet.Buffer
+	chunks []*recvChunk
 	head   int
 	bytes  int
 	limit  int
@@ -67,10 +75,11 @@ func newRecvBuffer(limit int32) *recvBuffer {
 	}
 }
 
-// append 入队一个数据包。返回 nil 表示所有权已转移给队列
-// （小包合并时队列会自行归还入参 Buffer）；返回错误时调用方仍持有 Buffer。
-func (q *recvBuffer) append(buf *packet.Buffer) error {
-	n := len(buf.Payload)
+// append queues a data frame. It returns nil when ownership transferred to the
+// queue (coalesced frames are released by the queue); on error the caller still
+// owns the frame.
+func (q *recvBuffer) append(f *wire.Frame) error {
+	n := len(f.Payload())
 	if n == 0 {
 		return errEmptyPayload
 	}
@@ -86,18 +95,23 @@ func (q *recvBuffer) append(buf *packet.Buffer) error {
 	}
 
 	queued := false
-	if n < coalesceThreshold {
-		queued = q.coalesceLocked(buf.Payload)
+	// Only coalesce when the queue is already backed up. If the consumer has
+	// caught up, keep the small frame zero-copy: allocating a 16KB chunk for a
+	// 64B request/response is worse than one extra frame object.
+	if n < coalesceThreshold && q.bytes > 0 {
+		queued = q.coalesceLocked(f.Payload())
 	}
 	if !queued {
-		q.chunks = append(q.chunks, buf)
+		c := recvChunkPool.Get().(*recvChunk)
+		c.data = f.Payload()
+		c.frame = f
+		q.chunks = append(q.chunks, c)
 	}
 	q.bytes += n
 	q.mu.Unlock()
 
 	if queued {
-		// payload 已复制进尾部 chunk，入参可以立即归还池子
-		packet.PutBuffer(buf)
+		f.Release()
 	}
 	q.signal()
 	return nil
@@ -107,15 +121,20 @@ func (q *recvBuffer) append(buf *packet.Buffer) error {
 func (q *recvBuffer) coalesceLocked(p []byte) bool {
 	if len(q.chunks) > q.head {
 		tail := q.chunks[len(q.chunks)-1]
-		if cap(tail.Payload)-len(tail.Payload) >= len(p) {
-			tail.Payload = append(tail.Payload, p...)
+		if tail.frame == nil && cap(tail.data)-len(tail.data) >= len(p) {
+			tail.data = append(tail.data, p...)
 			return true
 		}
 	}
 
-	chunk := packet.GetBuffer()
-	chunk.Payload = make([]byte, 0, recvChunkSize)
-	chunk.Payload = append(chunk.Payload, p...)
+	chunk := recvChunkPool.Get().(*recvChunk)
+	chunk.frame = nil
+	if cap(chunk.data) < recvChunkSize {
+		chunk.data = make([]byte, 0, recvChunkSize)
+	} else {
+		chunk.data = chunk.data[:0]
+	}
+	chunk.data = append(chunk.data, p...)
 	q.chunks = append(q.chunks, chunk)
 	return true
 }
@@ -135,11 +154,16 @@ func (q *recvBuffer) read(p []byte) (int, error) {
 	total := 0
 	for total < len(p) && q.head < len(q.chunks) {
 		c := q.chunks[q.head]
-		n := copy(p[total:], c.Payload)
+		n := copy(p[total:], c.data)
 		total += n
-		c.Payload = c.Payload[n:]
-		if len(c.Payload) == 0 {
-			packet.PutBuffer(c)
+		c.data = c.data[n:]
+		if len(c.data) == 0 {
+			if c.frame != nil {
+				c.frame.Release()
+			}
+			c.data = nil
+			c.frame = nil
+			recvChunkPool.Put(c)
 			q.chunks[q.head] = nil
 			q.head++
 		}
@@ -173,12 +197,19 @@ func (q *recvBuffer) close() bool {
 	return true
 }
 
-// discard 释放尚未被消费的所有 Buffer（流完全关闭后调用）。
+// discard 释放尚未被消费的所有 chunk（流完全关闭后调用）。
 func (q *recvBuffer) discard() {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	for i := q.head; i < len(q.chunks); i++ {
-		packet.PutBuffer(q.chunks[i])
+		if c := q.chunks[i]; c != nil {
+			if c.frame != nil {
+				c.frame.Release()
+			}
+			c.data = nil
+			c.frame = nil
+			recvChunkPool.Put(c)
+		}
 	}
 	q.chunks = nil
 	q.head = 0

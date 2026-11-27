@@ -9,6 +9,7 @@ import (
 	"github.com/net-agent/flex/v3/internal/idpool"
 	"github.com/net-agent/flex/v3/internal/pending"
 	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v3/wire"
 )
 
 var (
@@ -98,13 +99,17 @@ func (w *Watcher) subscribe(op byte, timeout time.Duration, domains ...string) (
 	}
 	defer w.pending.Remove(port)
 
-	pbuf := packet.NewBufferWithCmd(packet.CmdSubscribePresence)
-	defer packet.PutBuffer(pbuf)
-	pbuf.SetSrc(w.host.GetIP(), port)
-	pbuf.SetDist(packet.SwitcherIP, 0)
 	req := packet.SubscribeRequest{Op: op, Domains: domains}
-	_ = pbuf.SetPayload(req.Encode())
-	if err = w.host.WriteBuffer(pbuf); err != nil {
+	f, err := wire.NewControl(
+		wire.CmdSubscribePresence,
+		wire.Addr{IP: w.host.GetIP(), Port: port},
+		wire.SwitcherAddr,
+		req.Encode(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if err = w.host.SendFrame(f); err != nil {
 		atomic.AddInt64(&w.host.failures.WatchFailed, 1)
 		return nil, err
 	}
@@ -126,34 +131,53 @@ func (w *Watcher) subscribe(op byte, timeout time.Duration, domains ...string) (
 	}
 }
 
-// handleAckSubscribePresence 处理 switcher 的订阅应答
-func (w *Watcher) handleAckSubscribePresence(pbuf *packet.Buffer) {
-	ack := packet.DecodeSubscribeACK(pbuf.Payload)
+// handleAckFrame handles a subscribe ACK. It is a control-lane handler.
+func (w *Watcher) handleAckFrame(f *wire.Frame) error {
+	ack := packet.DecodeSubscribeACK(f.Payload())
 	if !ack.OK {
-		_ = w.pending.Complete(pbuf.DistPort(), nil, errors.New(ack.Error))
-		return
+		_ = w.pending.Complete(f.Dst().Port, nil, errors.New(ack.Error))
+		return nil
 	}
-	_ = w.pending.Complete(pbuf.DistPort(), ack.States, nil)
+	_ = w.pending.Complete(f.Dst().Port, ack.States, nil)
+	return nil
 }
 
-// handleCmdNotifyPresence 处理 switcher 推送的上下线事件。
-// 事件先用于维护本地 PresenceView：stale 事件丢弃并静默；
-// version 跳变说明中间有事件缺失，触发该域名的自动重同步（事件本身不再投递，
-// 因为缺口期间的真实状态已不可知）；正常迁移才调用用户 handler。
-func (w *Watcher) handleCmdNotifyPresence(pbuf *packet.Buffer) {
-	ev := packet.DecodePresenceEvent(pbuf.Payload)
+// handleNotifyFrame handles a presence event. It is a control-lane handler.
+func (w *Watcher) handleNotifyFrame(f *wire.Frame) error {
+	ev := packet.DecodePresenceEvent(f.Payload())
 	applied, gap := w.view.applyEvent(ev)
 	if gap {
 		w.host.logger.Warn("presence event gap detected, resync", "domain", ev.Domain, "version", ev.Version)
 		w.resync(ev.Domain)
-		return
+		return nil
 	}
 	if !applied {
-		return
+		return nil
 	}
 	if fn := w.getHandler(); fn != nil {
 		fn(ev)
 	}
+	return nil
+}
+
+// handleAckSubscribePresence is the legacy packet.Buffer adapter.
+func (w *Watcher) handleAckSubscribePresence(pbuf *packet.Buffer) {
+	f, err := bufferToFrame(pbuf)
+	if err != nil {
+		return
+	}
+	_ = w.handleAckFrame(f)
+	f.Release()
+}
+
+// handleCmdNotifyPresence is the legacy packet.Buffer adapter.
+func (w *Watcher) handleCmdNotifyPresence(pbuf *packet.Buffer) {
+	f, err := bufferToFrame(pbuf)
+	if err != nil {
+		return
+	}
+	_ = w.handleNotifyFrame(f)
+	f.Release()
 }
 
 // resync 对指定域名发起一次 Watch 重同步（异步、按域名去重）。

@@ -6,6 +6,7 @@ import (
 	"sync/atomic"
 
 	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v3/wire"
 )
 
 var (
@@ -27,175 +28,191 @@ func newPacketRouter(registry *contextRegistry, logger *slog.Logger) *packetRout
 	}
 }
 
-// serve reads packets from ctx in a loop and routes each one.
+// serve reads frames from ctx and routes them.
 func (rt *packetRouter) serve(ctx *Context) error {
 	for {
-		pbuf, err := ctx.readBuffer()
+		f, err := ctx.readFrame()
 		if err != nil {
 			return err
 		}
-		if err := rt.checkSource(ctx, pbuf); err != nil {
+		if err := rt.checkSource(ctx, f); err != nil {
 			rt.logger.Warn("drop packet with spoofed source",
-				"ctx_id", ctx.id, "ctx_ip", ctx.IP, "src_ip", pbuf.SrcIP(),
-				"dist_ip", pbuf.DistIP(), "cmd", pbuf.CmdType())
-			packet.PutBuffer(pbuf)
+				"ctx_id", ctx.id, "ctx_ip", ctx.IP, "src_ip", f.Src().IP,
+				"dist_ip", f.Dst().IP, "cmd", f.Cmd())
+			f.Release()
 			continue
 		}
-		ctx.recordIncoming(pbuf)
+		ctx.recordIncoming(f)
 
-		if pbuf.DistIP() != packet.SwitcherIP {
+		if f.Dst().IP != wire.MaxIP {
 			// 需要保证发送顺序，不能使用协程并行
-			rt.forward(pbuf)
+			rt.forward(f)
 			continue
 		}
 
 		// 无需保证顺序
-		go rt.dispatch(ctx, pbuf)
+		go rt.dispatch(ctx, f)
 	}
 }
 
 // checkSource 校验入站包的源虚拟 IP 是否等于认证上下文分配的 IP。
 // 没有这一步时，任意已认证节点都能伪造 SrcIP/SrcPort，向其他节点的既有流
 // 注入数据（SID 由地址四元组构成，虚拟端口按序分配、可枚举）。
-func (rt *packetRouter) checkSource(ctx *Context, pbuf *packet.Buffer) error {
-	if pbuf.SrcIP() != ctx.IP {
+func (rt *packetRouter) checkSource(ctx *Context, f *wire.Frame) error {
+	if f.Src().IP != ctx.IP {
 		return errSourceAddress
 	}
 	return nil
 }
 
-// forward forwards a packet to its destination by IP lookup.
-// pbuf 在成功 enqueue 后所有权转移给目标 ctx；路由或入队失败时在此归还。
-func (rt *packetRouter) forward(pbuf *packet.Buffer) {
-	dist, err := rt.registry.lookupByIP(pbuf.DistIP())
+// forward forwards a frame to its destination by IP lookup. On success the
+// destination's Context.SendFrame takes ownership; on failure it is released.
+func (rt *packetRouter) forward(f *wire.Frame) {
+	dist, err := rt.registry.lookupByIP(f.Dst().IP)
 	if err != nil {
-		rt.logger.Warn("route pbuf failed", "src_ip", pbuf.SrcIP(), "dist_ip", pbuf.DistIP(), "cmd", pbuf.CmdType(), "error", err)
-		packet.PutBuffer(pbuf)
+		rt.logger.Warn("route frame failed", "src_ip", f.Src().IP, "dist_ip", f.Dst().IP, "cmd", f.Cmd(), "error", err)
+		f.Release()
 		return
 	}
-
-	err = dist.enqueueForward(pbuf)
-	if err != nil {
-		rt.logger.Warn("forward to dist failed", "src_ip", pbuf.SrcIP(), "dist_ip", pbuf.DistIP(), "error", err)
-		packet.PutBuffer(pbuf)
+	if err := dist.SendFrame(f); err != nil {
+		rt.logger.Warn("forward to dist failed", "src_ip", f.Src().IP, "dist_ip", f.Dst().IP, "error", err)
 	}
 }
 
-// dispatch handles packets addressed to the switcher itself.
-func (rt *packetRouter) dispatch(ctx *Context, pbuf *packet.Buffer) {
-	switch pbuf.CmdType() {
-	case packet.CmdOpenStream:
-		if !pbuf.IsACK() {
-			rt.handleOpenStream(ctx, pbuf)
+// dispatch handles frames addressed to the switcher itself. It owns f.
+func (rt *packetRouter) dispatch(ctx *Context, f *wire.Frame) {
+	switch f.Cmd().Type() {
+	case wire.Cmd(wire.CmdOpenStream):
+		if !f.IsAck() {
+			rt.handleOpenStream(ctx, f)
+			return
 		}
-
-	case packet.CmdPingDomain:
-		if pbuf.IsACK() {
-			rt.handleAckPingDomain(ctx, pbuf)
+	case wire.Cmd(wire.CmdPingDomain):
+		if f.IsAck() {
+			rt.handleAckPingDomain(ctx, f)
 		} else {
-			rt.handlePingDomain(ctx, pbuf)
+			rt.handlePingDomain(ctx, f)
 		}
-
-	case packet.CmdSubscribePresence:
-		if !pbuf.IsACK() {
-			rt.handleSubscribePresence(ctx, pbuf)
+		return
+	case wire.Cmd(wire.CmdSubscribePresence):
+		if !f.IsAck() {
+			rt.handleSubscribePresence(ctx, f)
+			return
 		}
 	}
+	f.Release()
 }
 
 // handleSubscribePresence 处理节点的 presence 订阅/退订请求。
 // SrcPort 原样回传给调用方，用于请求-应答关联。
-// pbuf 是终点消费（同步 decode 后不再引用），在此归还。
-func (rt *packetRouter) handleSubscribePresence(caller *Context, pbuf *packet.Buffer) {
-	req := packet.DecodeSubscribeRequest(pbuf.Payload)
-	ackPort := pbuf.SrcPort()
-	packet.PutBuffer(pbuf) // 终点消费完毕，归还（Put 后 Head 清零，字段须先取）
+func (rt *packetRouter) handleSubscribePresence(caller *Context, f *wire.Frame) {
+	req := packet.DecodeSubscribeRequest(f.Payload())
+	ackPort := f.Src().Port
+	f.Release()
 	rt.registry.presence.handleSubscribe(caller, req, ackPort)
 }
 
-// handlePingDomain resolves a domain and forwards the ping, or responds directly for empty domain.
-// pbuf 经改写后回投/转发（所有权随之转移）；入队失败的分支在此归还。
-func (rt *packetRouter) handlePingDomain(caller *Context, pbuf *packet.Buffer) {
-	domain := string(pbuf.Payload)
+// handlePingDomain resolves a domain and forwards the ping, or responds
+// directly for an empty domain. It owns f.
+func (rt *packetRouter) handlePingDomain(caller *Context, f *wire.Frame) {
+	domain := string(f.Payload())
 	if domain == "" {
-		pbuf.SwapSrcDist()
-		pbuf.SetCmd(pbuf.Cmd() | packet.CmdACKFlag)
-		_ = pbuf.SetPayload(nil)
-		if err := caller.enqueueForward(pbuf); err != nil {
-			rt.logger.Warn("ping reply enqueue failed", "ctx_id", caller.id, "domain", caller.Domain, "error", err)
-			packet.PutBuffer(pbuf)
+		reply, err := wire.NewControl(wire.AckPingDomain, f.Dst(), f.Src(), nil)
+		if err != nil {
+			f.Release()
+			return
+		}
+		f.Release()
+		if err := caller.SendFrame(reply); err != nil {
+			rt.logger.Warn("ping reply failed", "ctx_id", caller.id, "domain", caller.Domain, "error", err)
 		}
 		return
 	}
 
-	dist, err := rt.registry.lookupByDomain(string(pbuf.Payload))
+	dist, err := rt.registry.lookupByDomain(domain)
 	if err != nil {
-		pbuf.SwapSrcDist()
-		pbuf.SetCmd(pbuf.Cmd() | packet.CmdACKFlag)
-		_ = pbuf.SetPayload([]byte(err.Error()))
-		if err := caller.enqueueForward(pbuf); err != nil {
-			rt.logger.Warn("ping error reply enqueue failed", "ctx_id", caller.id, "domain", caller.Domain, "error", err)
-			packet.PutBuffer(pbuf)
+		reply, buildErr := wire.NewControl(wire.AckPingDomain, f.Dst(), f.Src(), []byte(err.Error()))
+		f.Release()
+		if buildErr != nil {
+			return
+		}
+		if sendErr := caller.SendFrame(reply); sendErr != nil {
+			rt.logger.Warn("ping error reply failed", "ctx_id", caller.id, "domain", caller.Domain, "error", sendErr)
 		}
 		return
 	}
 
-	pbuf.SetDistIP(dist.IP)
-	if err := dist.enqueueForward(pbuf); err != nil {
-		rt.logger.Warn("ping forward enqueue failed", "ctx_id", dist.id, "domain", dist.Domain, "error", err)
-		packet.PutBuffer(pbuf)
+	fwd, err := wire.NewControl(
+		wire.CmdPingDomain,
+		f.Src(),
+		wire.Addr{IP: dist.IP, Port: f.Dst().Port},
+		f.Payload(),
+	)
+	f.Release()
+	if err != nil {
+		return
+	}
+	if err := dist.SendFrame(fwd); err != nil {
+		rt.logger.Warn("ping forward failed", "ctx_id", dist.id, "domain", dist.Domain, "error", err)
 	}
 }
 
 // handleAckPingDomain delivers a ping response back to the waiting caller.
 // 投递成功时所有权转移给 ping 等待方；未投递（无等待者或等待方已超时）在此归还。
-func (rt *packetRouter) handleAckPingDomain(caller *Context, pbuf *packet.Buffer) {
-	if !caller.deliverPingResponse(pbuf.DistPort(), pbuf) {
-		rt.logger.Warn("port not found", "ctx_id", caller.id, "domain", caller.Domain, "port", pbuf.DistPort())
-		packet.PutBuffer(pbuf)
+func (rt *packetRouter) handleAckPingDomain(caller *Context, f *wire.Frame) {
+	if !caller.deliverPingResponse(f.Dst().Port, f) {
+		rt.logger.Warn("port not found", "ctx_id", caller.id, "domain", caller.Domain, "port", f.Dst().Port)
+		f.Release()
 	}
 }
 
-// handleOpenStream resolves the destination domain and forwards the open-stream request.
-// pbuf 经改写后回投/转发（所有权随之转移）；入队失败的分支在此归还。
-func (rt *packetRouter) handleOpenStream(caller *Context, pbuf *packet.Buffer) {
+// handleOpenStream resolves the destination domain and forwards the open-stream
+// request. It owns f.
+func (rt *packetRouter) handleOpenStream(caller *Context, f *wire.Frame) {
 	if limit := rt.maxStreams.Load(); limit > 0 && caller.streamCount() > limit {
 		rt.logger.Warn("stream quota exceeded",
 			"ctx_id", caller.id, "domain", caller.Domain, "active", caller.streamCount(), "limit", limit)
 		ack := packet.OpenStreamACK{Error: errStreamQuota.Error()}
-		pbuf.SetCmd(packet.AckOpenStream)
-		pbuf.SwapSrcDist()
-		_ = pbuf.SetPayload(ack.Encode())
-		pbuf.SetSrcIP(0)
-		if err := caller.enqueueForward(pbuf); err != nil {
-			rt.logger.Warn("stream quota reply enqueue failed", "ctx_id", caller.id, "error", err)
-			packet.PutBuffer(pbuf)
+		reply, err := wire.NewControl(wire.AckOpenStream, f.Dst(), f.Src(), ack.Encode())
+		f.Release()
+		if err != nil {
+			return
+		}
+		if err := caller.SendFrame(reply); err != nil {
+			rt.logger.Warn("stream quota reply failed", "ctx_id", caller.id, "error", err)
 		}
 		return
 	}
 
-	req := packet.DecodeOpenStreamRequest(pbuf.Payload)
+	req := packet.DecodeOpenStreamRequest(f.Payload())
 
 	distCtx, err := rt.registry.lookupByDomain(req.Domain)
 	if err != nil {
 		rt.logger.Warn("resolve domain failed", "caller_id", caller.id, "caller_domain", caller.Domain, "target_domain", req.Domain, "error", err)
 		ack := packet.OpenStreamACK{Error: errResolveDomainFailed.Error()}
-		pbuf.SetCmd(packet.AckOpenStream)
-		pbuf.SwapSrcDist()
-		_ = pbuf.SetPayload(ack.Encode())
-		pbuf.SetSrcIP(0)
-		if err := caller.enqueueForward(pbuf); err != nil {
-			rt.logger.Warn("open-stream error reply enqueue failed", "ctx_id", caller.id, "domain", caller.Domain, "error", err)
-			packet.PutBuffer(pbuf)
+		reply, buildErr := wire.NewControl(wire.AckOpenStream, f.Dst(), f.Src(), ack.Encode())
+		f.Release()
+		if buildErr != nil {
+			return
+		}
+		if sendErr := caller.SendFrame(reply); sendErr != nil {
+			rt.logger.Warn("open-stream error reply failed", "ctx_id", caller.id, "domain", caller.Domain, "error", sendErr)
 		}
 		return
 	}
 
 	fwd := packet.OpenStreamRequest{Domain: caller.Domain, WindowSize: req.WindowSize}
-	pbuf.SetDistIP(distCtx.IP)
-	_ = pbuf.SetPayload(fwd.Encode())
-	if err := distCtx.enqueueForward(pbuf); err != nil {
-		rt.logger.Warn("open-stream forward enqueue failed", "ctx_id", distCtx.id, "domain", distCtx.Domain, "error", err)
-		packet.PutBuffer(pbuf)
+	next, err := wire.NewControl(
+		wire.CmdOpenStream,
+		f.Src(),
+		wire.Addr{IP: distCtx.IP, Port: f.Dst().Port},
+		fwd.Encode(),
+	)
+	f.Release()
+	if err != nil {
+		return
+	}
+	if err := distCtx.SendFrame(next); err != nil {
+		rt.logger.Warn("open-stream forward failed", "ctx_id", distCtx.id, "domain", distCtx.Domain, "error", err)
 	}
 }

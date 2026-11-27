@@ -6,8 +6,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/net-agent/flex/v3/internal/admit"
+	domainpkg "github.com/net-agent/flex/v3/internal/domain"
 	"github.com/net-agent/flex/v3/packet"
+	"github.com/net-agent/flex/v3/wire"
 )
 
 const presenceEventQueueSize = 1024
@@ -123,7 +124,7 @@ func (pc *presenceCenter) purgeSubscriber(ip uint16) {
 func (pc *presenceCenter) handleSubscribe(ctx *Context, req packet.SubscribeRequest, ackPort uint16) {
 	normalized := make([]string, 0, len(req.Domains))
 	for _, d := range req.Domains {
-		nd, err := admit.NormalizeDomain(d)
+		nd, err := domainpkg.Normalize(d)
 		if err != nil {
 			pc.replySubscribeACK(ctx, ackPort, packet.SubscribeACK{OK: false, Error: err.Error()})
 			return
@@ -232,16 +233,18 @@ func (pc *presenceCenter) fanout(msg presenceMsg, version uint64, online bool) {
 		if !ok {
 			continue
 		}
-		pbuf := packet.NewBufferWithCmd(packet.CmdNotifyPresence)
-		pbuf.SetSrc(packet.SwitcherIP, 0)
-		pbuf.SetDist(subIP, 0)
-		if err := pbuf.SetPayload(payload); err != nil {
+		f, err := wire.NewControl(
+			wire.CmdNotifyPresence,
+			wire.Addr{IP: wire.MaxIP},
+			wire.Addr{IP: subIP},
+			payload,
+		)
+		if err != nil {
 			continue
 		}
-		if err := sub.ctx.enqueueForward(pbuf); err != nil {
-			pc.logger.Warn("presence notify enqueue failed, drop subscriber",
+		if err := sub.ctx.SendFrame(f); err != nil {
+			pc.logger.Warn("presence notify failed, drop subscriber",
 				"domain", msg.domain, "subscriber_ip", subIP, "error", err)
-			packet.PutBuffer(pbuf) // 未入队，所有权未转移
 			dead = append(dead, subIP)
 		}
 	}
@@ -316,16 +319,17 @@ func (pc *presenceCenter) handleSubscribeMsg(msg presenceMsg) {
 }
 
 func (pc *presenceCenter) replySubscribeACK(ctx *Context, ackPort uint16, ack packet.SubscribeACK) {
-	pbuf := packet.NewBufferWithCmd(packet.AckSubscribePresence)
-	pbuf.SetSrc(packet.SwitcherIP, 0)
-	pbuf.SetDist(ctx.IP, ackPort)
-	if err := pbuf.SetPayload(ack.Encode()); err != nil {
+	f, err := wire.NewControl(
+		wire.AckSubscribePresence,
+		wire.Addr{IP: wire.MaxIP},
+		wire.Addr{IP: ctx.IP, Port: ackPort},
+		ack.Encode(),
+	)
+	if err != nil {
 		pc.logger.Warn("presence subscribe ack encode failed", "ctx_id", ctx.id, "error", err)
-		packet.PutBuffer(pbuf)
 		return
 	}
-	if err := ctx.enqueueForward(pbuf); err != nil {
-		pc.logger.Warn("presence subscribe ack enqueue failed", "ctx_id", ctx.id, "error", err)
-		packet.PutBuffer(pbuf)
+	if err := ctx.SendFrame(f); err != nil {
+		pc.logger.Warn("presence subscribe ack failed", "ctx_id", ctx.id, "error", err)
 	}
 }

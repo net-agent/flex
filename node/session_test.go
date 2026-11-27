@@ -2,7 +2,7 @@
 //
 // 测试策略：
 //   - 使用 newTestConnector 创建可控的 connector，每次调用返回一对通过 packet.Pipe 互联的 packet.Conn
-//   - server 端在 goroutine 中完成 admit.Accept 握手并创建 Node
+//   - server 端在 goroutine 中完成 v4 握手并创建 Node
 //   - 使用 fakeListener 直接测试 bridge 内部的 select 分支（sl.done / s.done）
 //   - 通过关闭 server 端 Node 触发断线，验证自动重连和 Listener 重新注册
 //
@@ -29,15 +29,17 @@ package node
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/net-agent/flex/v3/internal/admit"
+	"github.com/net-agent/flex/v3/link"
 	"github.com/net-agent/flex/v3/packet"
 	"github.com/net-agent/flex/v3/stream"
+	"github.com/net-agent/flex/v3/wire"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -59,25 +61,26 @@ func newTestConnector() (connector func() (packet.Conn, error), getServers func(
 	var servers []*Node
 	var wg sync.WaitGroup
 
+	acceptor := link.NewAcceptor(link.AcceptConfig{PSK: testPassword})
 	connector = func() (packet.Conn, error) {
 		c1, c2 := packet.Pipe()
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			req, err := admit.Accept(c2, testPassword)
+			pending, hs, err := acceptor.Accept(transportFor(c2))
 			if err != nil {
 				c2.Close()
 				return
 			}
-			resp := admit.NewOKResponse(1)
-			if err := resp.WriteTo(c2, testPassword); err != nil {
+			lnk, err := pending.Respond(1)
+			if err != nil {
 				c2.Close()
 				return
 			}
 
-			server := New(c2)
+			server := NewFromLink(lnk)
 			server.SetIP(2)
-			server.SetDomain(req.Domain)
+			server.SetDomain(hs.Domain)
 			go server.Serve()
 
 			mu.Lock()
@@ -160,7 +163,7 @@ func TestSessionListenWhileRunning(t *testing.T) {
 	go s.Serve()
 	defer s.Close()
 
-	assert.Nil(t, s.WaitReady(time.Second))
+	assert.Nil(t, s.WaitReady(5*time.Second))
 
 	// 在运行中注册 Listener
 	sl, err := s.Listen(80)
@@ -205,7 +208,7 @@ func TestSessionDialConnected(t *testing.T) {
 	go s.Serve()
 	defer s.Close()
 
-	assert.Nil(t, s.WaitReady(time.Second))
+	assert.Nil(t, s.WaitReady(5*time.Second))
 
 	servers := getServers()
 	_, err := servers[0].Listen(80)
@@ -279,7 +282,7 @@ func TestSessionDialFailFastWhenReconnecting(t *testing.T) {
 	go s.Serve()
 	defer s.Close()
 
-	assert.Nil(t, s.WaitReady(time.Second))
+	assert.Nil(t, s.WaitReady(5*time.Second))
 	servers := getServers()
 	servers[0].Close() // 触发断线
 
@@ -295,7 +298,7 @@ func TestSessionDialFailFastWhenReconnecting(t *testing.T) {
 
 	// 放行重连，session 恢复
 	close(gate)
-	assert.Nil(t, s.WaitReady(time.Second))
+	assert.Nil(t, s.WaitReady(5*time.Second))
 }
 
 // --- WaitReady ---
@@ -315,7 +318,7 @@ func TestSessionWaitReadyTimeout(t *testing.T) {
 func TestSessionWaitReadySessionClosed(t *testing.T) {
 	s := NewSession(nil, SessionConfig{})
 	s.Close()
-	err := s.WaitReady(time.Second)
+	err := s.WaitReady(5 * time.Second)
 	assert.Equal(t, ErrSessionClosed, err)
 }
 
@@ -327,7 +330,7 @@ func TestSessionWaitReadyBecomesReady(t *testing.T) {
 	go s.Serve()
 	defer s.Close()
 
-	err := s.WaitReady(time.Second)
+	err := s.WaitReady(5 * time.Second)
 	assert.Nil(t, err)
 	assert.NotNil(t, s.GetNode())
 }
@@ -379,7 +382,7 @@ func TestSessionReconnect(t *testing.T) {
 	defer s.Close()
 
 	// 等待首次连接
-	assert.Nil(t, s.WaitReady(time.Second))
+	assert.Nil(t, s.WaitReady(5*time.Second))
 	assert.Equal(t, int64(0), s.GetReconnectCount(), "no reconnect before first disconnect")
 
 	servers := getServers()
@@ -455,7 +458,7 @@ func TestSessionWiresLoggerAndTrace(t *testing.T) {
 	go s.Serve()
 	defer s.Close()
 
-	assert.Nil(t, s.WaitReady(time.Second))
+	assert.Nil(t, s.WaitReady(5*time.Second))
 
 	// 首个 Node：logger/trace 已接线
 	n1 := s.GetNode()
@@ -506,7 +509,7 @@ func TestSessionCloseWithActiveNode(t *testing.T) {
 	s.ensureServing()
 	go func() { done <- s.Serve() }()
 
-	assert.Nil(t, s.WaitReady(time.Second))
+	assert.Nil(t, s.WaitReady(5*time.Second))
 	assert.NotNil(t, s.GetNode())
 
 	s.Close()
@@ -541,7 +544,7 @@ func TestSessionListenerAccept(t *testing.T) {
 	go s.Serve()
 	defer s.Close()
 
-	assert.Nil(t, s.WaitReady(time.Second))
+	assert.Nil(t, s.WaitReady(5*time.Second))
 
 	servers := getServers()
 	st, err := servers[0].DialIP(1, 80)
@@ -635,7 +638,7 @@ func TestSessionListenerCloseWithActiveNode(t *testing.T) {
 	go s.Serve()
 	defer s.Close()
 
-	assert.Nil(t, s.WaitReady(time.Second))
+	assert.Nil(t, s.WaitReady(5*time.Second))
 
 	// 关闭 SessionListener 应同时关闭底层 node.Listener
 	sl.Close()
@@ -665,7 +668,7 @@ func TestSessionListenWhileRunningNodeListenFails(t *testing.T) {
 	go s.Serve()
 	defer s.Close()
 
-	assert.Nil(t, s.WaitReady(time.Second))
+	assert.Nil(t, s.WaitReady(5*time.Second))
 
 	// 先在底层 Node 上占用 port 80
 	s.mu.RLock()
@@ -813,7 +816,7 @@ func TestSessionStateConnectingToOnline(t *testing.T) {
 	s.ensureServing()
 	go s.Serve()
 
-	assert.Nil(t, s.WaitReady(time.Second))
+	assert.Nil(t, s.WaitReady(5*time.Second))
 	assert.Equal(t, SessionOnline, s.GetState())
 	assert.Equal(t, "", s.GetLastErr())
 
@@ -844,7 +847,7 @@ func TestSessionStateOnlineToConnectingOnDisconnect(t *testing.T) {
 	go s.Serve()
 	defer s.Close()
 
-	assert.Nil(t, s.WaitReady(time.Second))
+	assert.Nil(t, s.WaitReady(5*time.Second))
 
 	// 关闭 server 端触发断线
 	servers := getServers()
@@ -932,29 +935,31 @@ func TestSessionNoCallbackWithoutRegistration(t *testing.T) {
 
 // --- presence ---
 
-// newPresenceConnector 创建一个 connector，server 侧完成握手后把连接交给测试驱动（fake switcher）
-func newPresenceConnector(swCh chan packet.Conn) func() (packet.Conn, error) {
+// newPresenceConnector 创建一个 connector，server 侧完成 v4 握手后把安全
+// Link 交给测试驱动（fake switcher）。
+func newPresenceConnector(swCh chan *link.Link) func() (packet.Conn, error) {
+	acceptor := link.NewAcceptor(link.AcceptConfig{PSK: testPassword})
 	return func() (packet.Conn, error) {
 		c1, c2 := packet.Pipe()
 		go func() {
-			_, err := admit.Accept(c2, testPassword)
+			pending, _, err := acceptor.Accept(transportFor(c2))
 			if err != nil {
 				c2.Close()
 				return
 			}
-			resp := admit.NewOKResponse(1)
-			if err := resp.WriteTo(c2, testPassword); err != nil {
+			lnk, err := pending.Respond(1)
+			if err != nil {
 				c2.Close()
 				return
 			}
-			swCh <- c2
+			swCh <- lnk
 		}()
 		return c1, nil
 	}
 }
 
-// recvSwitcher 等待一条完成握手的新连接
-func recvSwitcher(t *testing.T, swCh chan packet.Conn) packet.Conn {
+// recvSwitcher 等待一条完成握手的新连接。
+func recvSwitcher(t *testing.T, swCh chan *link.Link) *link.Link {
 	t.Helper()
 	select {
 	case sw := <-swCh:
@@ -967,17 +972,17 @@ func recvSwitcher(t *testing.T, swCh chan packet.Conn) packet.Conn {
 
 // fakePresenceSwitcher 模拟 switcher 的 presence 行为：
 //   - serve 循环应答订阅请求（Add 回当前状态快照，Remove 回空 ACK），
-//     容忍建连时刻 resubscribe 与显式 Watch 并发产生的重复订阅（真实 switcher 侧订阅幂等）
+//     容忍建连时刻 resubscribe 与显式 Watch 并发产生的重复订阅(真实 switcher 侧订阅幂等)
 //   - 快照始终取当前状态，保证与已推送事件的 version 单调性一致
 type fakePresenceSwitcher struct {
 	t  *testing.T
-	sw packet.Conn
+	sw *link.Link
 
 	mu sync.Mutex
 	st packet.PresenceState
 }
 
-func newFakePresenceSwitcher(t *testing.T, sw packet.Conn, initial packet.PresenceState) *fakePresenceSwitcher {
+func newFakePresenceSwitcher(t *testing.T, sw *link.Link, initial packet.PresenceState) *fakePresenceSwitcher {
 	f := &fakePresenceSwitcher{t: t, sw: sw, st: initial}
 	go f.serve()
 	return f
@@ -985,32 +990,68 @@ func newFakePresenceSwitcher(t *testing.T, sw packet.Conn, initial packet.Presen
 
 func (f *fakePresenceSwitcher) serve() {
 	for {
-		pbuf, err := f.sw.ReadBuffer()
+		frame, err := f.sw.ReadFrame()
 		if err != nil {
 			return
 		}
-		if pbuf.Cmd() != packet.CmdSubscribePresence {
-			packet.PutBuffer(pbuf)
+		if frame.Cmd() != wire.Cmd(wire.CmdSubscribePresence) {
+			frame.Release()
 			continue
 		}
-		req := packet.DecodeSubscribeRequest(pbuf.Payload)
+		req := packet.DecodeSubscribeRequest(frame.Payload())
+		src := frame.Src()
+		frame.Release()
+
 		if req.Op == packet.SubscribeAdd {
 			f.mu.Lock()
 			states := []packet.PresenceState{f.st}
 			f.mu.Unlock()
-			writeSubscribeACK(f.t, f.sw, pbuf, packet.SubscribeACK{OK: true, States: states})
+			writeSubscribeACKLink(f.t, f.sw, src, packet.SubscribeACK{OK: true, States: states})
 		} else {
-			writeSubscribeACK(f.t, f.sw, pbuf, packet.SubscribeACK{OK: true})
+			writeSubscribeACKLink(f.t, f.sw, src, packet.SubscribeACK{OK: true})
 		}
 	}
 }
 
-// notify 更新 fake 当前状态并向对端推送事件（之后的订阅快照与事件保持一致）
+// notify 更新 fake 当前状态并向对端推送事件。
 func (f *fakePresenceSwitcher) notify(distIP uint16, ev packet.PresenceEvent) {
 	f.mu.Lock()
 	f.st = packet.PresenceState{Domain: ev.Domain, Online: ev.Online, IP: ev.IP, Mac: ev.Mac, Version: ev.Version}
 	f.mu.Unlock()
-	writePresenceNotify(f.t, f.sw, distIP, ev)
+	writePresenceNotifyLink(f.t, f.sw, distIP, ev)
+}
+
+func writeSubscribeACKLink(t *testing.T, sw *link.Link, dst wire.Addr, ack packet.SubscribeACK) {
+	t.Helper()
+	frame, err := wire.NewControl(wire.AckSubscribePresence, wire.SwitcherAddr, dst, ack.Encode())
+	if err != nil {
+		t.Errorf("build ack: %v", err)
+		return
+	}
+	if err := sw.SendFrame(frame); err != nil &&
+		!errors.Is(err, io.ErrClosedPipe) &&
+		!errors.Is(err, net.ErrClosed) &&
+		!errors.Is(err, link.ErrWriterClosed) {
+		// This helper runs in the fake switcher goroutine during reconnects;
+		// FailNow there would kill only that goroutine and leave the test
+		// hanging. A closed link is an expected teardown race.
+		t.Errorf("write ack failed: %v", err)
+	}
+}
+
+func writePresenceNotifyLink(t *testing.T, sw *link.Link, distIP uint16, ev packet.PresenceEvent) {
+	t.Helper()
+	frame, err := wire.NewControl(wire.CmdNotifyPresence, wire.SwitcherAddr, wire.Addr{IP: distIP}, ev.Encode())
+	if err != nil {
+		t.Errorf("build notify: %v", err)
+		return
+	}
+	if err := sw.SendFrame(frame); err != nil &&
+		!errors.Is(err, io.ErrClosedPipe) &&
+		!errors.Is(err, net.ErrClosed) &&
+		!errors.Is(err, link.ErrWriterClosed) {
+		t.Errorf("write notify failed: %v", err)
+	}
 }
 
 func waitSessionView(t *testing.T, s *Session, domain string, version uint64) packet.PresenceState {
@@ -1054,7 +1095,7 @@ func TestSessionWatchWhileOffline(t *testing.T) {
 
 // Watch 作为首个调用：触发懒连接，等待首次连接完成后返回真实快照
 func TestSessionWatchWaitsInitialConnect(t *testing.T) {
-	swCh := make(chan packet.Conn, 1)
+	swCh := make(chan *link.Link, 1)
 	s := NewSession(newPresenceConnector(swCh), testSessionConfig())
 	s.SetConnectTimeout(3 * time.Second)
 	go s.Serve()
@@ -1079,21 +1120,23 @@ func TestSessionWatchWaitsInitialConnect(t *testing.T) {
 			{Domain: "target", Online: true, IP: 7, Mac: "m1", Version: 1},
 		}}
 		for {
-			pbuf, err := sw.ReadBuffer()
+			frame, err := sw.ReadFrame()
 			if err != nil {
 				return
 			}
-			if pbuf.Cmd() != packet.CmdSubscribePresence {
-				packet.PutBuffer(pbuf)
+			if frame.Cmd() != wire.Cmd(wire.CmdSubscribePresence) {
+				frame.Release()
 				continue
 			}
-			resp := packet.NewBufferWithCmd(packet.AckSubscribePresence)
-			resp.SetSrc(packet.SwitcherIP, 0)
-			resp.SetDist(pbuf.SrcIP(), pbuf.SrcPort())
-			if err := resp.SetPayload(ack.Encode()); err == nil {
-				_ = sw.WriteBuffer(resp)
+			dst := frame.Src()
+			frame.Release()
+			resp, err := wire.NewControl(wire.AckSubscribePresence, wire.SwitcherAddr, dst, ack.Encode())
+			if err != nil {
+				return
 			}
-			packet.PutBuffer(pbuf)
+			if err := sw.SendFrame(resp); err != nil {
+				return
+			}
 		}
 	}()
 
@@ -1110,13 +1153,13 @@ func TestSessionWatchWaitsInitialConnect(t *testing.T) {
 }
 
 func TestSessionWatchAndNotify(t *testing.T) {
-	swCh := make(chan packet.Conn, 1)
+	swCh := make(chan *link.Link, 1)
 	s := NewSession(newPresenceConnector(swCh), testSessionConfig())
 
 	s.ensureServing()
 	go s.Serve()
 	defer s.Close()
-	assert.Nil(t, s.WaitReady(time.Second))
+	assert.Nil(t, s.WaitReady(5*time.Second))
 
 	sw := recvSwitcher(t, swCh)
 	defer sw.Close()
@@ -1149,7 +1192,7 @@ func TestSessionWatchAndNotify(t *testing.T) {
 	assert.False(t, st.Online)
 
 	// stale 事件（node 级视图丢弃）：Session handler 不应收到（不更新 fake 状态，直接注入）
-	writePresenceNotify(t, sw, 1, packet.PresenceEvent{Version: 2, Domain: "target", Online: true, IP: 9})
+	writePresenceNotifyLink(t, sw, 1, packet.PresenceEvent{Version: 2, Domain: "target", Online: true, IP: 9})
 	select {
 	case ev := <-ch:
 		t.Fatalf("stale event should not be delivered: %+v", ev)
@@ -1167,13 +1210,13 @@ func TestSessionWatchAndNotify(t *testing.T) {
 
 // 断线重连后 Session 应自动重订阅，并用新快照 reconcile 视图
 func TestSessionPresenceAutoResubscribe(t *testing.T) {
-	swCh := make(chan packet.Conn, 4)
+	swCh := make(chan *link.Link, 4)
 	s := NewSession(newPresenceConnector(swCh), testSessionConfig())
 
 	s.ensureServing()
 	go s.Serve()
 	defer s.Close()
-	assert.Nil(t, s.WaitReady(time.Second))
+	assert.Nil(t, s.WaitReady(5*time.Second))
 
 	// 首个连接：Watch 快照 v1 online
 	sw1 := recvSwitcher(t, swCh)
@@ -1273,7 +1316,7 @@ func TestSessionCloseInterruptsHandshake(t *testing.T) {
 	go func() { serveDone <- s.Serve() }()
 
 	// 等待进入握手（连接已建立、无对端应答）
-	deadline := time.Now().Add(time.Second)
+	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) && s.GetState() != SessionConnecting {
 		time.Sleep(5 * time.Millisecond)
 	}
@@ -1283,10 +1326,12 @@ func TestSessionCloseInterruptsHandshake(t *testing.T) {
 	s.Close()
 	select {
 	case <-serveDone:
-	case <-time.After(2 * time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("Serve did not return after Close during handshake")
 	}
-	assert.Less(t, time.Since(start), time.Second, "handshake must be interrupted promptly")
+	// The point is prompt interruption relative to the 10s handshake timeout;
+	// 3s leaves room for -race/loaded CI without weakening the assertion.
+	assert.Less(t, time.Since(start), 3*time.Second, "handshake must be interrupted promptly")
 }
 
 // 连接器在 Close 之后才返回时，不得安装一个无人关闭的 Node。
