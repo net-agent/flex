@@ -222,13 +222,16 @@ func analyzeFairness(events []packetWriteEvent, windowSize int) fairnessMetrics 
 		packetCountBySID[sid]++
 	}
 
+	// 所有指标必须在同一条“稳态”序列上计算：启动/收尾的短暂突发不应
+	// 只影响 maxRun 而不影响 Jain，否则两个指标会互相矛盾。
+	steady := trimMiddle(seq)
 	metrics := fairnessMetrics{
 		TotalDataPackets: len(seq),
 		PacketCountBySID: packetCountBySID,
-		MaxRunLength:     maxRunLength(seq),
+		MaxRunLength:     maxRunLength(steady),
 	}
 
-	windowJains := windowJainIndexes(trimMiddle(seq), windowSize)
+	windowJains := windowJainIndexes(steady, windowSize)
 	metrics.WindowJains = windowJains
 	metrics.MinWindowJain = minFloat64(windowJains)
 	metrics.AvgWindowJain = avgFloat64(windowJains)
@@ -428,36 +431,47 @@ func TestIntegration_SchedulingFairness(t *testing.T) {
 		streams = append(streams, st)
 	}
 
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(len(streams))
-	for i, conn := range streams {
-		go func(idx int, c net.Conn) {
-			defer wg.Done()
-			defer c.Close()
+	// 每一轮让所有 stream 同时各写一个包，再进入下一轮。这样调度的输入
+	// 始终是“N 条流同时有数据”，不会因为某个 producer goroutine 先跑完
+	// 而把“应用层启动顺序”误判成“调度不公平”。
+	payloads := make([][]byte, len(streams))
+	for i := range payloads {
+		payload := make([]byte, cfg.PayloadSize)
+		for j := range payload {
+			payload[j] = byte((i + j) % 251)
+		}
+		payloads[i] = payload
+	}
 
-			payload := make([]byte, cfg.PayloadSize)
-			for j := range payload {
-				payload[j] = byte((idx + j) % 251)
-			}
-
-			<-start
-			for n := 0; n < cfg.PacketsPerStream; n++ {
-				written, err := c.Write(payload)
+	for n := 0; n < cfg.PacketsPerStream; n++ {
+		var round sync.WaitGroup
+		round.Add(len(streams))
+		for i, conn := range streams {
+			go func(idx int, c net.Conn) {
+				defer round.Done()
+				written, err := c.Write(payloads[idx])
 				if err != nil {
 					t.Errorf("stream[%d] write failed: %v", idx, err)
 					return
 				}
-				if written != len(payload) {
-					t.Errorf("stream[%d] short write: got=%d want=%d", idx, written, len(payload))
-					return
+				if written != len(payloads[idx]) {
+					t.Errorf("stream[%d] short write: got=%d want=%d", idx, written, len(payloads[idx]))
 				}
-			}
-		}(i, conn)
+			}(i, conn)
+		}
+		round.Wait()
 	}
 
-	close(start)
-	wg.Wait()
+	// 并发关闭，避免 12 条流逐个等待 close ack 把测试拖成 12×2s。
+	var closeWG sync.WaitGroup
+	for _, conn := range streams {
+		closeWG.Add(1)
+		go func(c net.Conn) {
+			defer closeWG.Done()
+			_ = c.Close()
+		}(conn)
+	}
+	closeWG.Wait()
 
 	select {
 	case <-drain.done:

@@ -28,11 +28,12 @@ func TestRouterPingDomain(t *testing.T) {
 		return
 	}
 
-	// 测试用例：发送一个pbuf到未知的ip，触发route pbuf failed
-	pbuf := packet.NewBuffer()
-	pbuf.SetDist(100, 100)
-	err = node1.WriteBuffer(pbuf)
-	if err != nil {
+	// 测试用例：发送一个数据帧到未知虚拟 IP，触发 route failed。
+	// 注意：不能使用零值 packet.NewBuffer()，其 Cmd=0 即 CmdAdmit（握手类），
+	// 会被对端安全层当作非法握手帧并关闭链路。
+	pbuf := packet.NewBufferWithCmd(packet.CmdPushStreamData)
+	pbuf.SetHeader(packet.CmdPushStreamData, 100, 100, node1.GetIP(), 1000)
+	if err := node1.WriteBuffer(pbuf); err != nil {
 		t.Errorf("unexpected err=%v\n", err)
 		return
 	}

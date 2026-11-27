@@ -15,16 +15,16 @@ import (
 )
 
 func TestServerRun(t *testing.T) {
-	addr := "localhost:39603"
 	pswd := "testpswd"
 	s := NewServer(pswd, nil, nil)
 	s.Close() // 提高代码覆盖度
 
-	l, err := net.Listen("tcp", addr)
+	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Errorf("listen failed. err=%v\n", err)
 		return
 	}
+	addr := l.Addr().String()
 	go s.Serve(l)
 	go s.Serve(l) // 提高代码覆盖度
 

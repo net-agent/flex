@@ -8,6 +8,7 @@ import (
 	"github.com/net-agent/flex/v3/internal/pending"
 	"github.com/net-agent/flex/v3/packet"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPingDomain(t *testing.T) {
@@ -76,15 +77,14 @@ func TestPingDomain_EmptyDomainLiveness(t *testing.T) {
 
 // 回归：README 的直连模式（无 switcher）在空闲一个心跳周期后会被误关闭。
 func TestDirectModeHeartbeatKeepsNodeAlive(t *testing.T) {
-	old := DefaultHeartbeatInterval
-	DefaultHeartbeatInterval = 50 * time.Millisecond
-	defer func() { DefaultHeartbeatInterval = old }()
-
 	c1, c2 := packet.Pipe()
-	n1 := New(c1)
+	const heartbeat = 50 * time.Millisecond
+	n1, err := NewWithOptions(c1, 1000, 0xFFFF, heartbeat)
+	require.NoError(t, err)
 	n1.SetDomain("direct-a")
 	n1.SetIP(1)
-	n2 := New(c2)
+	n2, err := NewWithOptions(c2, 1000, 0xFFFF, heartbeat)
+	require.NoError(t, err)
 	n2.SetDomain("direct-b")
 	n2.SetIP(2)
 	defer n1.Close()

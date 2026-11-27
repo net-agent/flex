@@ -1,8 +1,11 @@
 package idpool
 
 import (
+	"fmt"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestNewValidRange(t *testing.T) {
@@ -133,10 +136,12 @@ func TestInUse(t *testing.T) {
 }
 
 func TestConcurrentAllocateRelease(t *testing.T) {
-	p, _ := New(0, 0xFFFF)
+	p, err := New(0, 0xFFFF)
+	require.NoError(t, err)
 	const goroutines = 100
 	const opsPerGoroutine = 100
 
+	errCh := make(chan error, goroutines)
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
 	for i := 0; i < goroutines; i++ {
@@ -145,13 +150,23 @@ func TestConcurrentAllocateRelease(t *testing.T) {
 			for j := 0; j < opsPerGoroutine; j++ {
 				id, err := p.Allocate()
 				if err != nil {
+					errCh <- fmt.Errorf("allocate: %w", err)
 					return
 				}
-				p.Release(id)
+				if err := p.Release(id); err != nil {
+					errCh <- fmt.Errorf("release %d: %w", id, err)
+					return
+				}
 			}
 		}()
 	}
 	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+	require.Equal(t, 0, p.InUse())
 }
 
 // 回归：资源所有权在超时路径与关闭路径之间竞争时，第二次释放会归还
@@ -204,4 +219,127 @@ func TestLeaseNilSafe(t *testing.T) {
 	if l.ID() != 0 || !l.Released() {
 		t.Fatal("nil lease should report zero id and released state")
 	}
+}
+
+func TestCapacity(t *testing.T) {
+	tests := []struct {
+		name string
+		min  uint16
+		max  uint16
+		want int
+	}{
+		{name: "single id", min: 5, max: 5, want: 1},
+		{name: "ten ids", min: 1, max: 10, want: 10},
+		{name: "full uint16 range", min: 0, max: 0xFFFF, want: 1 << 16},
+		{name: "high endpoint singleton", min: 0xFFFF, max: 0xFFFF, want: 1},
+		{name: "two ids at the high endpoint", min: 0xFFFE, max: 0xFFFF, want: 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p, err := New(tt.min, tt.max)
+			require.NoError(t, err)
+			require.Equal(t, tt.want, p.Capacity())
+		})
+	}
+}
+
+func TestAcquireExhausted(t *testing.T) {
+	p, err := New(1, 1)
+	require.NoError(t, err)
+
+	lease, err := p.Acquire()
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), lease.ID())
+	require.False(t, lease.Released())
+
+	exhausted, err := p.Acquire()
+	require.ErrorIs(t, err, ErrPoolExhausted)
+	require.Nil(t, exhausted, "a failed Acquire must not return a lease")
+	require.Equal(t, 1, p.InUse())
+	require.Equal(t, 1, p.Capacity())
+
+	require.NoError(t, lease.Release())
+	require.True(t, lease.Released())
+	require.Equal(t, 0, p.InUse())
+
+	again, err := p.Acquire()
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), again.ID(), "the released id must be reusable")
+	require.NoError(t, again.Release())
+}
+
+func TestHighEndpointAllocation(t *testing.T) {
+	p, err := New(0xFFFE, 0xFFFF)
+	require.NoError(t, err)
+	require.Equal(t, 2, p.Capacity())
+
+	first, err := p.Allocate()
+	require.NoError(t, err)
+	require.Equal(t, uint16(0xFFFE), first)
+
+	second, err := p.Allocate()
+	require.NoError(t, err)
+	require.Equal(t, uint16(0xFFFF), second)
+
+	// The monotonically increasing next counter must not wrap to 0.
+	_, err = p.Allocate()
+	require.ErrorIs(t, err, ErrPoolExhausted)
+
+	require.NoError(t, p.Release(0xFFFE))
+	require.NoError(t, p.Release(0xFFFF))
+	require.Equal(t, 0, p.InUse())
+
+	recycled := map[uint16]bool{}
+	for i := 0; i < 2; i++ {
+		id, err := p.Allocate()
+		require.NoError(t, err)
+		recycled[id] = true
+	}
+	require.Equal(t, map[uint16]bool{0xFFFE: true, 0xFFFF: true}, recycled)
+
+	_, err = p.Allocate()
+	require.ErrorIs(t, err, ErrPoolExhausted, "recycled high-endpoint ids must not duplicate")
+}
+
+func TestLeaseConcurrentDuplicateReleaseDoesNotFreeReplacement(t *testing.T) {
+	p, err := New(1, 1)
+	require.NoError(t, err)
+
+	old, err := p.Acquire()
+	require.NoError(t, err)
+	require.NoError(t, old.Release())
+
+	cur, err := p.Acquire()
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), cur.ID())
+
+	const goroutines = 64
+	var wg sync.WaitGroup
+	errCh := make(chan error, goroutines)
+	for i := 0; i < goroutines; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errCh <- old.Release()
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+
+	for err := range errCh {
+		require.NoError(t, err, "duplicate lease release must stay nil-safe")
+	}
+
+	require.Equal(t, 1, p.InUse(), "late duplicate releases must not free the replacement lease")
+	require.False(t, cur.Released())
+	_, err = p.Allocate()
+	require.ErrorIs(t, err, ErrPoolExhausted)
+
+	require.NoError(t, cur.Release())
+	require.True(t, cur.Released())
+	require.Equal(t, 0, p.InUse())
+
+	reused, err := p.Allocate()
+	require.NoError(t, err)
+	require.Equal(t, uint16(1), reused)
 }

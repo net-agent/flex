@@ -33,14 +33,16 @@ func TestReader_ReadBuffer(t *testing.T) {
 				require.NoError(t, sent.SetPayload(tt.payload))
 			}
 
-			go func() {
-				require.NoError(t, c1.WriteBuffer(sent))
-			}()
+			errCh := make(chan error, 1)
+			go func() { errCh <- c1.WriteBuffer(sent) }()
 
 			recv, err := c2.ReadBuffer()
 			require.NoError(t, err)
+			require.NoError(t, <-errCh)
 			assert.Equal(t, sent.Head, recv.Head)
-			assert.Equal(t, sent.Payload, recv.Payload)
+			// A pooled reader may return a non-nil zero-length slice for an
+			// empty payload; compare bytes rather than nil-vs-empty slice identity.
+			assert.Equal(t, string(sent.Payload), string(recv.Payload))
 		})
 	}
 }
@@ -135,13 +137,21 @@ func TestReader_MultipleSequentialReads(t *testing.T) {
 	c1, c2 := Pipe()
 	const n = 10
 
+	errCh := make(chan error, 1)
 	go func() {
 		for i := range n {
 			buf := NewBufferWithCmd(CmdPushStreamData)
 			buf.SetSrcPort(uint16(i))
-			require.NoError(t, buf.SetPayload([]byte("data")))
-			require.NoError(t, c1.WriteBuffer(buf))
+			if err := buf.SetPayload([]byte("data")); err != nil {
+				errCh <- err
+				return
+			}
+			if err := c1.WriteBuffer(buf); err != nil {
+				errCh <- err
+				return
+			}
 		}
+		errCh <- nil
 	}()
 
 	for i := range n {

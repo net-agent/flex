@@ -16,7 +16,8 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version: '1.24'
+        go-version-file: go.mod
+        cache: true
 
     - name: Check formatting
       run: test -z "$(gofmt -l .)"
@@ -28,13 +29,15 @@ jobs:
       run: go run honnef.co/go/tools/cmd/staticcheck@2025.1.1 ./...
 
     - name: Test
-      run: go test -v -race ./...
+      run: go test -count=1 -race -shuffle=on -timeout 5m ./...
 
     - name: Check docs and examples
       run: ./scripts/check-docs.sh
 
     - name: Run Coverage
       run: ./coverage_test.sh
+      env:
+        COVERAGE_MIN: '95'
 
     - name: Upload Coverage to Codecov
       uses: codecov/codecov-action@v5

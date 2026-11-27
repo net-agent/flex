@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -51,19 +50,14 @@ func TestPipe_DataTransfer(t *testing.T) {
 	buf.SetHeader(packet.CmdPushStreamData, 0, 1, 2, 3)
 	require.NoError(t, buf.SetPayload(msg))
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		require.NoError(t, pc2.WriteBuffer(buf))
-	}()
+	errCh := make(chan error, 1)
+	go func() { errCh <- pc2.WriteBuffer(buf) }()
 
 	recvBuf, err := pc1.ReadBuffer()
 	require.NoError(t, err)
+	require.NoError(t, <-errCh)
 	assert.Equal(t, buf.Head, recvBuf.Head)
 	assert.True(t, bytes.Equal(buf.Payload, recvBuf.Payload))
-
-	wg.Wait()
 }
 
 func TestPipe_Bidirectional(t *testing.T) {
@@ -74,14 +68,16 @@ func TestPipe_Bidirectional(t *testing.T) {
 	ping := packet.NewBufferWithCmd(packet.CmdPingDomain)
 	pong := packet.NewBufferWithCmd(packet.AckPingDomain)
 
+	errCh := make(chan error, 2)
 	go func() {
-		require.NoError(t, pc1.WriteBuffer(ping))
-		require.NoError(t, pc2.WriteBuffer(pong))
+		errCh <- pc1.WriteBuffer(ping)
+		errCh <- pc2.WriteBuffer(pong)
 	}()
 
 	recv1, err := pc2.ReadBuffer()
 	require.NoError(t, err)
 	assert.Equal(t, packet.CmdPingDomain, recv1.Cmd())
+	require.NoError(t, <-errCh)
 
 	recv2, err := pc1.ReadBuffer()
 	require.NoError(t, err)
@@ -122,13 +118,15 @@ func TestReader_BadDataType(t *testing.T) {
 
 	pc := NewConn(client)
 
+	errCh := make(chan error, 1)
 	go func() {
 		// 发送文本帧，ReadBuffer 应返回 ErrBadDataType
-		require.NoError(t, server.WriteMessage(websocket.TextMessage, []byte("hi")))
+		errCh <- server.WriteMessage(websocket.TextMessage, []byte("hi"))
 	}()
 
 	_, err := pc.ReadBuffer()
 	assert.Equal(t, ErrBadDataType, err)
+	require.NoError(t, <-errCh)
 }
 
 // 回归：长度小于 11 字节的二进制帧曾直接 data[:11] 切片，触发
@@ -270,10 +268,10 @@ func TestWriter_SetWriteTimeout(t *testing.T) {
 	pc1.SetWriteTimeout(0) // 清除 deadline
 
 	buf := packet.NewBufferWithCmd(packet.CmdPingDomain)
-	go func() {
-		require.NoError(t, pc1.WriteBuffer(buf))
-	}()
+	errCh := make(chan error, 1)
+	go func() { errCh <- pc1.WriteBuffer(buf) }()
 
 	_, err := pc2.ReadBuffer()
 	assert.Nil(t, err, "write after clearing deadline should ok")
+	require.NoError(t, <-errCh)
 }

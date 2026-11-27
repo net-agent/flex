@@ -7,6 +7,7 @@ import (
 	"github.com/net-agent/flex/v3/link"
 	"github.com/net-agent/flex/v3/node"
 	"github.com/net-agent/flex/v3/packet"
+	"github.com/stretchr/testify/require"
 )
 
 func testDialLink(t *testing.T, pc packet.Conn, domain, pswd string) (*link.Link, uint16) {
@@ -41,7 +42,16 @@ func initTestEnv(t *testing.T, domain1, domain2 string) (*Server, *node.Node, *n
 	node2.SetDomain(domain2)
 	go node2.Serve()
 
-	<-time.After(time.Millisecond * 50)
+	t.Cleanup(func() {
+		_ = node1.Close()
+		_ = node2.Close()
+		_ = s.Close()
+	})
+
+	// 等两个 context 都完成注册，替代固定 50ms sleep；失败时能直接定位。
+	require.Eventually(t, func() bool {
+		return len(s.GetClients()) == 2
+	}, 2*time.Second, 5*time.Millisecond, "contexts not registered")
 
 	return s, node1, node2
 }
