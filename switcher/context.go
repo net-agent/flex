@@ -57,6 +57,51 @@ type Context struct {
 	Stats     ContextStats
 }
 
+// pingWaiter owns the reply channel for one ping. It makes delivery safe when
+// the ping timeout and the ACK dispatch race: close() waits for an in-flight
+// deliver(), and a late ACK after close is rejected instead of sending on a
+// closed channel (which would panic the dispatcher goroutine).
+type pingWaiter struct {
+	mu     sync.Mutex
+	ch     chan *wire.Frame
+	closed bool
+}
+
+func newPingWaiter() *pingWaiter {
+	return &pingWaiter{ch: make(chan *wire.Frame, 1)}
+}
+
+func (w *pingWaiter) deliver(f *wire.Frame) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return false
+	}
+	select {
+	case w.ch <- f:
+		return true
+	default:
+		return false
+	}
+}
+
+func (w *pingWaiter) close() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return
+	}
+	w.closed = true
+	// A frame may have been delivered just before the timeout was selected;
+	// release it so the payload does not leak.
+	select {
+	case f := <-w.ch:
+		f.Release()
+	default:
+	}
+	close(w.ch)
+}
+
 type ContextStats struct {
 	StreamCount   int32
 	BytesReceived int64
@@ -224,13 +269,18 @@ func (ctx *Context) deliverPingResponse(port uint16, f *wire.Frame) bool {
 	if !found {
 		return false
 	}
-	ch, ok := it.(chan *wire.Frame)
-	if !ok {
-		return false
-	}
-	select {
-	case ch <- f:
-		return true
+	switch v := it.(type) {
+	case *pingWaiter:
+		return v.deliver(f)
+	case chan *wire.Frame:
+		// Compatibility for callers that still register a raw channel (tests
+		// and older integrations). New code should use pingWaiter.
+		select {
+		case v <- f:
+			return true
+		default:
+			return false
+		}
 	default:
 		return false
 	}
@@ -249,11 +299,11 @@ func (ctx *Context) ping(timeout time.Duration) (dur time.Duration, retErr error
 		return 0, fmt.Errorf("%w: %v", errPingWriteFailed, err)
 	}
 
-	ch := make(chan *wire.Frame, 1) // buffered to prevent goroutine leak
-	ctx.pingBack.Store(port, ch)
+	waiter := newPingWaiter()
+	ctx.pingBack.Store(port, waiter)
 	defer func() {
 		ctx.pingBack.Delete(port)
-		close(ch)
+		waiter.close()
 	}()
 
 	pingStart := time.Now()
@@ -262,7 +312,7 @@ func (ctx *Context) ping(timeout time.Duration) (dur time.Duration, retErr error
 	}
 
 	select {
-	case res := <-ch:
+	case res := <-waiter.ch:
 		info := string(res.Payload())
 		res.Release()
 		if info != "" {

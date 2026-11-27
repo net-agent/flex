@@ -228,6 +228,16 @@ func (hub *StreamHub) handleAckData(f *wire.Frame) error {
 func (hub *StreamHub) handleClose(f *wire.Frame) error {
 	c, err := hub.getStream(f.SID().Uint64())
 	if err != nil {
+		// The stream may have detached (both directions closed) just before the
+		// peer's Close arrives. Reply AckClose anyway, otherwise the peer waits
+		// for its full close-ack timeout. This mirrors the legacy
+		// handleCmdCloseStream path.
+		if hub.host != nil {
+			ack, ackErr := wire.NewEmpty(wire.AckCloseStream, f.Dst(), f.Src())
+			if ackErr == nil {
+				_ = hub.host.SendFrame(ack)
+			}
+		}
 		f.Release()
 		return nil
 	}

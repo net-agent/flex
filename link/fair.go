@@ -317,7 +317,12 @@ func (w *fairWriter) processStream(sid wire.SID) {
 	}
 
 	w.mu.Lock()
-	if q.closed {
+	// A close/ack-close frame flips q.closed. Do not delete the queue while
+	// frames are still queued behind it: with simultaneous close, a stream can
+	// enqueue its own Close and then the peer's AckClose (or vice versa) before
+	// the first drain finishes. Deleting here would orphan the latter frame and
+	// make the peer wait for its full close-ack timeout.
+	if q.closed && q.Len() == 0 {
 		delete(w.streams, sid)
 		w.mu.Unlock()
 		return

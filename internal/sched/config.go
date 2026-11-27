@@ -103,13 +103,16 @@ func (c SchedulerConfig) normalized() SchedulerConfig {
 
 // visitLimit is the maximum number of packets that can be drained in one visit.
 func (c SchedulerConfig) visitLimit() int {
+	// Normalize first: a raw zero-value config would otherwise divide by
+	// MinChargeBytes == 0. The scheduler call sites normalize before use, but
+	// keep this helper safe when called directly (tests/observability).
+	c = c.normalized()
 	if c.Policy == PolicyPacketQuantum {
 		return c.QuantumPackets
 	}
+	// normalized() guarantees MinChargeBytes >= 1 and <= QuantumBytes, so
+	// n is always >= 1 here.
 	n := c.QuantumBytes / c.MinChargeBytes
-	if n < 1 {
-		n = 1
-	}
 	if n > MaxPacketsPerVisit {
 		n = MaxPacketsPerVisit
 	}

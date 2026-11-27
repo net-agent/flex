@@ -88,15 +88,18 @@ func (s *Stream) HandleClose(f *wire.Frame) {
 	// 关闭由对端发起，预设原因（first-wins，不被后续 CloseRead/CloseWrite 的 "local" 覆盖）
 	s.SetCloseReason("remote")
 
-	// step1：响应对端的 close 请求，停止继续读数据。
-	// 对端可能“先发数据、后发 Close”，缓冲区里的数据仍应可读，故 discard=false。
+	// step1：回复 CloseAck，让对端停止读取。
+	// 必须先于 closeRead/CloseWrite：对端可能已经先调用 Close()（写侧已关），
+	// 此时 closeRead 会立即触发 onDetach；测试/兼容层的 Pipe 可能在回调中
+	// 关闭底层连接，ack 尚未写出就会让对端等到 close-ack 超时。
+	_ = s.sender.SendCloseAck()
+
+	// step2：停止继续读数据。对端可能“先发数据、后发 Close”，
+	// 缓冲区里的数据仍应可读，故 discard=false。
 	_ = s.closeRead(false)
 
-	// step2：停止继续写入
+	// step3：停止继续写入
 	_ = s.CloseWrite()
-
-	// step3：回复 CloseAck，让对端停止读取
-	_ = s.sender.SendCloseAck()
 }
 
 // HandleCloseAck processes the peer's acknowledgement of our Close.

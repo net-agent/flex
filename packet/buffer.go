@@ -88,6 +88,9 @@ func GetBuffer() *Buffer {
 // 供后续同尺寸读取直接复用（单包 payload 上限 MaxPayloadSize=64KB，
 // 且 sync.Pool 条目受 GC 回收约束，内存不会无界增长）。
 func PutBuffer(buf *Buffer) {
+	if buf == nil {
+		return
+	}
 	buf.Head = Header{}
 	bufferPool.Put(buf)
 }

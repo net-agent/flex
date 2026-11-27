@@ -37,8 +37,14 @@ func (w *wsWriter) WriteBuffer(buf *packet.Buffer) error {
 	if err != nil {
 		return err
 	}
-	defer nw.Close()
 
-	_, err = buf.WriteTo(nw)
-	return err
+	_, writeErr := buf.WriteTo(nw)
+	// The actual network flush happens in Close. Returning only writeErr would
+	// silently drop a flush failure and make the first write after a broken
+	// connection look successful.
+	closeErr := nw.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
 }

@@ -34,14 +34,19 @@ func (l legacyEndpoint) SendFrame(f *wire.Frame) error {
 		return ErrNilWriter
 	}
 
-	b := packet.GetBuffer()
-	defer packet.PutBuffer(b)
+	// Do not use the packet.Buffer pool here. The legacy Writer contract only
+	// guarantees the buffer is valid for the duration of WriteBuffer; with
+	// net.Pipe/packet.Pipe a receiver can still be copying the payload while
+	// the sender returns the buffer to the pool, which reuses the backing array
+	// under the receiver (a data race). A fresh buffer keeps ownership simple;
+	// this path is compatibility-only, node frames use Endpoint instead.
+	b := packet.NewBuffer()
 	if err := (wire.Codec{}).EncodeHeader(f.Header(), b.Head[:]); err != nil {
 		return err
 	}
 	// The legacy packet.Buffer path predates the class bit; its consumers
 	// switch on packet.Cmd* values and must not see bit 7.
 	b.Head[0] &^= 0x80
-	b.Payload = append(b.Payload[:0], f.Payload()...)
+	b.Payload = append([]byte(nil), f.Payload()...)
 	return l.w.WriteBuffer(b)
 }

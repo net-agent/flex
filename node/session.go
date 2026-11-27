@@ -152,6 +152,14 @@ func NewSession(connector ConnectFunc, cfg SessionConfig) *Session {
 func (s *Session) SetFrameTap(fn link.FrameTap) {
 	if fn == nil {
 		s.frameTap.Store(nil)
+		// Also remove the tap from the currently live node; otherwise nil would
+		// only affect nodes rebuilt after the next reconnect.
+		s.mu.RLock()
+		n := s.node
+		s.mu.RUnlock()
+		if n != nil && n.Link() != nil {
+			n.Link().SetFrameTap(nil)
+		}
 		return
 	}
 	s.frameTap.Store(&fn)

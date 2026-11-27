@@ -62,6 +62,11 @@ func (w *connWriter) WriteBufferBatch(bufs []*Buffer) error {
 	defer w.mu.Unlock()
 	vecs := make(net.Buffers, 0, len(bufs)*2)
 	for _, buf := range bufs {
+		if buf == nil {
+			// Match WriteBuffer's nil tolerance: a nil element is a no-op, not
+			// a panic that aborts the whole batch.
+			continue
+		}
 		vecs = append(vecs, buf.Head[:])
 		if len(buf.Payload) > 0 {
 			vecs = append(vecs, buf.Payload)
